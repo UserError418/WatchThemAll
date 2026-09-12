@@ -81,23 +81,8 @@ project.
 
 **No affiliation, no endorsement.** This project has no relationship with any of
 the sites it can be pointed at, and no control over what they serve, whether
-they are licensed to serve it, or what else they put on the page. Inclusion in
-the provider list is not a representation that a source is lawful. You can
+they are licensed to serve it, or what else they put on the page. You can
 disable any entry, reorder the list, or add your own.
-
-**Watching is not consequence-free, and you are responsible for it.** Do not
-assume you are in the clear because you are not uploading anything. In the EU —
-Germany included — the Court of Justice has held that streaming from a source
-that is manifestly unlicensed falls outside the temporary-copy exception, and is
-therefore an infringing act by the viewer as well
-([C‑527/15, *Stichting Brein v Wullems*](https://curia.europa.eu/juris/liste.jsf?num=C-527/15)).
-Other jurisdictions draw the line differently. Satisfy yourself that a source is
-licensed where you live before you use it, and configure the app accordingly.
-
-**Takedown requests.** If you hold rights in a work and believe an entry in the
-provider list points at an infringing source, please open an issue. Entries are
-removed from the catalogue on request, and every install picks up the change
-within twelve hours.
 
 **Metadata** and artwork come from [TMDB](https://www.themoviedb.org/). This
 product uses the TMDB API but is not endorsed or certified by TMDB.
