@@ -147,6 +147,73 @@ Lint, typecheck and the whole suite pass happily on a chrome nobody can open.
 Images below the fold report `naturalWidth === 0` because they are
 `loading="lazy"`. That is the design working; scroll to them and re-check.
 
+## Running the Android app from a session on this box
+
+**The emulator is the only honest test for the phone build.** The Chromium
+harness in `scripts/preview-mobile.cjs` gets the layout right and gets three
+things wrong that matter: it is not an Android WebView, so it does not have
+Capacitor's inset handling, its scrollbars, or its navigation policy — and
+every Android-only fault found in September 2026 lived in exactly those three.
+
+```bash
+# One-time: the SDK ships neither of these.
+sdkmanager --install "emulator" "system-images;android-36;google_apis;x86_64"
+avdmanager create avd -n wta -k "system-images;android-36;google_apis;x86_64" -d pixel_7
+
+# Run it under systemd, not from the session. It SEGVs in SwiftShader every
+# twenty minutes or so under sustained video, and `Restart=always` is the
+# difference between a lost afternoon and a two-minute gap.
+systemd-run --unit=wta-emulator --collect --property=Restart=always \
+  --setenv=ANDROID_HOME=/opt/android-sdk --setenv=ANDROID_AVD_HOME=/root/.android/avd \
+  /opt/android-sdk/emulator/emulator -avd wta -no-window -no-audio -no-boot-anim \
+  -gpu swiftshader_indirect -memory 4096 -no-snapshot-save
+
+npm run apk && adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+**Drive it with `scripts/android-ui.py`, not with CDP clicks.** A debug build
+turns on `setWebContentsDebuggingEnabled`, so `adb forward tcp:9222
+localabstract:webview_devtools_remote_<pid>` gives `scripts/cdp.py` the same
+session the desktop app exposes directly — and a click dispatched through it
+proves the handler works while saying nothing about whether a finger can reach
+the element. Every Android layout fault here passed a synthetic click:
+
+```bash
+scripts/android-ui.py tap '.hero .play' --settle 5   # a real `input tap`
+scripts/android-ui.py rect '.player'                 # CSS and device rects
+scripts/android-ui.py eval 'innerHeight'             # straight to cdp.py
+adb exec-out screencap -p > /tmp/shot.png            # the device framebuffer
+```
+
+It converts CSS coordinates to device pixels itself, including the offset down
+the screen — which is not zero, because Capacitor lays the WebView out *between*
+the system bars on any WebView below version 140.
+
+**Two measurements that look equivalent and are not.**
+
+- *Did the picture move* (`compare -metric RMSE` over two `screencap`s) is
+  satisfied by a spinner and by an ad, and **not** satisfied by a provider
+  streaming perfectly while paused on its first frame waiting for a tap.
+- *Did it fetch a stream* (`scripts/android-provider-probe.py`, which reads
+  `Network.*` events off the WebView session) is satisfied by a provider whose
+  page has already been replaced by a refusal notice, because its player keeps
+  resolving in the background. VidFast scored 106 media requests while showing
+  "Please Disable Sandbox".
+
+Neither alone is a verdict. Use the probe to find which providers fetch, and a
+screenshot to confirm what the user is actually looking at.
+
+**A provider's traffic outlives its document.** An HLS player keeps pulling
+segments for several seconds after the iframe is navigated away, so a sweep
+that switches provider and starts counting immediately credits each one with
+its predecessor's stream. Blank the surface, wait, then count — the probe does.
+
+**The app's own layers, and what may paint over what.** The video is an
+`<iframe>` at z-index 299, `PlayerFrame`'s slot is a transparent hole at 300,
+and `PlayerChrome` is mounted into its own host at 400. This is the inverse of
+the desktop, where the video is a native view that always paints over the page.
+Anything new that must sit over the video goes in the chrome host.
+
 Data lives in `/root/.config/watchthemall/data/watchthemall.json`. Back it up
 before any test that resets it.
 

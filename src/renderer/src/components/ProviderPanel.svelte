@@ -18,6 +18,7 @@
   import type { Provider } from '@shared/types'
   import { SvelteSet } from 'svelte/reactivity'
   import { panelIn, panelOut } from '../lib/motion'
+  import { canHover } from '../lib/pointer'
   import SyncPanel from './SyncPanel.svelte'
 
   interface Props {
@@ -151,7 +152,11 @@
   </header>
 
   <p class="lede">
-    Automatic works down this list. Drag a row to reorder it. Once something has played a title,
+    <!-- The sentence names whichever control is actually on screen; the two
+         differ because drag-and-drop does not work on touch. -->
+    Automatic works down this list. {canHover()
+      ? 'Drag a row to reorder it.'
+      : 'Use the arrows to reorder it.'} Once something has played a title,
     Automatic only tries sources known to work for that title — and starred sources go first.
     WatchThemAll hosts nothing — it only builds the URL.
   </p>
@@ -220,16 +225,42 @@
     The handle, and the drag plumbing that goes with it. Rendered ahead of the
     row's own controls so it reads as the row's left edge, which is where a
     grip is looked for.
+
+    On a touch device it is a pair of nudge buttons instead, and that is not a
+    nicety: HTML5 drag-and-drop does not respond to touch at all, and the other
+    route in — ArrowUp/ArrowDown on the focused grip — needs a keyboard. With
+    only those two, **this order could not be changed on a phone**, which is
+    the order `automaticOrder` tries providers in and therefore what decides
+    what opens when you press Play.
   -->
   {#snippet grip(index: number, name: string)}
-    <button
-      class="grip"
-      onpointerdown={() => (armed = index)}
-      onpointerup={() => (armed = null)}
-      onkeydown={(e) => nudge(e, index)}
-      aria-label="Reorder {name} — drag, or use the arrow keys"
-      title="Drag to reorder. Automatic tries these top to bottom.">⠿</button
-    >
+    {#if canHover()}
+      <button
+        class="grip"
+        onpointerdown={() => (armed = index)}
+        onpointerup={() => (armed = null)}
+        onkeydown={(e) => nudge(e, index)}
+        aria-label="Reorder {name} — drag, or use the arrow keys"
+        title="Drag to reorder. Automatic tries these top to bottom.">⠿</button
+      >
+    {:else}
+      <span class="nudges">
+        <button
+          class="nudge"
+          disabled={index === 0}
+          onclick={() => move(index, index - 1)}
+          aria-label="Move {name} up"
+          title="Automatic tries these top to bottom">▲</button
+        >
+        <button
+          class="nudge"
+          disabled={index === rows.length - 1}
+          onclick={() => move(index, index + 1)}
+          aria-label="Move {name} down"
+          title="Automatic tries these top to bottom">▼</button
+        >
+      </span>
+    {/if}
   {/snippet}
 
   <ul>
@@ -456,6 +487,33 @@
   .grip:hover,
   .grip:focus-visible {
     color: var(--text-secondary);
+  }
+
+  /*
+    The touch replacement for the grip, in the same grid column so the rows
+    line up whichever one is rendered. Stacked rather than side by side: the
+    row is already three columns wide at 412px and a second horizontal control
+    would take the width from the provider's name.
+  */
+  .nudges {
+    grid-column: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .nudge {
+    padding: 4px 6px;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--text-tertiary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }
+
+  .nudge:disabled {
+    opacity: 0.35;
   }
 
   li.dragging .grip {
