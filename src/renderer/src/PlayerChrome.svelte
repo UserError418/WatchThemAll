@@ -58,6 +58,28 @@
    */
   const HOT_ZONE_PX = 40
 
+  interface Props {
+    /**
+     * Touch input, no pointer — the Android build.
+     *
+     * Two things change, and both are forced rather than stylistic.
+     *
+     * **The bar never hides.** Every route back to it needs a pointer: the hot
+     * zone is hovered, and `onPointerTop` reports a pointer position. A phone
+     * has neither, and a tap inside the provider's cross-origin iframe is
+     * invisible to this document — so a bar that hid once would never return,
+     * stranding the user in a full-screen video with no exit and no way to
+     * change source. Fifty-six pixels of a 915px screen is the right price for
+     * the only way out.
+     *
+     * **The hot zone is not rendered.** It exists to be hovered and would
+     * otherwise be a dead strip swallowing taps along the top edge.
+     */
+    touch?: boolean
+  }
+
+  const { touch = false }: Props = $props()
+
   const api = window.wtaChrome
 
   let context = $state<PlayerContext | null>(null)
@@ -230,6 +252,7 @@
 
   $effect(() => {
     if (!barVisible) return
+    if (touch) return
     if (suggestion) return
     // Hovering the chrome holds it open — including hovering a panel, which is
     // a child of it. Nothing else does.
@@ -316,7 +339,7 @@
   `onmouseenter`/`onmouseleave` on the chrome itself is what holds it open. The
   pointer merely being near the top is a trigger, handled above.
 -->
-{#if !barVisible}
+{#if !barVisible && !touch}
   <!--
     The invisible strip along the top edge. `onmousemove` as well as
     `onmouseenter`, because the enter can be missed: the bar hides by shrinking
@@ -588,20 +611,37 @@
     background: linear-gradient(to bottom, rgba(8, 8, 12, 0.94), rgba(8, 8, 12, 0));
   }
 
+  /*
+    Truncates rather than pushing the controls off the end.
+
+    A flex item's `min-width` is `auto`, so a long title refuses to shrink and
+    everything to its right — reload, Episodes, the source switcher — slides
+    past the edge of the bar. Harmless in a 1280px window and fatal at 412px,
+    where "The Lord of the Rings: The Rings of Power" alone is wider than the
+    screen and took the only exit with it.
+  */
   .title {
     font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .position {
     color: #9a9aa6;
     font-size: 12px;
+    flex-shrink: 0;
   }
 
   .spacer {
     flex: 1;
   }
 
+  /* Never shrinks: these are the controls the title is allowed to give way
+     for, not the other way round. */
   .ghost {
+    flex-shrink: 0;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 7px;

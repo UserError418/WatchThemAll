@@ -96,7 +96,10 @@
     <div>
       <h2>Releases</h2>
       <p class="lede">
-        Series you are tracking. New episodes raise a desktop notification when they air.
+        <!-- "a notification", not "a desktop notification": this renderer is
+             also the Android app, where the same sentence was describing a
+             platform the reader is not on. -->
+        Series you are tracking. New episodes raise a notification when they air.
       </p>
     </div>
     <div class="tools">
