@@ -356,6 +356,14 @@
     transition: opacity var(--dur-fast) var(--ease-out);
   }
 
+  /* No pointer, so nothing ever reveals it — and an invisible button that
+     stops tracking a series is worse than a visible one. */
+  @media (hover: none) {
+    .remove {
+      opacity: 1;
+    }
+  }
+
   li:hover .remove,
   .remove:focus-visible {
     opacity: 1;

@@ -23,6 +23,7 @@
   import { backdropUrl, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
+  import { canHover } from '../lib/pointer'
   import TrailerEmbed from './TrailerEmbed.svelte'
 
   interface Props {
@@ -68,6 +69,21 @@
   }
 
   function onEnter(): void {
+    /**
+     * A tap is not a hover, whatever the browser says.
+     *
+     * Android synthesises a `mouseenter` on tap and never sends the matching
+     * `mouseleave`, so both timers below ran after a tap that had *also*
+     * opened the detail overlay — and 560 ms later a trailer started playing,
+     * with sound, behind the sheet the user was reading. It then stayed,
+     * because the only thing that stops it is a `mouseleave` that never comes.
+     *
+     * Nothing is lost by returning early: the expansion it gates is a hover
+     * affordance, and the panel it reveals duplicates what the detail overlay
+     * — one tap away, and what the tap actually opened — already offers.
+     */
+    if (!canHover()) return
+
     clearTimers()
     expandTimer = setTimeout(() => {
       expanded = true

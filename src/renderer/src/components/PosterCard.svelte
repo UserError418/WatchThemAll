@@ -208,6 +208,22 @@
     opacity: 1;
   }
 
+  /*
+    Visible wherever there is no pointer to reveal it with.
+
+    `opacity: 0` hides a button without disabling it, so on a touch device this
+    was an invisible, full-size watchlist toggle sitting in the corner of every
+    poster — a stray tap added or removed a title with no affordance and no
+    feedback. Showing it is the honest option: it is a real action, and the
+    alternative (`pointer-events: none` until hover) is an action the phone
+    then has no way to reach at all.
+  */
+  @media (hover: none) {
+    .save {
+      opacity: 1;
+    }
+  }
+
   .save.on {
     background: var(--success);
     border-color: var(--success);
