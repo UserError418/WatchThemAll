@@ -25,6 +25,20 @@ const config: CapacitorConfig = {
      * browser's same-origin check from the equation entirely.
      */
     CapacitorHttp: { enabled: true },
+
+    /**
+     * Light icons in the status and gesture bars, always.
+     *
+     * Capacitor's default is `DEFAULT`, which means "follow the system theme" —
+     * so a phone in light mode got *dark* icons drawn over an app that has no
+     * light theme and never will, and the clock at the top of the screen was
+     * black on black. The renderer is dark by construction (`tokens.css` has
+     * one palette), so the bars can say so unconditionally.
+     *
+     * `DARK` here names the *background* the icons sit on, not the icons: it
+     * maps to `setAppearanceLightStatusBars(false)`, i.e. light icons.
+     */
+    SystemBars: { style: 'DARK' },
   },
   server: {
     // Required for the native HTTP bridge to treat the app as a secure origin.

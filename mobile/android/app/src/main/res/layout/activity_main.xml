@@ -1,12 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!--
+  A plain FrameLayout, not Capacitor's CoordinatorLayout.
+
+  CoordinatorLayout is an app-bar scrolling container; nothing here uses one,
+  and it has a behaviour this app actively does not want: it takes the window
+  insets it receives and lays its children out inside them. Measured with the
+  template's version, the WebView came up at `0,136-1080,2337` inside a
+  `0,0-1080,2400` window — letterboxed between the status bar and the gesture
+  pill, with `env(safe-area-inset-top)` reporting `0px` because the page had
+  been moved clear of the inset rather than told about it.
+
+  `fitsSystemWindows="false"` is stated on both levels rather than left to the
+  default: it is the property this file exists to get right.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fitsSystemWindows="false"
     tools:context=".MainActivity">
 
     <WebView
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+        android:layout_height="match_parent"
+        android:fitsSystemWindows="false" />
+</FrameLayout>

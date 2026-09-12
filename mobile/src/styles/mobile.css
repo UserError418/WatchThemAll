@@ -87,13 +87,25 @@
   /*
     The status bar and the gesture pill.
 
-    `viewport-fit=cover` in index.html is what makes these non-zero; without it
-    Android reports every inset as 0 and the app draws in the letterboxed
-    region between the system bars, with a grey band across the top of every
-    poster.
+    Two sources, in that order, because Capacitor 8 decides at runtime which
+    one is true and the app cannot know in advance which device it is on.
+
+    Its `SystemBars` handler passes window insets through to the page — making
+    `env(safe-area-inset-*)` real — only on **WebView 140 and newer**, and only
+    when the page asks for it with `viewport-fit=cover` (which `index.html`
+    does). On an older WebView it pads the WebView's parent instead, so the app
+    is laid out between the system bars and there is no inset left to reserve.
+    Either way it writes the answer into `--safe-area-inset-*` on the root
+    element: the real value on the first path, `0px` on the second.
+
+    So read Capacitor's variable first and fall back to `env()`. Reading only
+    `env()` was the bug: on a WebView below 140 it reports `0px` — correctly,
+    since the app is already clear of the bars — and the sheet could not tell
+    that apart from a phone with no status bar. Reading only Capacitor's
+    variable would break the moment `insetsHandling` is set to `disable`.
   */
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 /*
@@ -112,6 +124,29 @@ body {
   /* A tap on a button should not flash the system highlight rectangle; the
      press feedback in global.css already answers the touch. */
   -webkit-tap-highlight-color: transparent;
+}
+
+/*
+  No scrollbars anywhere.
+
+  `global.css` gives every scroll container a 10px `::-webkit-scrollbar` with a
+  thumb that only appears on hover. Defining a scrollbar at all opts the
+  container out of the platform's *overlay* scrollbars and into classic ones
+  that take real layout width — so on a phone, where nothing is ever hovered,
+  the rule bought an invisible thumb and charged 10px of the screen for it.
+
+  Measured before this rule: `<main>` had `offsetWidth` 412 and `clientWidth`
+  402, and every view was drawn 10px narrower than the device with a dead strip
+  down the right-hand edge. `RowShell` already hides its own track's scrollbar
+  for the same reason; this says it once, for everything.
+*/
+* {
+  scrollbar-width: none;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* ── The bottom tab bar ────────────────────────────────────────────────────

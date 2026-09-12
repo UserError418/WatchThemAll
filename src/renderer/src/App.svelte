@@ -677,6 +677,21 @@
 
   main {
     flex: 1 1 auto;
+    /*
+      Both axes named on purpose.
+
+      `overflow-y: auto` alone leaves `overflow-x` at `visible`, and CSS turns
+      a `visible` axis into `auto` as soon as the other one is not — so this
+      element has always been a *horizontal* scroller too. On a desktop window
+      nothing overflows it and that is invisible; at 412px the browse rows do,
+      and the page slid roughly 1600px sideways under the finger while the tab
+      bar and the nav stayed put. Measured on an Android device: `scrollWidth`
+      2002 against a `clientWidth` of 402.
+
+      Each row already owns a scroller of its own (`RowShell`'s `.track`), so
+      there is nothing here the user should ever scroll horizontally.
+    */
+    overflow-x: hidden;
     overflow-y: auto;
     /* The nav is out of flow, so surfaces without a hero need the space back. */
     padding-top: var(--nav-height);
