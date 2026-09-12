@@ -23,19 +23,20 @@
  * popup blocking comes from the `sandbox` attribute, enforced by the browser
  * rather than by code we maintain. That keeps the APK a pure web bundle.
  *
- * ## What the sandbox does and does not grant
+ * ## Why there is no `sandbox` attribute any more
  *
- * Omitted deliberately, each one an ad vector the desktop also denies:
- * `allow-popups` (kills `window.open`, so popunders fail silently),
- * `allow-top-navigation` and its by-user-activation variant (the page cannot
- * navigate the app away from itself), `allow-modals` (no `alert`/`confirm`
- * spam), `allow-downloads`, `allow-orientation-lock`.
+ * There was one, and it is why several providers would not play at all.
  *
- * `allow-same-origin` alongside `allow-scripts` looks alarming and is not: the
- * pair is only an escape when the framed document is same-origin with the
- * embedder. The app is served from `https://localhost` and every provider is a
- * third-party origin, so the frame gets its own origin and cannot reach into
- * this document. Dropping it would break the providers, which all use storage.
+ * It existed to block popunders by omitting `allow-popups`, which makes
+ * `window.open` return null. Providers test for it and refuse to serve:
+ * VidFast replaces its whole page with "Please Disable Sandbox". Measured both
+ * ways — the refusal with the attribute, its real player without it, same URL
+ * and same WebView seconds apart.
+ *
+ * The popup blocking did not go away, it moved somewhere a page cannot see it:
+ * `setJavaScriptCanOpenWindowsAutomatically(false)` in `MainActivity`, which
+ * has the same effect on `window.open` in every frame and exposes no attribute
+ * to detect. That file records what it does and does not claim to stop.
  *
  * ## What is still missing
  *
@@ -70,8 +71,6 @@ export interface SurfaceBounds {
  * click-through so the slot becomes a hole exactly the shape of the video.
  */
 const SURFACE_Z = 299
-
-const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-presentation'
 
 /** Autoplay is the point; the rest are what embed players ask for. */
 const ALLOW = 'autoplay; fullscreen; encrypted-media; picture-in-picture'
@@ -191,7 +190,6 @@ export function createPlayerSurface(): PlayerSurface {
     ].join(';')
 
     frame = document.createElement('iframe')
-    frame.setAttribute('sandbox', SANDBOX)
     frame.setAttribute('allow', ALLOW)
     frame.setAttribute('allowfullscreen', 'true')
     frame.setAttribute('referrerpolicy', 'origin')
