@@ -232,6 +232,30 @@ body {
   display: none !important;
 }
 
+/*
+  Same argument, other end of the bar.
+
+  The Providers button is a diamond plus a word, and the word cost 62px of a
+  412px nav — measured, the search field was left 220px and clipped its own
+  placeholder to "Search films and se". The mark alone is the same target and
+  the same affordance, and the button keeps its `title`.
+*/
+:root .providers-btn .btn-label {
+  display: none;
+}
+
+/*
+  ...and let the search field actually take the room that frees.
+
+  The desktop width is `clamp(220px, 30vw, 560px)`, which pins to its 220px
+  floor at any phone width — so hiding the button's label widened the grid
+  column and left the field the same size inside it. Filling the column is what
+  the phone wants: the field is the only thing in it.
+*/
+:root .nav-search {
+  width: 100% !important;
+}
+
 /* ── Sheets ────────────────────────────────────────────────────────────────
  *
  * The detail overlay and the providers panel are centred cards on desktop.

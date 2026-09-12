@@ -319,7 +319,12 @@
         onclick={() => (providersOpen = !providersOpen)}
         title="Providers and data"
       >
-        ◈ Providers
+        <!--
+          The word is a separate element so a narrow viewport can drop it and
+          keep the mark. At 412px the three-column nav gave the search field
+          220px, which clipped its own placeholder mid-word.
+        -->
+        ◈ <span class="btn-label">Providers</span>
       </button>
     </div>
   </nav>
