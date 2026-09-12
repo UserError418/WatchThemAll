@@ -450,30 +450,63 @@ body {
   pointer-events: none !important;
 }
 
-/* The chrome — header, source menu, failure prompt — stays interactive. */
-:root .player > * {
-  pointer-events: auto;
-}
+/*
+  The slot goes with it.
 
+  `PlayerFrame` is a single `.slot` now — the bar, the source menu and the
+  failure prompt all moved into `PlayerChrome`, which this build mounts in its
+  own host above both. So there is nothing left in `.player` that wants a tap,
+  and the whole element is a hole.
+*/
 :root .player .slot {
   background: transparent !important;
   pointer-events: none !important;
 }
 
+/* ── The player chrome ─────────────────────────────────────────────────────
+ *
+ * `PlayerChrome.svelte` is the desktop's component, mounted into this document
+ * by `bridge/chromeoverlay.ts` instead of into a second `WebContentsView`. It
+ * brings its own scoped styles and its own colours — it was written for a
+ * document with no stylesheet — so the only thing left to say here is where it
+ * sits and what it is allowed to intercept.
+ *
+ * The host is `pointer-events: none` and covers the screen, so a tap anywhere
+ * the chrome does not paint reaches the provider's own controls in the iframe
+ * below. Each thing the chrome actually draws takes its taps back.
+ */
+#wta-player-chrome > * {
+  pointer-events: auto;
+}
+
 /*
-  The player chrome never auto-hides on a phone.
+  Clear of the status bar.
 
-  On desktop the bar fades out and comes back when the pointer nears the top
-  edge — half of that signal arrives from the player view's preload, because a
-  native video layer swallows its own mouse events. A phone has neither: no
-  pointer, and no way to see a tap inside a cross-origin iframe. So the bar
-  hides on its timer and never returns, leaving the user in a full-screen video
-  with no way back and no way to change source.
-
-  Fifty-two pixels of a 915px screen is the right price for the only exit.
+  The chrome is `position: fixed` at the top of the screen, which on a phone
+  drawing edge to edge is behind the clock. Padding rather than an offset, so
+  the bar's own gradient still starts at the very top of the picture and the
+  status bar stays legible over it.
 */
-:root .player header.hidden {
-  height: 52px !important;
-  opacity: 1 !important;
-  border-bottom-color: var(--border-subtle) !important;
+#wta-player-chrome {
+  padding-top: var(--safe-top);
+}
+
+/*
+  Touch-sized controls in a 412px bar.
+
+  The desktop bar is seven items at `padding: 7px 11px` in a window at least
+  three times this wide. At 412px they fit only because the title now
+  truncates, and they are still below the 44px the platform asks for. This
+  keeps the same arrangement and makes each control tappable; the title gives
+  up the room, which is the right trade — it is the one item the user already
+  knows the value of.
+*/
+#wta-player-chrome .bar {
+  gap: 6px;
+  padding: 0 10px;
+}
+
+#wta-player-chrome .ghost {
+  min-height: 40px;
+  padding: 10px 12px;
 }

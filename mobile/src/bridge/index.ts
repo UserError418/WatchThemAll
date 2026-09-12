@@ -66,6 +66,8 @@ import {
 import { checkAll } from '@main/releases'
 import { App as CapacitorApp } from '@capacitor/app'
 import { createPlayerSurface } from './playersurface'
+import { createChromeApi } from './chrome'
+import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
 import { excludedTmdbIds, genreWeights, hasEnoughSignal } from '@main/taste'
@@ -142,6 +144,17 @@ export async function createBridge(): Promise<WtaApi> {
         } finally {
           applyingRemote = false
         }
+        /**
+         * The one write the renderer did not ask for.
+         *
+         * Desktop emits `storeChanged` on every mutation because its store
+         * lives in another process; here the renderer's own writes go through
+         * `window.wta.store.write`, so it already knows about those. A merge
+         * pulled down from the other device is the exception — nothing in the
+         * renderer initiated it, and without this the user kept looking at the
+         * pre-sync library until they restarted the app.
+         */
+        storeChanged.emit()
       },
     },
     onStatus: (status) => syncStatus.emit(status),
@@ -238,16 +251,27 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   const surface = createPlayerSurface()
+  const chrome = createChromeOverlay()
   let session: Session | null = null
+
+  /**
+   * The last state emitted, kept so a late subscriber can be caught up.
+   *
+   * The player's chrome mounts *after* playback starts and subscribes a tick
+   * after that, so a signal with no replay tells it nothing until the next
+   * episode or source change. See `chrome.ts`'s `onContext`.
+   */
+  let currentPlayerState: PlayerState | null = null
 
   /** Tell the renderer's chrome what it is framing. */
   const emitPlayerState = (): void => {
     if (!session) {
+      currentPlayerState = null
       playerState.emit(null)
       return
     }
     const current = session.candidates[session.index]
-    playerState.emit({
+    currentPlayerState = {
       title: session.req.title,
       type: session.req.type,
       tmdbId: session.req.tmdbId,
@@ -257,7 +281,8 @@ export async function createBridge(): Promise<WtaApi> {
       providerId: current?.provider.id ?? null,
       providerName: current?.provider.name ?? null,
       providers: session.candidates.map((c) => ({ id: c.provider.id, name: c.provider.name })),
-    })
+    }
+    playerState.emit(currentPlayerState)
   }
 
   /**
@@ -277,6 +302,62 @@ export async function createBridge(): Promise<WtaApi> {
         outcome: 'stream',
       }),
     )
+  }
+
+  /**
+   * Leave the player.
+   *
+   * One function rather than four repeated lines, because there are now three
+   * ways out — the Android back gesture, the chrome's own Back button, and
+   * `player.close` from the app renderer — and an exit that forgot to take the
+   * chrome down with it would leave a bar floating over the browse view.
+   */
+  const closePlayer = (): void => {
+    chrome.close()
+    surface.close()
+    session = null
+    playbackActive.emit(false)
+    emitPlayerState()
+  }
+
+  /**
+   * Step to another episode of the same title.
+   *
+   * The URLs are rebuilt from scratch rather than patched, because each
+   * provider has its own template and only `buildPlayUrl` knows them. The
+   * provider in hand is passed as `providerId` so it stays selected across
+   * the step.
+   *
+   * Declared here rather than inline in the returned object because the
+   * player's chrome calls the same three verbs the renderer does, and two
+   * implementations of "go to the next episode" would eventually disagree
+   * about which provider survives the step.
+   */
+  const playerGoTo = async (season: number, episode: number): Promise<void> => {
+    if (!session) return
+    const current = session.candidates[session.index]
+    const req: PlayRequest = {
+      ...session.req,
+      season,
+      episode,
+      providerId: current?.provider.id ?? session.req.providerId,
+    }
+    const selection = buildPlayUrl(orderedForRequest(req), req)
+    if (!selection) return
+
+    session = { req, candidates: selection.candidates, index: 0 }
+    showCandidate(0)
+  }
+
+  const playerSwitchProvider = async (providerId: string): Promise<boolean> => {
+    if (!session) return false
+    const index = session.candidates.findIndex((c) => c.provider.id === providerId)
+    if (index < 0) return false
+    return showCandidate(index)
+  }
+
+  const playerReload = async (): Promise<void> => {
+    surface.reload()
   }
 
   /** Load `index` of the current session's candidates. */
@@ -304,22 +385,36 @@ export async function createBridge(): Promise<WtaApi> {
     const notices = await checkAll(store)
     storeChanged.emit()
 
+    /**
+     * The setting the Releases view offers, which this used to ignore.
+     *
+     * Desktop honours it in one place (`src/main/index.ts`); here it has to be
+     * honoured twice, because a phone notification has two lifetimes — the one
+     * raised now, and the alarm armed weeks ahead. Turning the toggle off has
+     * to disarm the alarms as well, or the app keeps notifying for a month
+     * after the user asked it to stop.
+     */
+    const notificationsEnabled = store.read().settings.notificationsEnabled
+
     if (notices.length > 0) {
       releaseFound.emit(notices.map((n) => ({ title: n.tracker.title, episode: n.episode })))
-      void notifyFound(
-        notices.map((n) => ({
-          title: n.tracker.title,
-          season: n.episode.season,
-          episode: n.episode.episode,
-          episodeName: n.episode.name,
-          tmdbId: n.tracker.tmdbId,
-        })),
-      )
+      if (notificationsEnabled) {
+        void notifyFound(
+          notices.map((n) => ({
+            title: n.tracker.title,
+            season: n.episode.season,
+            episode: n.episode.episode,
+            episodeName: n.episode.name,
+            tmdbId: n.tracker.tmdbId,
+          })),
+        )
+      }
     }
 
     // Rebuilt after every sweep, because the sweep is what corrects the dates
-    // the alarms are set from.
-    void syncScheduledReleases(store.read().trackers)
+    // the alarms are set from. An empty list is the disarm: the reconcile
+    // cancels every pending alarm it no longer wants.
+    void syncScheduledReleases(notificationsEnabled ? store.read().trackers : [])
 
     return { checked: before, found: notices.length }
   }
@@ -332,12 +427,23 @@ export async function createBridge(): Promise<WtaApi> {
    * series on each of those is rude to both the API and the battery. An hour is
    * far tighter than the desktop timer and far looser than the event rate.
    */
-  const RESUME_SWEEP_INTERVAL_MS = 60 * 60 * 1000
+  /**
+   * The floor under `settings.releaseCheckMinutes`, not a replacement for it.
+   *
+   * Desktop reads the setting and runs a timer on it. This is a throttle on an
+   * event the user does not control — Android fires `resume` for every return
+   * from a share sheet or a notification tap — so the setting is honoured and
+   * then clamped: a user who asks for five minutes on the desktop should not
+   * get a TMDB call per tracked series every time they glance at their phone.
+   */
+  const MIN_SWEEP_INTERVAL_MS = 15 * 60 * 1000
   let lastSweepAt = 0
 
   const sweepIfStale = (): void => {
     if (store.read().trackers.length === 0) return
-    if (Date.now() - lastSweepAt < RESUME_SWEEP_INTERVAL_MS) return
+    const configured = (store.read().settings.releaseCheckMinutes || 60) * 60 * 1000
+    const interval = Math.max(configured, MIN_SWEEP_INTERVAL_MS)
+    if (Date.now() - lastSweepAt < interval) return
     lastSweepAt = Date.now()
     void sweepReleases().catch(() => {
       // Offline, most likely. The next resume tries again.
@@ -377,10 +483,7 @@ export async function createBridge(): Promise<WtaApi> {
    */
   void CapacitorApp.addListener('backButton', () => {
     if (session) {
-      surface.close()
-      session = null
-      playbackActive.emit(false)
-      playerState.emit(null)
+      closePlayer()
       return
     }
     if (document.querySelector('.scrim, aside.panel')) {
@@ -397,6 +500,34 @@ export async function createBridge(): Promise<WtaApi> {
       favouriteIds: favouriteProviderIds,
     })
   }
+
+  /**
+   * The player chrome's own API, installed the moment the bridge exists.
+   *
+   * Separate from `window.wta` for the same reason it is on desktop: the
+   * chrome is a different surface with a much smaller set of verbs, every one
+   * of which the app could already do. It is installed here rather than in
+   * `main.ts` so that nothing can mount `PlayerChrome` before it is available
+   * — the component reads `window.wtaChrome` at the top of its script.
+   */
+  window.wtaChrome = createChromeApi({
+    subscribeState: (cb) => playerState.subscribe(cb),
+    currentState: () => currentPlayerState,
+    subscribeSuggestion: (cb) => playerSuggestion.subscribe(cb),
+    close: closePlayer,
+    goTo: playerGoTo,
+    switchProvider: playerSwitchProvider,
+    reload: playerReload,
+    season: (tmdbId, season) => tmdb.season(tmdbId, season),
+    outcomes: async (media) => {
+      const { streamOutcomes } = store.read()
+      const key = titleKey(media)
+      return {
+        outcomes: outcomesForTitle(streamOutcomes, key),
+        lastUsed: lastWorkingForTitle(streamOutcomes, key),
+      }
+    },
+  })
 
   return {
     store: {
@@ -481,6 +612,7 @@ export async function createBridge(): Promise<WtaApi> {
 
       session = { req, candidates: selection.candidates, index: 0 }
       showCandidate(0)
+      chrome.open()
       playbackActive.emit(true)
 
       return {
@@ -503,49 +635,11 @@ export async function createBridge(): Promise<WtaApi> {
         surface.setBounds(bounds)
       },
 
-      close: async () => {
-        surface.close()
-        session = null
-        playbackActive.emit(false)
-        playerState.emit(null)
-      },
-
-      /**
-       * Step to another episode of the same title.
-       *
-       * The URLs are rebuilt from scratch rather than patched, because each
-       * provider has its own template and only `buildPlayUrl` knows them. The
-       * provider in hand is passed as `providerId` so it stays selected across
-       * the step.
-       */
-      goTo: async (season: number, episode: number) => {
-        if (!session) return
-        const current = session.candidates[session.index]
-        const req: PlayRequest = {
-          ...session.req,
-          season,
-          episode,
-          providerId: current?.provider.id ?? session.req.providerId,
-        }
-        const selection = buildPlayUrl(orderedForRequest(req), req)
-        if (!selection) return
-
-        session = { req, candidates: selection.candidates, index: 0 }
-        showCandidate(0)
-      },
-
-      switchProvider: async (providerId: string) => {
-        if (!session) return false
-        const index = session.candidates.findIndex((c) => c.provider.id === providerId)
-        if (index < 0) return false
-        return showCandidate(index)
-      },
-
+      close: async () => closePlayer(),
+      goTo: playerGoTo,
+      switchProvider: playerSwitchProvider,
       dismissSuggestion: async () => {},
-
-      reload: async () => {
-        surface.reload()
-      },
+      reload: playerReload,
     },
 
     mal: {
@@ -601,20 +695,46 @@ export async function createBridge(): Promise<WtaApi> {
           (done, total) => malProgress.emit({ done, total }),
         )
         await store.replaceDocument(next)
+        /**
+         * Cleared, exactly as `src/main/ipc.ts` does after its own commit.
+         * Left in place, a second commit without an intervening `preview()`
+         * re-imports the previous file — and the MAL dialog offers "Import"
+         * again without closing.
+         */
+        pendingMal = []
+        storeChanged.emit()
         return summary
       },
     },
 
     data: {
+      /**
+       * The share sheet, then the desktop's own result shape.
+       *
+       * Returning the payload — which is what this used to do — made a
+       * *successful* export report "Export failed." to the user, because the
+       * only consumer (`Watchlist.svelte`) reads `result.ok` and an export
+       * document has no such field. The contract types this `Promise<unknown>`,
+       * so nothing in three type-checked processes could notice.
+       */
       export: async () => {
         const payload = exportStore(store.read())
         const stamp = new Date().toISOString().slice(0, 10)
-        await shareTextFile(
-          `watchthemall-${stamp}.json`,
-          JSON.stringify(payload, null, 2),
-          'Export WatchThemAll data',
-        )
-        return payload
+        const name = `watchthemall-${stamp}.json`
+        try {
+          await shareTextFile(name, JSON.stringify(payload, null, 2), 'Export WatchThemAll data')
+        } catch (err) {
+          /**
+           * Dismissing the share sheet rejects, and so does a write that
+           * failed. They are not the same answer: `cancelled` is silent in the
+           * renderer and an error is not. Capacitor's Share plugin says which
+           * by message — there is no error code to test.
+           */
+          const message = err instanceof Error ? err.message : 'Export failed'
+          if (/cancel/i.test(message)) return { ok: false, cancelled: true }
+          return { ok: false, error: message }
+        }
+        return { ok: true, path: name }
       },
 
       import: async (payload: unknown) => {
@@ -625,7 +745,10 @@ export async function createBridge(): Promise<WtaApi> {
         let incoming = payload
         if (incoming === null || incoming === undefined) {
           const text = await pickTextFile('.json,application/json')
-          if (text === null) return { ok: false, error: 'Cancelled' }
+          // `cancelled`, not an error message: the renderer returns silently on
+          // the first and prints the second as a failure note. Saying
+          // "Cancelled" in the error slot put the word on screen in red.
+          if (text === null) return { ok: false, cancelled: true }
           try {
             incoming = JSON.parse(text)
           } catch {
