@@ -617,6 +617,15 @@
     transition: opacity var(--dur-fast) var(--ease-out);
   }
 
+  /* Invisible but still tappable without a pointer — and this one deletes.
+     See the same note in `PosterCard`. */
+  @media (hover: none) {
+    .remove,
+    .resume {
+      opacity: 1;
+    }
+  }
+
   .tile:hover .remove,
   li:hover .remove,
   .remove:focus-visible {

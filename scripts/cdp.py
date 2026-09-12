@@ -58,6 +58,8 @@ class CDP:
         parsed = urlparse(ws_url)
         self._sock = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
         self._handshake(parsed)
+        #: Every event seen on this session, oldest first. See `send`.
+        self.events: list[dict] = []
         self._next_id = 0
 
     def _handshake(self, parsed) -> None:
@@ -118,17 +120,53 @@ class CDP:
                 return payload.decode()
 
     def send(self, method: str, params: dict | None = None) -> dict:
-        """Send one command and return its result, discarding events in between."""
+        """Send one command and return its result, keeping events seen meanwhile.
+
+        Events used to be discarded here. They are now appended to `self.events`
+        instead, because the only thing that can say whether a cross-origin
+        embed is actually streaming is the *network*, and the network is
+        reported as events. A DOM query cannot answer it — the `<video>` lives
+        in a document this session may not script — and a screenshot answers a
+        different question, "did the picture move", which a spinner also
+        satisfies.
+        """
         self._next_id += 1
         message_id = self._next_id
         self._frame_send(json.dumps({"id": message_id, "method": method, "params": params or {}}))
         while True:
             message = json.loads(self._frame_recv())
             if message.get("id") != message_id:
+                if "method" in message:
+                    self.events.append(message)
                 continue  # An event, or a reply we already returned.
             if "error" in message:
                 raise ProtocolError(f"{method}: {message['error']}")
             return message.get("result", {})
+
+    def collect(self, seconds: float) -> list[dict]:
+        """Listen for `seconds` and return every event that arrived.
+
+        Enable the domains you care about first (`Network.enable`). The socket
+        is read with a short timeout so a quiet page ends the wait on schedule
+        rather than blocking until the next event.
+        """
+        deadline = time.time() + seconds
+        previous = self._sock.gettimeout()
+        try:
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self._sock.settimeout(min(remaining, 1.0))
+                try:
+                    message = json.loads(self._frame_recv())
+                except (TimeoutError, OSError):
+                    continue
+                if "method" in message:
+                    self.events.append(message)
+        finally:
+            self._sock.settimeout(previous)
+        return self.events
 
     def evaluate(self, expression: str):
         """Evaluate an expression in the page and return its value.
