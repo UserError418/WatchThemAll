@@ -62,11 +62,11 @@ full-bleed sheets — use a real selector.
 
 ## The player, and why it is an iframe
 
-Playback runs **inside the app**, in a sandboxed iframe that the bridge
-positions wherever the renderer's own player chrome says the video goes. The
-desktop shape is unchanged: the platform layer owns a video surface, the
-renderer owns the bar above it. Only the surface differs — a `WebContentsView`
-there, an `<iframe>` here.
+Playback runs **inside the app**, in an iframe that the bridge positions
+wherever the renderer's own player chrome says the video goes. The desktop
+shape is unchanged: the platform layer owns a video surface, the renderer owns
+the chrome over it. Only the surface differs — a `WebContentsView` there, an
+`<iframe>` here.
 
 The first version handed playback to a Chrome Custom Tab, and the ads were the
 reason that had to change. Every provider in the catalogue monetises with
@@ -75,16 +75,32 @@ popunders, and the desktop's entire defence is one line —
 browser tab: the app controls nothing inside it, so the phone showed ads the
 desktop never does.
 
-A Kotlin `WebView` plugin was the obvious answer and turned out to be
-unnecessary. Every provider URL is an *embed* endpoint — being framed is the
-product — and the headers agree: across the eight core providers none sends a
-restrictive `X-Frame-Options` or `frame-ancestors`, and two allow framing
-explicitly. So the popup blocking comes from the iframe's `sandbox` attribute,
-enforced by the browser rather than by code anyone here maintains, and the APK
-stays a pure web bundle.
+### Where the ad blocking lives, and why it moved
 
-Measured from inside the frame under the shipped sandbox string: `window.open`
-returns `null` and assigning `window.top.location` throws `SecurityError`.
+It was the iframe's `sandbox` attribute, which blocks `window.open` by omitting
+`allow-popups`. **That attribute is why several providers would not play at
+all.** They test for it and refuse to serve: VidFast replaces its entire page
+with the words "Please Disable Sandbox". Measured both ways on an Android 16
+emulator — the refusal with the attribute, its real player without it, same URL
+and same WebView seconds apart.
+
+So the same two guarantees now come from two native settings, neither of which
+a page can detect:
+
+- `setJavaScriptCanOpenWindowsAutomatically(false)` in `MainActivity` makes
+  `window.open` return `null` in every frame. Verified in the running app.
+- `PlayerNavigationClient` refuses any main-frame navigation to a third party,
+  and allows navigations *within* the player frame. Without it, Capacitor's own
+  `shouldOverrideUrlLoading` fires an `ACTION_VIEW` intent for an ad redirect
+  and the user lands in Chrome — measured, one tap on VidRock's play button.
+
+Both together are the desktop's behaviour: an ad can replace the picture inside
+the player, and it can do nothing to the app around it. The APK is still a pure
+web bundle plus two dozen lines of Java that only configure the WebView.
+
+Every provider URL is an *embed* endpoint — being framed is the product — and
+the headers agree: across the eight core providers none sends a restrictive
+`X-Frame-Options` or `frame-ancestors`, and two allow framing explicitly.
 
 ## What is missing, and why
 
@@ -104,7 +120,13 @@ poison the ranking that decides what to open next time.
 pointer nears the top edge, half of that signal arriving from the player view's
 preload. A phone has no pointer, and a tap inside a cross-origin iframe is
 invisible to us — so an auto-hiding bar would hide once and never come back,
-stranding the user in a full-screen video. `mobile.css` pins it open.
+stranding the user in a full-screen video. `PlayerChrome`'s `touch` prop pins
+it open.
+
+The bar itself is the desktop's `PlayerChrome.svelte`, mounted into this
+document by `bridge/chromeoverlay.ts` rather than into a second
+`WebContentsView`. It can be, because here the video surface is a DOM node and
+not a native layer — so ordinary z-index puts the chrome in front of it.
 
 **The remote provider catalogue.** The desktop app refreshes the catalogue in
 the background and caches it to disk. The phone ships whatever catalogue its
