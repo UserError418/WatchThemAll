@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The adaptive-icon foreground.
+
+  108x108 is Android's adaptive-icon canvas, of which only the middle 72x72 is
+  guaranteed visible — launchers crop the rest to whatever mask they use, and
+  animate within it. So every drawn pixel here stays inside a 66% centre box.
+
+  Deliberately not a bare play triangle: at 48px in a launcher that is the same
+  mark as five other apps on the same screen. The ring reads as a lens or a
+  dial, gives the glyph an outline to sit against on a light wallpaper, and is
+  the one shape that survives being masked to a circle, a squircle or a
+  teardrop without losing its meaning.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4c86a" />
+      <stop offset="1" stop-color="#d99a30" />
+    </linearGradient>
+  </defs>
+
+  <circle cx="54" cy="54" r="30" fill="none" stroke="url(#amber)" stroke-width="4" opacity="0.38" />
+  <circle cx="54" cy="54" r="22.5" fill="none" stroke="url(#amber)" stroke-width="2" opacity="0.22" />
+
+  <!--
+    The triangle is nudged 2px right of centre: a play glyph centred on its
+    bounding box reads as sitting left, because its visual mass is at the flat
+    edge. Every player UI does this.
+  -->
+  <path
+    d="M 47.5 42.2 L 66.5 53.2 A 1.6 1.6 0 0 1 66.5 54.8 L 47.5 65.8 A 1.6 1.6 0 0 1 45.4 64.4 L 45.4 43.6 A 1.6 1.6 0 0 1 47.5 42.2 Z"
+    fill="url(#amber)"
+  />
+</svg>

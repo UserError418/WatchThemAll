@@ -1,0 +1,37 @@
+node_modules/
+dist-packages/win-unpacked/
+dist-packages/
+*.log
+.DS_Store
+Thumbs.db
+out/
+.vite/
+*.tsbuildinfo
+
+# Python bytecode from scripts/
+__pycache__/
+
+# Capacitor's generated Android project keeps build output and local SDK paths
+# in-tree. The project itself is committed — it carries the manifest, the icons
+# and the Gradle config — but nothing Gradle regenerates.
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+
+# Personal deploy target: host, account and key path. Per-machine, never shared.
+scripts/deploy.env
+
+# Build-time OAuth client for sync. See .env.example.
+.env
+dist-release/
+
+# Personal deploy and release tooling: these drive an SSH install onto a
+# specific machine and publish a GitHub release from it. Kept out of the
+# public repository at the owner's request; the working copies live on the
+# machine that runs them.
+scripts/deploy-desktop.sh
+scripts/ship.sh

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WatchThemAll</title>
+    <!--
+      The renderer still makes no data requests of its own — everything goes
+      through IPC. This CSP is what makes webSecurity:true meaningful, so each
+      origin below is listed for one specific reason:
+
+        image.tmdb.org      artwork for TMDB-sourced results
+        m.media-amazon.com  artwork for IMDB-sourced results, which arrive as
+                            absolute URLs on IMDB's own CDN
+        youtube-nocookie    trailer previews, in an iframe. The -nocookie host
+                            is deliberate: the standard youtube.com embed sets
+                            tracking cookies before playback is even requested.
+
+      `frame-src` grants an iframe and nothing else — the trailer cannot script
+      this page, and no origin here is allowed to supply scripts.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' https://image.tmdb.org https://m.media-amazon.com data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https://www.youtube-nocookie.com"
+    />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

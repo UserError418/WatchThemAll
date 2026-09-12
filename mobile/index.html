@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      `viewport-fit=cover` plus the safe-area insets in mobile.css is what puts
+      the nav under the status bar and keeps the bottom tab bar clear of the
+      gesture pill, rather than letting the system draw over the app.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="color-scheme" content="dark" />
+    <!--
+      No CSP meta here. The desktop app locks its renderer down because it runs
+      with full Electron privileges; the phone build is a sandboxed WebView
+      whose network access goes through the native HTTP bridge, and a CSP naming
+      `https://localhost` would block that bridge rather than protect anything.
+    -->
+    <title>WatchThemAll</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

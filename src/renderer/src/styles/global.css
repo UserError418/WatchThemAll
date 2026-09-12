@@ -1,0 +1,363 @@
+/**
+ * Global resets and the app shell's base rules. Component styles live with
+ * their components; only genuinely document-wide rules belong here.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  /*
+    Optical sizing and kerning, both off by default in Chromium for webfonts.
+    `text-rendering: optimizeLegibility` is deliberately NOT used — it enables
+    ligatures that make tabular data jump and is a known layout-thrash source.
+  */
+  font-kerning: normal;
+  font-variant-ligatures: contextual;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Embed pages are the only place a text cursor is useful. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+}
+
+/**
+ * Headings default to the display face.
+ *
+ * Set here rather than per-component so a heading is correct by virtue of being
+ * a heading — the previous file left every one of them at the body font, which
+ * is most of why no surface had a visible hierarchy. Sizes stay per-component:
+ * an `h2` in a dialog and an `h2` in the hero are not the same size, and
+ * pretending otherwise just means every component overrides the global rule.
+ */
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+p {
+  margin: 0;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  /*
+    Every button acknowledges a press.
+
+    This is the cheapest possible fix for "it feels like a prototype": an
+    interface that does not react to being touched reads as a picture of an
+    interface. 60ms and 2% is below the threshold where anyone would call it an
+    animation, and above the threshold where its absence is felt.
+  */
+  transition: transform var(--dur-instant) var(--ease-out);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/*
+  Checkboxes and radios in the brand colour.
+
+  One property, and it was the last piece of stock Chromium blue on screen —
+  every enabled provider in the panel was ticked in a colour that appears
+  nowhere else in the app. `accent-color` restyles the native control without
+  the usual cost of `appearance: none`, which is having to redraw the tick,
+  the indeterminate state and the focus ring by hand.
+*/
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/**
+ * The native select, styled.
+ *
+ * Left alone it renders as the platform widget — a grey Chromium dropdown with
+ * square corners and its own font — which is instantly the least finished thing
+ * on any screen it appears on. `appearance: none` removes the widget and the
+ * arrow with it, so the arrow is drawn back as a background image; the padding
+ * on the right is what keeps the text from running under it.
+ *
+ * The option list itself is still the platform's and cannot be styled. That is
+ * a real limit, not an oversight: restyling it means rebuilding the control as
+ * a listbox, which is behaviour, not foundations.
+ */
+select {
+  appearance: none;
+  padding: var(--space-2) var(--space-6) var(--space-2) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-elevated);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% + 1px),
+    calc(100% - 13px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+select:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* The list is drawn by the platform, so at least make its rows legible on the
+   dark surface rather than leaving them on the OS default white. */
+select option {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/**
+ * Keyboard focus must stay visible — it is the primary nav for this app.
+ *
+ * A two-layer ring rather than a plain outline: the inner layer is the page
+ * background, which guarantees separation from whatever the focused control
+ * sits on. A single accent outline disappears against an accent-coloured
+ * button, which is exactly where it matters most.
+ */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-accent);
+  border-radius: var(--radius-sm);
+}
+
+/* Pointer users never see the ring; keyboard users always do. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+/**
+ * Scrollbars: present, but not furniture.
+ *
+ * Transparent thumb until the container is hovered. A permanently visible
+ * scrollbar on every panel adds a hard vertical line to the layout that no
+ * designer would have drawn, and these panels are almost always tall enough to
+ * scroll.
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-full);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+*:hover > ::-webkit-scrollbar-thumb,
+::-webkit-scrollbar:hover ::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Shared primitives ────────────────────────────────────────────────────
+ *
+ * Three patterns that were being hand-rolled in six components each, with
+ * slightly different values every time. They are global classes rather than a
+ * component because they are pure presentation with no behaviour, and wrapping
+ * a `<span>` in a Svelte component to apply four CSS properties costs more to
+ * read than it saves.
+ */
+
+/**
+ * A small uppercase label — section eyebrows, metadata keys, status chips.
+ *
+ * Uppercase at 10-11px is unreadable without positive tracking, which is the
+ * single most common way small-caps labels go wrong.
+ */
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/** A raised surface: panel, card, menu. Edge highlight plus layered shadow. */
+.surface {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card), var(--edge-highlight);
+}
+
+/**
+ * The shimmer used while something is loading.
+ *
+ * A moving highlight rather than a pulsing block: a pulse says "something is
+ * here", a sweep says "something is coming", and the second is the honest
+ * message while a poster is being fetched.
+ */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.045),
+    transparent
+  );
+  animation: shimmer 1.4s var(--ease-in-out) infinite;
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/*
+  The one place motion is removed outright rather than shortened. Zeroing a
+  duration stops a transition; an infinite keyframe animation ignores duration
+  tokens entirely and would keep sweeping forever.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+
+  button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* ── Video previews ───────────────────────────────────────────────────────
+ *
+ * A 16:9 embed that COVERS its container, whatever shape that container is.
+ *
+ * YouTube letterboxes its video inside whatever box the iframe gives it, so an
+ * iframe stretched to 100%/100% of a container that is not itself 16:9 shows
+ * black bars — and `object-fit: cover` does nothing here, because that styles
+ * replaced content and an iframe's document is not replaced content.
+ *
+ * Every preview surface previously worked around this with a hand-picked
+ * `transform: scale(1.36)` / `scale(1.42)` / `178%`. Those numbers each hide
+ * the bars for exactly one container aspect ratio and fail everywhere else,
+ * which is why the detail overlay — a much wider box than a browse card —
+ * showed a band of dead space above and below its trailer.
+ *
+ * The fix is to size the iframe from the container's own dimensions rather
+ * than from a guess: make it at least as wide as the container AND at least
+ * 16:9-tall for that width, then centre and clip. `container-type: size` is
+ * what makes `cqw`/`cqh` mean "this box", and it is safe on the wrapper
+ * because the wrapper's size comes from `inset: 0`, not from its contents.
+ */
+.embed-cover-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  container-type: size;
+  /* Clicks belong to the surface underneath, not to YouTube's own UI. */
+  pointer-events: none;
+}
+
+/*
+  Overscan, so YouTube's own UI never reaches the visible frame.
+  `controls=0&modestbranding=1&rel=0` removes most of the player chrome, but
+  not the title/share overlay YouTube paints across the top of the video, and
+  it is in a cross-origin iframe so no stylesheet of ours can touch it. The one
+  thing we do control is which part of that iframe is visible, so the iframe is
+  drawn larger than its frame and the strips carrying the chrome fall outside
+  the clip.
+  Proportional rather than a fixed pixel inset because YouTube scales its
+  chrome with the player: a 60px crop that works on a card leaves the overlay
+  fully visible on a full-width hero.
+*/
+.embed-cover {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  /*
+    Biased upwards, not centred. The chrome is at the top, so the crop should be
+    too: shifting the iframe up hides more of its top edge. Measured at 1.26
+    overscan this hides 14.3% of the video's height at the top against 6.3% at
+    the bottom, while keeping the subject of the shot — which is almost always
+    centred — in frame.
+    The sign is worth being careful about. `-50%` is the value that *centres*,
+    so a smaller magnitude moves the iframe down and crops the bottom; the first
+    attempt used -46% and cropped exactly the wrong edge.
+  */
+  transform: translate(-50%, -54%);
+  width: calc(max(100cqw, calc(100cqh * 16 / 9)) * var(--embed-overscan));
+  height: calc(max(100cqh, calc(100cqw * 9 / 16)) * var(--embed-overscan));
+  border: 0;
+  pointer-events: none;
+}

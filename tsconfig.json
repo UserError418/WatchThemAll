@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "types": [
+      "vite/client"
+    ],
+    "paths": {
+      "@shared/*": [
+        "./src/shared/*"
+      ],
+      "@/*": [
+        "./src/renderer/src/*"
+      ],
+      "@main/*": [
+        "./src/main/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "mobile/**/*.ts",
+    "electron.vite.config.ts",
+    "mobile/vite.config.ts",
+    "capacitor.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "out",
+    "dist-packages",
+    "mobile/android"
+  ]
+}

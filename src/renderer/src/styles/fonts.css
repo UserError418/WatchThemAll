@@ -1,0 +1,54 @@
+/**
+ * The two typefaces, bundled rather than fetched.
+ *
+ * This app is offline-first and ships as an AppImage, so a webfont from a CDN
+ * would be a network request on a surface that otherwise makes none, and a
+ * fallback to `system-ui` on the one launch where the network is down.
+ *
+ * Both are **variable** fonts: one file each covers every weight from 100 to
+ * 900, so the whole type system costs 72 KB and adding a weight costs nothing.
+ * A static family at the six weights used here would be six files and roughly
+ * three times the bytes.
+ *
+ * Latin subsets only. The catalogue is TMDB's, which returns titles
+ * transliterated into Latin — the Cyrillic, Greek and Vietnamese subsets in
+ * these packages would triple the size to render text the app never receives.
+ *
+ * ## Why these two
+ *
+ * **Space Grotesk** carries the app's voice. Its letterforms are unusual enough
+ * to be recognisable at a glance — the single-storey `g`, the flat-topped `a`,
+ * the tight `M` — which is exactly what a display face is for. It is also a
+ * grotesk rather than a serif, so it sharpens the existing design rather than
+ * replacing it with an editorial one.
+ *
+ * **Inter** carries everything else. It was drawn for screen UI at small sizes,
+ * where Space Grotesk's character becomes noise: the chrome here runs at 11 and
+ * 13 px, and at that size legibility is the only thing that matters.
+ */
+
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  /* The whole range in one file — this is what makes it a variable font. */
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2');
+  /* Latin + Latin-1 supplement + punctuation. Anything outside it falls back
+     to the system stack rather than rendering as tofu. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Space Grotesk Variable';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2')
+    format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}

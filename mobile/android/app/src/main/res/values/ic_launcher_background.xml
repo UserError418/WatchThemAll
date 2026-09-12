@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon's background layer, which a launcher may mask to any shape
+  and parallax independently of the foreground. The app's own base background from
+  its token sheet, nudged up a little: flat #0a0a0f reads as a hole on a dark
+  wallpaper, and the launcher's own shadow needs something to fall on.
+-->
+<resources>
+    <color name="ic_launcher_background">#12101d</color>
+</resources>

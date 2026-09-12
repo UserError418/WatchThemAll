@@ -1,0 +1,19 @@
+<!--
+  The themed-icon layer (Android 13+), which the system tints with the user's
+  wallpaper palette. Alpha only: any colour here is discarded, so the mark is
+  drawn as flat opaque paths and the ring's transparency comes from the alpha
+  channel rather than from `opacity`.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M54,22 A32,32 0 1,0 54,86 A32,32 0 1,0 54,22 Z M54,26 A28,28 0 1,1 54,82 A28,28 0 1,1 54,26 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M47.5,42.2 L66.5,53.2 A1.6,1.6 0 0 1 66.5,54.8 L47.5,65.8 A1.6,1.6 0 0 1 45.4,64.4 L45.4,43.6 A1.6,1.6 0 0 1 47.5,42.2 Z" />
+</vector>

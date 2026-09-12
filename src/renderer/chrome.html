@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WatchThemAll player controls</title>
+    <!--
+      The player chrome, in its own document.
+
+      It is a second renderer entry rather than part of the app's page because
+      the video is a native child view of the window, and a window's own web
+      contents always paints *beneath* its child views. A dropdown drawn in the
+      app's DOM therefore renders behind the video, which is why the controls
+      used to grow a band and push the picture down instead of floating over it.
+
+      A second WebContentsView stacked above the player can float. This is that
+      view's document.
+
+      The CSP mirrors the app's and drops what this page cannot use: no frames,
+      and only TMDB artwork, for the episode thumbnails.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'none'"
+    />
+    <style>
+      /*
+        Transparent all the way down.
+
+        Every layer has to opt in — a single opaque ancestor makes the whole
+        overlay a grey rectangle over the video, and the default background of
+        a document is not transparent.
+      */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="chrome"></div>
+    <script type="module" src="/src/chrome.ts"></script>
+  </body>
+</html>

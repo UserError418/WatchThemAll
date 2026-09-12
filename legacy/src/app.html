@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WatchThemAll</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- ═══════════ BRIDGE ALIAS ══════════════════════════════════ -->
+<script>
+if (window.__wtaChrome) window.chrome = window.__wtaChrome;
+if (window.__wtaAPI) window.wtAPI = window.__wtaAPI;
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     APP SHELL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="app-shell">
+
+  <!-- ── Header ──────────────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-icon">▶</span>
+      <span class="brand-text">WatchThemAll</span>
+    </div>
+    <div class="header-search-wrap">
+      <svg class="search-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" class="header-search" id="global-search" placeholder="Search library…" autocomplete="off">
+      <button class="search-clear" id="search-clear" style="display:none" title="Clear search">✕</button>
+    </div>
+    <div class="header-actions">
+      <button class="hdr-btn" id="hdr-check-all" title="Check all watchlist series for updates"><span class="spin-icon">↻</span> Check All</button>
+      <button class="hdr-btn" id="hdr-export" title="Export data">⤓ Export</button>
+      <button class="hdr-btn" id="hdr-import" title="Import data">⤒ Import</button>
+      <input type="file" id="import-file" accept=".json" style="display:none">
+    </div>
+  </header>
+
+  <!-- ── Body: Sidebar + Main ─────────────────────────────────── -->
+  <div class="app-body">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <button class="sidebar-collapse-btn" id="sidebar-collapse" title="Toggle sidebar"><span class="collapse-arrow">◀</span></button>
+      <div class="sidebar-tabs" id="sidebar-tabs">
+        <button class="tab-btn active" data-tab="bookmarks">Bookmarks</button>
+        <button class="tab-btn" data-tab="watchlist">Watchlist</button>
+        <button class="tab-btn" data-tab="history">History</button>
+      </div>
+      <div class="sidebar-filters" id="sidebar-filters">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="tv">TV</button>
+        <button class="filter-btn" data-filter="movie">Movies</button>
+      </div>
+      <div class="sidebar-list-header">
+        <button class="add-btn-inline" id="sidebar-add-btn" title="Add to library">+ Add</button>
+      </div>
+      <div class="sidebar-list" id="item-list">
+        <div class="empty-state">
+          <div class="empty-icon">📚</div>
+          <div class="empty-title">Your library is empty</div>
+          <div class="empty-desc">Add TV shows and movies to get started</div>
+        </div>
+      </div>
+      <div class="sidebar-footer" id="sidebar-footer">
+        <button class="providers-toggle-btn" id="providers-toggle">
+          <span class="providers-toggle-icon">◈</span>
+          <span class="providers-toggle-label">Providers</span>
+          <span class="providers-toggle-count" id="providers-count">5 active</span>
+          <span class="providers-toggle-arrow">▸</span>
+        </button>
+        <div class="providers-dropdown" id="providers-dropdown" style="display:none"></div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" id="main-content">
+      <!-- Dashboard (shown when nothing is selected) -->
+      <div class="dashboard" id="dashboard-view">
+        <div class="dash-grid">
+          <!-- Stats card -->
+          <div class="dash-card dash-stats">
+            <div class="dash-card-title">Library</div>
+            <div class="stat-row">
+              <div class="stat-item">
+                <div class="stat-value" id="stat-tv">0</div>
+                <div class="stat-label">TV Series</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value" id="stat-movies">0</div>
+                <div class="stat-label">Movies</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value" id="stat-watchlist">0</div>
+                <div class="stat-label">Watchlist</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Upcoming card -->
+          <div class="dash-card dash-upcoming">
+            <div class="dash-card-title">Upcoming Episodes</div>
+            <div class="upcoming-list" id="upcoming-list">
+              <div class="empty-hint">No upcoming episodes</div>
+            </div>
+          </div>
+
+          <!-- Recent card -->
+          <div class="dash-card dash-recent">
+            <div class="dash-card-title">Recently Watched</div>
+            <div class="recent-list" id="recent-list">
+              <div class="empty-hint">Nothing watched yet</div>
+            </div>
+          </div>
+
+          <!-- Updates card -->
+          <div class="dash-card dash-updates" id="dash-updates-card" style="display:none">
+            <div class="dash-card-title">Updates Available</div>
+            <div class="updates-list" id="updates-list"></div>
+          </div>
+
+          <!-- Recommendations — full width, below grid -->
+          <div class="dash-card dash-recs" id="dash-recs" style="display:none">
+            <div class="dash-card-title">📺 Recommended For You</div>
+            <div class="recs-container" id="recs-container"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detail view (shown when item is selected) -->
+      <div class="detail-view" id="detail-view" style="display:none">
+        <!-- Detail header: compact poster + info + play -->
+        <div class="detail-header">
+          <img class="detail-thumb" id="detail-thumb" src="" alt="" onerror="this.style.display='none'">
+          <div class="detail-info">
+            <div class="detail-title" id="detail-title"></div>
+            <div class="detail-meta" id="detail-meta"></div>
+            <div class="detail-actions-row">
+              <select class="detail-provider-select" id="detail-provider"></select>
+              <button class="play-btn" id="detail-play-btn">▶ Play</button>
+              <button class="ghost-btn dl-btn" id="detail-dl-btn" title="Download video">⬇</button>
+              <button class="ghost-btn" id="detail-edit-pos">Edit</button>
+              <button class="ghost-btn danger" id="detail-delete">Delete</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Two-column body -->
+        <div class="detail-body" id="detail-body">
+          <!-- Left rail: countdown + show info -->
+          <div class="detail-rail" id="detail-rail">
+            <div class="ep-countdown" id="ep-countdown" style="display:none">
+              <div class="cd-label" id="cd-label"></div>
+              <div class="cd-airdate" id="cd-airdate"></div>
+              <div class="cd-timer" id="cd-timer">--</div>
+            </div>
+            <div class="rail-stats" id="rail-stats"></div>
+          </div>
+
+          <!-- Right: Episode accordion browser -->
+          <div class="episode-browser" id="episode-browser">
+            <div class="ep-header">
+              <span class="ep-show-name" id="ep-show-name"></span>
+              <span class="ep-count" id="ep-count"></span>
+            </div>
+            <div class="ep-grid" id="ep-grid"></div>
+          </div>
+        </div>
+
+        <!-- Movie variant (shown instead of detail-body for movies) -->
+        <div class="movie-info" id="movie-info" style="display:none">
+          <div class="movie-poster-wrap">
+            <img class="movie-poster" id="movie-poster" src="" alt="" onerror="this.style.display='none'">
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── Status Bar ──────────────────────────────────────────── -->
+  <footer class="status-bar">
+    <span class="status-left" id="status-left">Ready</span>
+    <span class="status-right">
+      <span id="status-providers">5 providers</span>
+      <span class="status-sep">·</span>
+      <span id="status-wl-check">Watchlist: --</span>
+      <span class="status-sep">·</span>
+      <span class="status-version">v1.0.0</span>
+    </span>
+  </footer>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     COMMAND PALETTE (⌘K)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="cmd-overlay" id="cmd-overlay" style="display:none">
+  <div class="cmd-palette" id="cmd-palette">
+    <div class="cmd-input-wrap">
+      <svg class="cmd-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" class="cmd-input" id="cmd-input" placeholder="Search or type a command…" autocomplete="off" spellcheck="false">
+      <kbd class="cmd-kbd">esc</kbd>
+    </div>
+    <div class="cmd-results" id="cmd-results">
+      <div class="cmd-empty">Start typing to search your library</div>
+    </div>
+    <div class="cmd-footer">
+      <span><kbd>↑↓</kbd> Navigate</span>
+      <span><kbd>↵</kbd> Open</span>
+      <span><kbd>esc</kbd> Close</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     ADD MODAL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="add-modal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Add to Library</span>
+      <button class="modal-close" id="modal-close">✕</button>
+    </div>
+    <div class="modal-tabs" id="add-tabs">
+      <button class="modal-tab active" data-add-mode="bookmark">📚 Bookmark</button>
+      <button class="modal-tab" data-add-mode="track">◎ Track Series</button>
+    </div>
+    <div class="modal-body">
+      <!-- Step 1: Search -->
+      <div id="add-step-search">
+        <input type="text" class="modal-search" id="add-search" placeholder="Search IMDB (e.g. Breaking Bad)…" autocomplete="off">
+        <div class="modal-search-status" id="add-search-status"></div>
+        <div class="modal-results" id="add-search-results"></div>
+      </div>
+      <!-- Step 2: Season/Episode (TV only) -->
+      <div id="add-step-season" style="display:none">
+        <div class="add-pick-hint" id="add-pick-hint"></div>
+        <div class="key-row">
+          <input type="number" class="modal-input half" id="add-season" placeholder="Season" min="1" value="1">
+          <input type="number" class="modal-input half" id="add-episode" placeholder="Episode" min="1" value="1">
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" id="add-confirm-btn">Add to Library</button>
+          <button class="btn-secondary" id="add-back-btn">← Back</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="add-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     EDIT MODAL (position + watched episode toggles)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="edit-modal" style="display:none">
+  <div class="modal modal-edit">
+    <div class="modal-header">
+      <span class="modal-title">Edit</span>
+      <button class="modal-close" id="edit-modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="edit-hint" id="edit-hint"></div>
+      <div class="key-row">
+        <input type="number" class="modal-input half" id="edit-season" placeholder="Season" min="1">
+        <input type="number" class="modal-input half" id="edit-episode" placeholder="Episode" min="1">
+      </div>
+      <div class="edit-ep-label">Watched Episodes <span class="edit-ep-legend"><span class="ep-dot-watched"></span> watched</span></div>
+      <div class="edit-ep-grid" id="edit-ep-grid">
+        <div class="empty-hint">Loading episodes…</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-primary" id="edit-save-btn">Save</button>
+      <button class="btn-secondary" id="edit-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DOWNLOAD PROGRESS MODAL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="dl-modal" style="display:none">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-body">
+      <div style="text-align:center">
+        <div id="dl-stage-icon" style="font-size:28px;margin-bottom:8px">📥</div>
+        <div class="ui-name" id="dl-title" style="margin-bottom:4px"></div>
+        <div class="ui-sub" id="dl-status" style="margin-bottom:12px">Initializing…</div>
+        <div style="background:var(--bg-elevated);border-radius:var(--radius-sm);height:6px;overflow:hidden;margin-bottom:8px">
+          <div id="dl-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.3s"></div>
+        </div>
+        <div class="ui-sub" id="dl-progress">0 / 0</div>
+        <div id="dl-quality-picker"></div>
+        <div id="dl-hint" style="display:none;margin-top:12px;padding:8px 12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-sm);font-size:11px;color:var(--warning);text-align:left;line-height:1.5">
+          Click the play button in the player window to start the video — download begins automatically once the stream is detected.
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="dl-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPTS
+     ═══════════════════════════════════════════════════════════════ -->
+<script src="models.js"></script>
+<script src="parser.js"></script>
+<script src="provider-parser.js"></script>
+<script src="storage.js"></script>
+<script src="availability.js"></script>
+<script src="watchlist.js"></script>
+<script src="app-ui.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

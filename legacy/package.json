@@ -1,0 +1,9 @@
+{
+  "name": "watchthemall-legacy",
+  "version": "1.2.0",
+  "private": true,
+  "description": "The pre-rewrite WatchThemAll app, kept verbatim as the behaviour reference. Not built or shipped.",
+  "main": "main.js",
+  "//": "type:commonjs is load-bearing. The root package.json sets type:module for the rewrite, which would otherwise make every .js here an ES module and break `require`.",
+  "type": "commonjs"
+}

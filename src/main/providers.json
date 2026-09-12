@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-06",
+  "providers": [
+    {
+      "id": "vidlux",
+      "name": "VidLux",
+      "rootUrl": "https://vidlux.xyz/",
+      "tv": {
+        "urlTemplate": "{rootUrl}embed/tv/{tmdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}embed/movie/{tmdb}"
+      },
+      "tier": "core",
+      "note": "Fastest to a stream of anything measured — 1.4s. Keys on TMDB ids rather than IMDB, so it works for titles TMDB has and IMDB search found."
+    },
+    {
+      "id": "vidfast",
+      "name": "VidFast",
+      "rootUrl": "https://vidfast.vc/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "core",
+      "note": "Served every canary and the quickest to start — 1.3s. Moved here from vidfast.pro, which still redirects; pointing straight at the new domain measured 500ms faster because it skips that hop."
+    },
+    {
+      "id": "vidflix",
+      "name": "VidFlix",
+      "rootUrl": "https://vidflix.club/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "core",
+      "note": "Served every canary. Its landing page is a 655-byte shell, which looks broken to anything that only checks the document."
+    },
+    {
+      "id": "cinemaos",
+      "name": "CinemaOS",
+      "rootUrl": "https://cinemaos.tech/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/watch/{tmdb}?season={season}&episode={episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/watch/{tmdb}"
+      },
+      "tier": "core",
+      "note": "Served every canary, but slowest to start — around 3.7s. TMDB-keyed."
+    },
+    {
+      "id": "screenscape",
+      "name": "ScreenScape",
+      "rootUrl": "https://screenscape.me/embed",
+      "tv": {
+        "urlTemplate": "{rootUrl}?type=tv&imdb={imdb}&s={season}&e={episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}?type=movie&imdb={imdb}"
+      },
+      "tier": "extras",
+      "note": "Fast when it has the title (1.2s) but served only two of four canaries. A coverage gap, not a fault — good as a fallback."
+    },
+    {
+      "id": "moviesapi",
+      "name": "MoviesAPI",
+      "rootUrl": "https://moviesapi.to/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "extras",
+      "note": "Thin catalogue — served one canary of four, and its API 404s for titles it lacks. Kept because when it has something it is the quickest to start."
+    },
+    {
+      "id": "multiembed",
+      "name": "SuperEmbed",
+      "rootUrl": "https://multiembed.mov/",
+      "tv": {
+        "urlTemplate": "{rootUrl}?video_id={imdb}&s={season}&e={episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}?video_id={imdb}"
+      },
+      "tier": "extras",
+      "note": "Streamed 1 of 8 canary attempts across two runs, and took 6.5s when it worked. Kept as opt-in rather than removed because it does sometimes serve titles nothing else has; the reliability ranking will sink it on its own."
+    },
+    {
+      "id": "vidsrc-me",
+      "name": "VidSrc",
+      "rootUrl": "https://vidsrcme.ru/embed/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv?imdb={imdb}&season={season}&episode={episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "core",
+      "group": "vidsrc",
+      "note": "Restored after being wrongly deleted. Its page vendors disable-devtool wired to a handler that pauses the video, strips its src and navigates away when it thinks a devtools panel is open — so an automated probe always records 'nothing played' no matter how long it waits. Serves a full 54KB player to an ordinary request."
+    },
+    {
+      "id": "vidsrc-me-su",
+      "name": "VidSrc (.su mirror)",
+      "rootUrl": "https://vidsrcme.su/embed/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv?imdb={imdb}&season={season}&episode={episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "extras",
+      "group": "vidsrc",
+      "note": "Byte-identical player to vidsrcme.ru, down to the asset version string. Kept as a spare domain rather than a second choice — when one of these dies the other is usually still up."
+    },
+    {
+      "id": "vidsrc-pm",
+      "name": "VidSrc PM",
+      "rootUrl": "https://vidsrc.pm/embed/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "extras",
+      "group": "vidsrc",
+      "note": "Same player family, different path shape. Streams only after a click on the page, which is why a probe that does not synthesise one records it as dead."
+    },
+    {
+      "id": "videasy",
+      "name": "Videasy",
+      "rootUrl": "https://player.videasy.to/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{tmdb}"
+      },
+      "tier": "core",
+      "group": "peakstorm",
+      "note": "Verified streaming. Redirects from player.videasy.net, so the catalogue names the destination directly. Shares the peakstorm.top backend with VidCore."
+    },
+    {
+      "id": "vidcore",
+      "name": "VidCore",
+      "rootUrl": "https://www.vidcore.net/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{imdb}"
+      },
+      "tier": "extras",
+      "group": "peakstorm",
+      "note": "Verified streaming in 3.8s. Same peakstorm.top backend as Videasy, so it is a spare address rather than a second source."
+    },
+    {
+      "id": "vidzee",
+      "name": "VidZee",
+      "rootUrl": "https://player.vidzee.wtf/embed/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{tmdb}"
+      },
+      "tier": "core",
+      "note": "Verified streaming. Keys on TMDB ids, so it covers titles with no IMDB id."
+    },
+    {
+      "id": "vidrock",
+      "name": "VidRock",
+      "rootUrl": "https://vidrock.net/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{tmdb}"
+      },
+      "tier": "core",
+      "note": "Verified streaming. TMDB-keyed."
+    },
+    {
+      "id": "one11movies",
+      "name": "111Movies",
+      "rootUrl": "https://player.vidlove.cc/",
+      "tv": {
+        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
+      },
+      "movie": {
+        "urlTemplate": "{rootUrl}movie/{tmdb}"
+      },
+      "tier": "extras",
+      "note": "Verified streaming for films. Redirects from 111movies.com to player.vidlove.cc, which is what the catalogue names."
+    }
+  ]
+}

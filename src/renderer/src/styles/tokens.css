@@ -1,0 +1,405 @@
+/**
+ * Design tokens.
+ *
+ * Every colour, space, size and duration in the app comes from here. The rule
+ * is that a raw colour value or a bare pixel measurement outside this file is a
+ * bug — the original had 45 tokens and then hardcoded hex inline anyway.
+ *
+ * ## What changed, and why (2026-09-06)
+ *
+ * The first version was a competent dark theme with no opinions: a neutral grey
+ * ramp, Tailwind's default indigo, `system-ui` at six sizes, and two easings
+ * used almost entirely for one hover effect. It read as a prototype for four
+ * specific reasons, and this file is organised around fixing them:
+ *
+ * 1. **No typographic voice.** One family, one weight ramp, no line-height or
+ *    tracking tokens at all — so every surface spoke at the same volume and
+ *    every block of text used the browser's defaults.
+ * 2. **A palette with no identity.** `#6366f1` is the most common accent colour
+ *    on the internet. The greys were pure neutral, which reads flat and cheap
+ *    on an OLED-black background.
+ * 3. **Elevation by drop shadow alone.** Real dark UIs separate layers with a
+ *    light *edge* as well as a dark shadow, because on a near-black background
+ *    a shadow has almost nothing to darken.
+ * 4. **Motion with nothing to say.** Two easings, three durations, no spring,
+ *    no press feedback, nothing for entering or leaving.
+ *
+ * Layout tokens below are deliberately unchanged. The composition is not what
+ * was wrong with it.
+ */
+
+:root {
+  /* ══ Surfaces ═══════════════════════════════════════════════════════════
+   *
+   * A cool, very slightly violet-tinted near-black rather than neutral grey.
+   * The tint is small — around 4% saturation — and it is doing real work:
+   * neutral greys on a black background read as "unpainted", while a consistent
+   * hue through the ramp reads as a deliberate surface. It also keeps the
+   * chrome from competing with poster art, which is overwhelmingly warm.
+   *
+   * The ramp is perceptually even, not evenly spaced in hex. Each step is a
+   * visible but small lift, so nesting three panels still leaves the deepest
+   * one distinguishable from the shallowest.
+   */
+  --bg-base: #0a0a0f;
+  --bg-raised: #111118;
+  --bg-elevated: #191922;
+  --bg-hover: #22222d;
+  --bg-active: #2b2b38;
+  /*
+    The two deepest surfaces as bare channel triplets.
+
+    Gradients that fade *into* the page need the background colour with an
+    alpha, and `rgba()` cannot take a hex variable. Without these, every scrim
+    in the app hardcoded `rgba(11, 11, 15, …)` — the value `--bg-base` used to
+    have — so repainting the palette left a dozen fades quietly resolving to the
+    old colour. Use as `rgb(var(--bg-base-rgb) / 0.9)`.
+  */
+  --bg-base-rgb: 10 10 15;
+  --bg-raised-rgb: 17 17 24;
+
+  /* Scrim behind modals. Nearly opaque, and tinted with the base rather than
+     pure black, so what shows through reads as dimmed rather than as dirty. */
+  --bg-scrim: rgb(var(--bg-base-rgb) / 0.9);
+  /* A translucent surface for chrome that floats over artwork. Paired with
+     `backdrop-filter` at the use site; degrades to a flat panel without it. */
+  --bg-glass: rgb(var(--bg-raised-rgb) / 0.72);
+
+  /* ══ Text ═══════════════════════════════════════════════════════════════
+   *
+   * Four steps, each with a job. The old ramp had the same four but with
+   * `--text-primary` at #f4f4f6, which is bright enough to bloom against
+   * near-black on an OLED panel. Pulling it to #ededf2 and letting weight carry
+   * the emphasis instead is more comfortable over a long session.
+   */
+  --text-primary: #ededf2;
+  --text-secondary: #a3a3b2;
+  --text-tertiary: #6b6b7c;
+  --text-disabled: #43434f;
+  /* For text sitting on `--accent`. Near-black rather than white: the accent is
+     a light warm colour and white on it fails contrast badly. */
+  --text-on-accent: #1a1206;
+  /*
+    Text and controls sitting directly on artwork, over a scrim.
+    Pure white on purpose: this is the one place `--text-primary`'s softened
+    off-white reads as grey rather than as restraint, because the poster behind
+    it is at full saturation.
+  */
+  --text-on-media: #ffffff;
+
+  /* ══ Brand ══════════════════════════════════════════════════════════════
+   *
+   * Amber, replacing the indigo.
+   *
+   * The reasoning is specific rather than taste. Poster art is overwhelmingly
+   * warm and saturated, and a cool accent sits *against* it — every indigo
+   * button read as a UI element pasted onto the artwork. A warm accent sits
+   * with it. Amber in particular is the colour of projected light and film
+   * leader, which is the one association this app can honestly claim.
+   *
+   * Used sparingly and only for interaction: primary actions, focus, progress,
+   * the active nav item. It is deliberately not a decoration.
+   */
+  --accent: #e8b04b;
+  --accent-hover: #f2c266;
+  --accent-press: #d19a35;
+  /* Tinted fills for accent-coloured surfaces that must not shout. */
+  --accent-muted: rgba(232, 176, 75, 0.14);
+  --accent-subtle: rgba(232, 176, 75, 0.07);
+
+  /* ══ Status ═════════════════════════════════════════════════════════════
+   *
+   * Kept separate from `--accent` on purpose. These carry meaning the brand
+   * colour must never absorb: if the accent changes, "this failed" must not
+   * change with it. `--resume` in particular is fixed blue because it is a
+   * specified marker in the source pickers, not a themeable choice.
+   */
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #fb5c76;
+  --resume: #5b9dfa;
+
+  /* ══ Borders ════════════════════════════════════════════════════════════
+   *
+   * Light rather than dark, and this is the single biggest visual change here.
+   * On a near-black background a *shadow* has nothing left to darken, so depth
+   * has to come from a lit top edge — the way a real surface catches light.
+   * Every raised element gets a hairline of this instead of a heavier shadow.
+   */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /*
+    How much larger than its frame a preview iframe is drawn, so YouTube's
+    title/share overlay is cropped away rather than shown. Measured: 1.26 hides
+    14.3% of the top edge and 6.3% of the bottom at the -54% vertical bias in
+    `.embed-cover`. Raise it if a future YouTube layout reaches further in.
+  */
+  --embed-overscan: 1.26;
+
+  /* ══ Space — a 4px scale ════════════════════════════════════════════════ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ══ Radius ═════════════════════════════════════════════════════════════
+   *
+   * Larger than before at every step. 4px on a 44px row reads as an accident
+   * of rendering rather than as a decision; 8px reads as deliberate. The
+   * jump from `--radius-md` to `--radius-lg` is what separates a control from
+   * a surface.
+   */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-full: 999px;
+
+  /* ══ Type ═══════════════════════════════════════════════════════════════ */
+
+  /**
+   * Two families with a clear division of labour.
+   *
+   * `--font-display` is for anything the eye lands on first — titles, section
+   * headings, the hero, big numbers. `--font-sans` is for everything that has
+   * to be *read* rather than *seen*: labels, body copy, chrome. Using the
+   * display face for 11px chrome is the mistake this split exists to prevent.
+   *
+   * Both fall back to the old system stack, so a failed font load degrades to
+   * exactly the previous appearance rather than to Times New Roman.
+   */
+  --font-sans:
+    'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-display:
+    'Space Grotesk Variable', 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /**
+   * A modular scale at roughly 1.25, rather than the six arbitrary numbers it
+   * replaces (11/13/15/19/26/38).
+   *
+   * A ratio matters because it makes adjacent steps *look* related, and it
+   * makes the decision "which size" mechanical instead of a guess. The two
+   * largest steps use `clamp` so a hero title on a 1280px laptop and a 2560px
+   * monitor are both proportionate — a fixed 38px title is enormous on one and
+   * lost on the other.
+   */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 19px;
+  --text-xl: 24px;
+  --text-2xl: clamp(30px, 2.4vw, 38px);
+  --text-3xl: clamp(40px, 4vw, 64px);
+
+  /**
+   * Weights as tokens, so "bold" means one thing across the app.
+   *
+   * Variable fonts make intermediate weights free, and 550 — half a step above
+   * medium — is the useful one: it reads as emphasis at 13px without the
+   * chunkiness real semibold has at that size.
+   */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-emphasis: 550;
+  --weight-bold: 650;
+  --weight-heavy: 750;
+
+  /**
+   * Line height, which did not exist as a token before — everything inherited
+   * body's 1.5. That is correct for a paragraph and much too loose for a
+   * heading or a one-line label, and it is a large part of why dense surfaces
+   * looked unconsidered.
+   */
+  --leading-tight: 1.1;
+  --leading-snug: 1.28;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /**
+   * Letter spacing, also new.
+   *
+   * Large text needs negative tracking or it looks loose; small uppercase text
+   * needs positive tracking or it looks jammed. Both defaults are wrong at the
+   * extremes, which is why the hero looked airy and the badges looked cramped.
+   */
+  --tracking-tight: -0.02em;
+  --tracking-snug: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-caps: 0.08em;
+
+  /* ══ Elevation ══════════════════════════════════════════════════════════
+   *
+   * Layered rather than single shadows. One large soft shadow reads as a blur;
+   * a tight contact shadow plus a wide ambient one reads as an object above a
+   * surface, because that is what real light does. Each level also carries an
+   * inset hairline along its top edge — see `--border-*` for why that matters
+   * more than the shadow on a near-black background.
+   */
+  --shadow-sm:
+    0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --shadow-card:
+    0 2px 4px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-pop:
+    0 4px 10px rgba(0, 0, 0, 0.46), 0 16px 48px rgba(0, 0, 0, 0.56);
+  /* The hovered preview card floats well above the row and needs to read as
+     detached from it, not merely raised. */
+  --shadow-lg:
+    0 8px 20px rgba(0, 0, 0, 0.5), 0 32px 80px rgba(0, 0, 0, 0.72);
+  /* The lit top edge, applied as a box-shadow so it composes with the others
+     without needing a border and the layout shift a border brings. */
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  /* A focus ring that works on any background: accent core, dark separator. */
+  --ring-accent: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
+
+  /* ══ Motion ═════════════════════════════════════════════════════════════
+   *
+   * The previous file had `--ease-out`, `--ease-pop` and three durations, and
+   * used them for essentially one effect. A motion system needs to answer four
+   * separate questions, so there is one curve for each.
+   */
+
+  /** Things arriving. Fast start, long settle — the workhorse. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /** Things leaving. Deliberately not the mirror of `--ease-out`: an exit
+      should get out of the way quickly rather than linger being admired. */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /** Things moving between two on-screen states. Symmetric. */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /**
+   * A gentle overshoot, for anything that should feel physical rather than
+   * animated — card expansion, a menu popping open, a toggle landing.
+   */
+  --ease-pop: cubic-bezier(0.21, 1.02, 0.44, 1.02);
+  /**
+   * A pronounced overshoot for small, delightful moves only.
+   *
+   * Scoped tightly on purpose: on anything larger than an icon or a chip this
+   * reads as a bounce, and a UI that bounces reads as a toy.
+   */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /** Acknowledgement — a press, a hover tint. Below ~100ms reads as instant. */
+  --dur-instant: 90ms;
+  --dur-fast: 140ms;
+  /** The default. Most state changes belong here. */
+  --dur-mid: 220ms;
+  /** Something substantial moving — a panel, an overlay. */
+  --dur-slow: 340ms;
+  /** Full-surface transitions only. Anything routine at this length drags. */
+  --dur-slower: 520ms;
+
+  /**
+   * How long a card must be hovered before it expands.
+   *
+   * Without a delay, sweeping the mouse across a row detonates every card in
+   * turn, which is both ugly and a burst of trailer requests nobody asked for.
+   * Shortened from 340ms: that was tuned to match Netflix, and matching Netflix
+   * is the thing this pass is moving away from. 260ms still filters a sweep
+   * but no longer feels like the app is deciding whether to believe you.
+   */
+  --hover-intent: 260ms;
+
+  /* ══ Layout ═════════════════════════════════════════════════════════════
+   *
+   * Unchanged from the previous file apart from the nav height. The
+   * composition was not the problem, and rebuilding it was explicitly out of
+   * scope for this pass.
+   */
+  --nav-height: 68px;
+
+  /**
+   * Rows use landscape title cards, not portrait posters.
+   *
+   * Posters are still used where the shape suits the content — search results
+   * and the watchlist grid.
+   */
+  /**
+   * Cards scale with the window rather than sitting at a fixed pixel width.
+   *
+   * Bigger cards mean fewer per row, and fewer per row is the whole point: a
+   * browse surface is a decision aid, and twelve small posters ask the user to
+   * evaluate twelve things at once.
+   */
+  --card-width: clamp(300px, 23vw, 420px);
+  --card-ratio: 16 / 9;
+  /**
+   * The card's rendered height, as a length.
+   *
+   * `--card-ratio` is only usable by `aspect-ratio`. Feeding it to `calc` does
+   * NOT do what it looks like: `calc(300px / var(--card-ratio))` expands to
+   * `300px / 16 / 9`, which is 2px, not the 169px anyone reading it expects.
+   * Every vertical measurement derived that way silently collapsed to nothing.
+   */
+  --card-height: calc(var(--card-width) * 9 / 16);
+  /**
+   * How far a hovered card grows. Must fit inside `--row-gutter`.
+   *
+   * Pulled in from 1.3. A third larger is a lot of movement for a hover, and
+   * combined with the old 340ms intent delay it was the single most
+   * recognisable borrowed gesture in the app. Smaller and quicker reads as
+   * responsive rather than as an imitation.
+   */
+  --card-hover-scale: 1.18;
+  /**
+   * How far a card grows once its preview is actually playing.
+   *
+   * A second step past hover, so a running preview reads as the one thing being
+   * looked at rather than one of several pointed at. The gutters are sized off
+   * this, not off `--card-hover-scale`, because it is the larger of the two.
+   */
+  --card-play-scale: 1.38;
+  /**
+   * Vertical breathing room inside the scroll track.
+   *
+   * The track scrolls horizontally, which makes it a clipping box vertically
+   * too — a hovered card can only grow into padding that already exists, and
+   * the rows pull that padding back with negative margins so the layout does
+   * not visibly loosen.
+   *
+   * Derived rather than hand-tuned, so changing a card size cannot silently
+   * clip the action buttons. `--card-grow` is the extra *height* a fully
+   * expanded card takes; it grows from its centre, so half goes up. The
+   * constant on the bottom is the info panel, which only exists below.
+   */
+  --card-grow: calc(var(--card-height) * (var(--card-play-scale) - 1));
+  --row-gutter-top: calc(var(--card-grow) / 2 + 10px);
+  --row-gutter-bottom: calc(var(--card-grow) / 2 + 132px);
+  /** Page edge inset. */
+  --page-inset: max(var(--space-6), 3.8vw);
+
+  --poster-width: 168px;
+  --poster-ratio: 2 / 3;
+}
+
+/**
+ * Respect the OS setting rather than animating regardless.
+ *
+ * Zeroing the durations is enough to disable almost everything, because every
+ * transition in the app is expressed in terms of these. `--hover-intent` is
+ * deliberately left alone: it is a debounce, not an animation, and removing it
+ * would make a mouse sweep fire every preview at once — which is precisely the
+ * kind of motion someone with this setting on is trying to avoid.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0ms;
+    --dur-fast: 0ms;
+    --dur-mid: 0ms;
+    --dur-slow: 0ms;
+    --dur-slower: 0ms;
+    --card-hover-scale: 1;
+    --card-play-scale: 1;
+  }
+}
