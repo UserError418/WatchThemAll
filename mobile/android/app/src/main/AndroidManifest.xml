@@ -38,6 +38,25 @@
 
         </activity>
 
+        <!--
+          Where the Cast SDK finds its configuration. The class is never
+          constructed by our code; Play Services looks it up by this name.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="net.watchthemall.app.CastOptionsProvider" />
+
+        <!--
+          Keeps the process, the CPU and the Wi-Fi radio alive while the phone
+          is serving a stream to the television. `mediaPlayback` is required
+          from Android 14 on; a service without a declared type refuses to
+          start. See CastKeepAliveService for why this is not optional.
+        -->
+        <service
+            android:name=".CastKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -52,4 +71,17 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Casting only. ACCESS_WIFI_STATE and CHANGE_WIFI_MULTICAST_STATE are what
+      let the Cast SDK find a Chromecast at all — discovery is mDNS, which is
+      multicast, and without the lock the adapter filters it out while the
+      screen is off. The rest keep the phone serving segments once it has.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 </manifest>
