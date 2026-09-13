@@ -21,8 +21,8 @@
  * directory is the boundary, which is the same boundary the library file itself
  * sits behind — so the token is no less protected than the data it protects.
  *
- * `mobile/BACKLOG.md` carries this as the one real gap against the desktop,
- * which stores the same token in the OS credential store.
+ * `mobile/README.md` carries this under "Known limitations" as the one real gap
+ * against the desktop, which stores the same token in the OS credential store.
  */
 
 import { Preferences } from '@capacitor/preferences'
