@@ -39,6 +39,7 @@
 import { BrowserWindow } from 'electron'
 import type { Provider } from '@shared/types'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
+import { clickCentre, clickPlayInFrames } from './pressplay'
 import { renderTemplate } from './providers'
 import type { ProbeSubject } from './streamprobe'
 
@@ -194,6 +195,26 @@ async function capture(
      */
     void win.loadURL(pageUrl).catch(() => {})
 
+    /**
+     * Press play, the way `streamprobe` does.
+     *
+     * Without this the measurement is wrong in the pessimistic direction, and
+     * it was: four of eight providers reported `none` — no media URL at all —
+     * because they resolve the stream only after a click on their own play
+     * overlay, and nothing here ever clicked. `autoplayPolicy` removes
+     * Chromium's *policy* block on autoplay; it does not touch a `<div>` the
+     * provider draws over the video and waits on.
+     *
+     * Two presses, at the same offsets the probe uses: the first catches a page
+     * that is already interactive, the second a slow one whose player had not
+     * mounted yet.
+     */
+    const press = (): void => {
+      clickCentre(win.webContents, 1280, 720)
+      void clickPlayInFrames(win.webContents)
+    }
+    const clicks = [setTimeout(press, 2_500), setTimeout(press, 6_000)]
+
     // Poll rather than race a promise, for the same reason: the manifest
     // arrives from a chain of the page's own requests, with no event of ours to
     // hang a resolution on.
@@ -201,6 +222,7 @@ async function capture(
     while (!found && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
+    for (const timer of clicks) clearTimeout(timer)
 
     return { pageUrl, stream: found, error: null }
   } catch (error) {
