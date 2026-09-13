@@ -1,0 +1,296 @@
+/**
+ * Putting the stream on a television, from the phone.
+ *
+ * ## The shape of the problem
+ *
+ * Casting is not "send the video". The app never holds a video: it loads a
+ * provider's embed page into an iframe and that page's own script resolves the
+ * media, in a cross-origin document nothing here can read. So three things have
+ * to happen before a Chromecast can be handed anything at all.
+ *
+ * 1. **Find out what the player fetched.** The native side records every
+ *    plausible request off the WebView, with its headers — `MediaCapture`.
+ * 2. **Work out which of those is a stream.** Not by matching `.m3u8`: several
+ *    providers serve their manifest from a path with no extension, and the
+ *    desktop extractor's URL matching is the known reason two of the best
+ *    providers report "no stream" while playing perfectly. This fetches each
+ *    candidate and looks at what comes back, which is a fact rather than a
+ *    guess.
+ * 3. **Make it fetchable by something that is not this WebView.** Most
+ *    providers are `header-gated`; the receiver sends no `Referer` and the Cast
+ *    API cannot attach one. `buildCastBundle` rewrites the playlist so every
+ *    URL in it points back at a proxy on the phone, which replays the headers.
+ *
+ * Only then is there a URL to cast.
+ *
+ * ## Why this reports failures in words
+ *
+ * Every step above can fail for a different reason, and they are reasons a user
+ * can act on: no Wi-Fi, a provider that will not give up its stream, a
+ * television that went off the network. A single false would make all of them
+ * look like the same shrug, so `beam` resolves with a sentence.
+ */
+
+import { registerPlugin } from '@capacitor/core'
+import type { CastDevice, CastStatus } from '@shared/ipc'
+import { buildCastBundle, isPlaylist } from '@main/hlsrewrite'
+
+/** One request the player made, as the native side recorded it. */
+interface Candidate {
+  url: string
+  headers: Record<string, string>
+  atMs: number
+}
+
+interface CastNative {
+  candidates(): Promise<{ candidates: Candidate[] }>
+  clearCandidates(): Promise<void>
+  fetchText(options: {
+    url: string
+    headers: Record<string, string>
+    limitBytes?: number
+  }): Promise<{ status: number; contentType: string; body: string }>
+  startProxy(options: {
+    playlists: Record<string, string>
+    targets: Record<string, string>
+    headers: Record<string, string>
+  }): Promise<{ base: string }>
+  stopProxy(): Promise<void>
+  startDiscovery(): Promise<void>
+  stopDiscovery(): Promise<void>
+  devices(): Promise<{ devices: CastDevice[] }>
+  connect(options: { deviceId: string }): Promise<void>
+  disconnect(): Promise<void>
+  loadMedia(options: {
+    url: string
+    title: string
+    subtitle: string
+    contentType: string
+    startSeconds: number
+  }): Promise<void>
+  control(options: { action: string; seconds?: number }): Promise<void>
+  status(): Promise<CastStatus>
+  addListener(event: 'castDevices', cb: (payload: { devices: CastDevice[] }) => void): Promise<{ remove(): void }>
+  addListener(
+    event: 'castSession',
+    cb: (payload: { state: string; deviceName: string; error?: number }) => void,
+  ): Promise<{ remove(): void }>
+}
+
+const Cast = registerPlugin<CastNative>('Cast')
+
+/**
+ * How much of a candidate to read while deciding what it is.
+ *
+ * A playlist announces itself in the first seven bytes, so this only has to be
+ * large enough to hold a whole one for the case where the candidate *is* the
+ * manifest — a feature-length VOD playlist with a segment every six seconds
+ * runs to a few hundred kilobytes. Anything larger is not being parsed anyway,
+ * and reading a video file into a string would take the app out.
+ */
+const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
+
+/** Content types that are worth casting without being a playlist. */
+const PROGRESSIVE_TYPES = ['video/mp4', 'video/webm']
+
+/**
+ * Headers we replay upstream, minus the ones that must not be.
+ *
+ * `Range` is the important exclusion: it was captured from whatever byte the
+ * player happened to want, and replaying it on a manifest request returns a
+ * slice of the playlist — which parses as a valid but truncated stream, the
+ * kind of failure that looks like a bug in the rewriter.
+ */
+const NOT_REPLAYED = new Set(['range', 'host', 'connection', 'content-length', 'accept-encoding'])
+
+function replayable(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (!NOT_REPLAYED.has(name.toLowerCase())) out[name] = value
+  }
+  return out
+}
+
+/** What a candidate turned out to be. */
+interface Identified {
+  url: string
+  headers: Record<string, string>
+  kind: 'hls' | 'progressive'
+}
+
+/**
+ * Find the first candidate that something other than this WebView could play.
+ *
+ * Newest first, because the newest media request is the one belonging to what is
+ * on screen now. That ordering is the whole defence against casting the
+ * *previous* title — the same class of error as a provider sweep crediting each
+ * provider with its predecessor's stream — and `clearCandidates` on every
+ * provider or episode change is the other half of it.
+ */
+async function identifyStream(candidates: Candidate[]): Promise<Identified | null> {
+  for (const candidate of candidates) {
+    const headers = replayable(candidate.headers)
+
+    let response: { status: number; contentType: string; body: string }
+    try {
+      response = await Cast.fetchText({ url: candidate.url, headers, limitBytes: SNIFF_LIMIT_BYTES })
+    } catch {
+      continue // Unreachable host, or a URL that has already expired.
+    }
+
+    if (response.status !== 200 && response.status !== 206) continue
+
+    if (isPlaylist(response.body)) return { url: candidate.url, headers, kind: 'hls' }
+
+    const type = response.contentType.toLowerCase()
+    if (PROGRESSIVE_TYPES.some((known) => type.startsWith(known))) {
+      return { url: candidate.url, headers, kind: 'progressive' }
+    }
+  }
+  return null
+}
+
+/** What the cast needs to know about what is on screen. */
+export interface NowPlaying {
+  title: string
+  subtitle: string
+  providerName: string
+  /** Where to start on the television, if the app knows a position. */
+  startSeconds: number
+}
+
+export interface CastBridge {
+  available(): Promise<boolean>
+  startDiscovery(): Promise<void>
+  stopDiscovery(): Promise<void>
+  devices(): Promise<CastDevice[]>
+  connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
+  disconnect(): Promise<void>
+  beam(now: NowPlaying): Promise<{ ok: boolean; error?: string; providerName?: string }>
+  status(): Promise<CastStatus>
+  control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+  /** Drop captured candidates — call on every provider, episode or title change. */
+  forget(): Promise<void>
+  onDevices(cb: (devices: CastDevice[]) => void): () => void
+  onSession(cb: (state: string, deviceName: string) => void): () => void
+}
+
+export function createCastBridge(): CastBridge {
+  return {
+    async available(): Promise<boolean> {
+      try {
+        return (await Cast.status()).available
+      } catch {
+        return false
+      }
+    },
+
+    startDiscovery: () => Cast.startDiscovery(),
+    stopDiscovery: () => Cast.stopDiscovery(),
+
+    async devices(): Promise<CastDevice[]> {
+      try {
+        return (await Cast.devices()).devices
+      } catch {
+        return []
+      }
+    },
+
+    async connect(deviceId: string): Promise<{ ok: boolean; error?: string }> {
+      try {
+        await Cast.connect({ deviceId })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: messageOf(error) }
+      }
+    },
+
+    disconnect: () => Cast.disconnect(),
+
+    async beam(now: NowPlaying): Promise<{ ok: boolean; error?: string; providerName?: string }> {
+      try {
+        const { candidates } = await Cast.candidates()
+        if (candidates.length === 0) {
+          return { ok: false, error: 'Nothing to cast yet — start playing first, then try again.' }
+        }
+
+        const stream = await identifyStream(candidates)
+        if (stream === null) {
+          return {
+            ok: false,
+            error: `${now.providerName} does not hand out a stream that a TV can play. Try another source.`,
+          }
+        }
+
+        const bundle = await buildCastBundle(stream.url, stream.kind === 'hls' ? 'hls' : 'progressive', async (url) => {
+          const response = await Cast.fetchText({ url, headers: stream.headers, limitBytes: SNIFF_LIMIT_BYTES })
+          if (response.status !== 200 && response.status !== 206) {
+            throw new Error(`the source answered ${response.status}`)
+          }
+          return response.body
+        })
+
+        const { base } = await Cast.startProxy({
+          playlists: Object.fromEntries(bundle.playlists.map((p) => [p.id, p.body])),
+          targets: Object.fromEntries(bundle.targets.map((t) => [t.id, t.url])),
+          headers: stream.headers,
+        })
+
+        await Cast.loadMedia({
+          // The `.m3u8` suffix is for the receiver's benefit: it sniffs the
+          // extension before it looks at the content type.
+          url: stream.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
+          title: now.title,
+          subtitle: now.subtitle,
+          contentType: stream.kind === 'hls' ? 'application/x-mpegurl' : 'video/mp4',
+          startSeconds: now.startSeconds,
+        })
+
+        return { ok: true, providerName: now.providerName }
+      } catch (error) {
+        // The proxy must not outlive a failed attempt: it would sit on the
+        // network serving a stream nothing is watching.
+        try {
+          await Cast.stopProxy()
+        } catch {
+          // Already down, which is the state we wanted.
+        }
+        return { ok: false, error: messageOf(error) }
+      }
+    },
+
+    async status(): Promise<CastStatus> {
+      try {
+        return await Cast.status()
+      } catch {
+        return {
+          available: false,
+          connected: false,
+          deviceName: '',
+          playing: false,
+          seconds: 0,
+          duration: 0,
+          proxyRunning: false,
+        }
+      }
+    },
+
+    control: (action, seconds) => Cast.control({ action, seconds }),
+
+    forget: () => Cast.clearCandidates(),
+
+    onDevices(cb): () => void {
+      const handle = Cast.addListener('castDevices', (payload) => cb(payload.devices))
+      return () => void handle.then((h) => h.remove())
+    },
+
+    onSession(cb): () => void {
+      const handle = Cast.addListener('castSession', (payload) => cb(payload.state, payload.deviceName))
+      return () => void handle.then((h) => h.remove())
+    },
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}

@@ -50,6 +50,14 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        /*
+         * Must precede super.onCreate: Capacitor builds the bridge there, and a
+         * plugin registered afterwards is simply absent from `window.Capacitor`
+         * with no error anywhere — the renderer's call rejects as "not
+         * implemented" and the cause is three layers away.
+         */
+        registerPlugin(CastPlugin.class);
+
         super.onCreate(savedInstanceState);
 
         WebSettings settings = getBridge().getWebView().getSettings();
