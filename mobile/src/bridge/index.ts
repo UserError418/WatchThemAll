@@ -74,7 +74,7 @@ import type { Outcome } from '@main/outcomes'
 import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
-import { isWatchedEnough, resumeAction, resumeKey } from '@main/resume'
+import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from '@main/resume'
 import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
@@ -644,7 +644,12 @@ export async function createBridge(): Promise<WtaApi> {
       episode,
       providerId: current?.provider.id ?? session.req.providerId,
     }
-    const selection = buildPlayUrl(orderedForRequest(req), req)
+    const selection = buildPlayUrl(
+      orderedForRequest(req),
+      req,
+      // The episode being stepped to has its own stored position.
+      resumeOfferFor(store.read().resumePoints, req),
+    )
     if (!selection) return
 
     // Settle the episode being left while `session.req` still names it. After
@@ -946,7 +951,21 @@ export async function createBridge(): Promise<WtaApi> {
         return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }
       }
 
-      const selection = buildPlayUrl(enabled, req)
+      /**
+       * Start where the user left off, by asking the provider to.
+       *
+       * This is the only resume mechanism the phone has. The desktop reaches
+       * into the provider's frame and sets `currentTime`; a WebView cannot —
+       * `evaluateJavascript` sees the main frame only and most providers nest
+       * their player an iframe deeper — so without this the app remembers the
+       * position perfectly and then starts the episode from the beginning,
+       * which is exactly how it was reported.
+       */
+      const selection = buildPlayUrl(
+        enabled,
+        req,
+        resumeOfferFor(store.read().resumePoints, req),
+      )
       if (!selection) {
         return { ok: false, error: 'No enabled provider can play this' }
       }

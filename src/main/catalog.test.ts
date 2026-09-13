@@ -81,6 +81,21 @@ describe('rejecting a bad document, wholesale', () => {
    * that happens to be missing the provider you needed. Rejecting the document
    * because *one* entry is malformed is the only way that failure is visible.
    */
+  it('rejects a resume parameter that is not a usable name', () => {
+    // It goes straight into the play URL, and a published document is the one
+    // input to this app that nobody here reviews before it arrives.
+    expect(validateCatalog(document([provider({ resumeParam: '' })])).ok).toBe(false)
+    expect(
+      validateCatalog(document([provider({ resumeParam: 42 as unknown as string })])).ok,
+    ).toBe(false)
+  })
+
+  it('accepts a provider with no resume parameter, which is most of them', () => {
+    // Absent means "does not take one" and is the default; only four entries in
+    // the shipped catalogue were measured to accept one.
+    expect(validateCatalog(document([provider()])).ok).toBe(true)
+  })
+
   it('rejects the whole document when a single entry is malformed', () => {
     const result = validateCatalog(
       document([provider({ id: 'good-1' }), provider({ id: 'broken', rootUrl: 'nope' }), provider({ id: 'good-2' })]),

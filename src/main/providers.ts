@@ -13,6 +13,53 @@
 
 import type { PlayRequest } from '@shared/ipc'
 import type { Provider } from '@shared/types'
+import { shouldStorePosition } from './resume'
+import type { ResumeOffer } from './resume'
+
+/**
+ * Put the start position into the URL, for providers that read one.
+ *
+ * This is the *only* mechanism that resumes on Android. The desktop sets
+ * `currentTime` inside the provider's frame through `WebFrameMain`, which has
+ * no equivalent in a WebView: `evaluateJavascript` reaches the main frame only,
+ * and most providers nest their player an iframe deeper. So a phone either
+ * asks the provider to start in the right place or starts over.
+ *
+ * Reused on the desktop rather than kept mobile-only, and that is not just
+ * tidiness. Seeking after load makes the user watch the first seconds of the
+ * episode before being yanked forward; arriving at the right frame is simply
+ * better. The existing seek stays as the fallback and stands down on its own —
+ * `shouldSeek` declines once the provider has already restored the position.
+ *
+ * The same threshold as storing, deliberately: a position not worth writing
+ * down is not worth resuming into either, and the two drifting apart is how you
+ * get an app that offers to drop the user into the closing credits.
+ */
+function withResume(url: string, provider: Provider, resume: ResumeOffer | null): string {
+  if (resume === null || !provider.resumeParam) return url
+  if (!shouldStorePosition(resume.seconds, resume.duration ?? 0)) return url
+
+  try {
+    const parsed = new URL(url)
+    /**
+     * Never overwrite something the template already set.
+     *
+     * The catalogue is a remote document, and a `resumeParam` of `imdb` on a
+     * template that carries `?imdb=` would replace the title's id with a number
+     * of seconds. That is a typo away, and it would present as the provider
+     * playing the wrong thing rather than as a bad catalogue.
+     */
+    if (parsed.searchParams.has(provider.resumeParam)) return url
+    // Whole seconds. No provider measured here wanted more precision, and a
+    // fractional value is one more thing for a strict parser to reject.
+    parsed.searchParams.set(provider.resumeParam, String(Math.floor(resume.seconds)))
+    return parsed.toString()
+  } catch {
+    // `renderTemplate` already parsed this once, so failing here would be
+    // surprising — but a URL without the position beats no URL at all.
+    return url
+  }
+}
 
 /**
  * Substitute template placeholders and return an absolute URL, or null if the
@@ -22,6 +69,7 @@ import type { Provider } from '@shared/types'
 export function renderTemplate(
   provider: Provider,
   req: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+  resume: ResumeOffer | null = null,
 ): string | null {
   const config = req.type === 'movie' ? provider.movie : provider.tv
   if (!config?.urlTemplate) return null
@@ -62,7 +110,7 @@ export function renderTemplate(
   url = url.replace(/([^:])\/\//g, '$1/').replace(/\/\?/g, '?')
 
   try {
-    return new URL(url).toString()
+    return withResume(new URL(url).toString(), provider, resume)
   } catch {
     return null
   }
@@ -97,13 +145,22 @@ export interface PlaySelection extends PlayCandidate {
  * A provider that cannot serve this media type, or needs an id the request
  * lacks, is skipped rather than failing the play outright.
  */
-export function buildPlayUrl(providers: Provider[], req: PlayRequest): PlaySelection | null {
+export function buildPlayUrl(
+  providers: Provider[],
+  req: PlayRequest,
+  /**
+   * Applied to every candidate, not only the winner. Falling back to another
+   * source mid-episode used to restart the title from the beginning, which is
+   * the moment a resume matters most.
+   */
+  resume: ResumeOffer | null = null,
+): PlaySelection | null {
   const preferred = providers.filter((p) => p.id === req.providerId)
   const rest = providers.filter((p) => p.id !== req.providerId)
 
   const candidates: PlayCandidate[] = []
   for (const provider of [...preferred, ...rest]) {
-    const url = renderTemplate(provider, req)
+    const url = renderTemplate(provider, req, resume)
     if (url) candidates.push({ provider, url })
   }
 

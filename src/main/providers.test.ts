@@ -139,3 +139,87 @@ describe('bundled provider catalog', () => {
     }
   })
 })
+
+
+/**
+ * Resuming through the URL.
+ *
+ * The phone has no other way: it cannot reach into a cross-origin frame to set
+ * `currentTime`, so a provider either takes the position as a parameter or the
+ * episode starts over. Every rule here is about *not* sending a position that
+ * would make things worse than sending none.
+ */
+describe('resume position in the URL', () => {
+  const resuming: Provider = { ...tvPath, id: 'resuming', resumeParam: 'progress' }
+  const resumingQuery: Provider = { ...tvQuery, id: 'resuming-query', resumeParam: 'startAt' }
+
+  it('appends the parameter the provider reads', () => {
+    expect(renderTemplate(resuming, base, { seconds: 1200, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5?progress=1200',
+    )
+  })
+
+  it('joins an existing query string rather than starting a second one', () => {
+    const url = renderTemplate(resumingQuery, base, { seconds: 900, duration: 3600 })
+    expect(url).toContain('season=2')
+    expect(url).toContain('startAt=900')
+    expect(url?.match(/\?/g)).toHaveLength(1)
+  })
+
+  it('sends whole seconds', () => {
+    // No provider measured wanted more precision, and a fractional value is one
+    // more thing for a strict parser to reject.
+    expect(renderTemplate(resuming, base, { seconds: 1200.87, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5?progress=1200',
+    )
+  })
+
+  it('leaves a provider that reads no parameter completely alone', () => {
+    // Appending an unknown parameter is not free: some providers 404 on one.
+    expect(renderTemplate(tvPath, base, { seconds: 1200, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5',
+    )
+  })
+
+  it('does not resume into the first minute', () => {
+    // The normal state of a stream that has just loaded. Resuming into it is
+    // indistinguishable from not resuming, and costs a parameter.
+    expect(renderTemplate(resuming, base, { seconds: 30, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5',
+    )
+  })
+
+  it('does not resume into the credits', () => {
+    // The same line that decides "watched". A position past it has nothing left
+    // to resume into, and using it drops the user into the closing titles.
+    expect(renderTemplate(resuming, base, { seconds: 3590, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5',
+    )
+  })
+
+  it('still resumes when the provider never reported a duration', () => {
+    // Common — several providers report a position and no length. Only the
+    // "past the credits" half of the check is unanswerable, and the first
+    // minute rule still applies.
+    expect(renderTemplate(resuming, base, { seconds: 1200, duration: null })).toBe(
+      'https://example.test/tv/tt0903747/2/5?progress=1200',
+    )
+  })
+
+  it('gives the position to every candidate, not only the winner', () => {
+    // Falling back to another source mid-episode used to restart the title,
+    // which is the moment a resume matters most.
+    const selection = buildPlayUrl(
+      [resuming, resumingQuery],
+      { ...base, title: 'x', providerId: 'resuming' },
+      { seconds: 1200, duration: 3600 },
+    )
+    expect(selection?.candidates).toHaveLength(2)
+    expect(selection?.candidates.every((c) => /progress=1200|startAt=1200/.test(c.url))).toBe(true)
+  })
+
+  it('is absent by default, so nothing changes for a provider not measured', () => {
+    const selection = buildPlayUrl([tvPath], { ...base, title: 'x', providerId: 'path-style' })
+    expect(selection?.url).toBe('https://example.test/tv/tt0903747/2/5')
+  })
+})

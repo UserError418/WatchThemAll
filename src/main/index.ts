@@ -35,7 +35,7 @@ import {
   record,
   titleKey,
 } from './outcomes'
-import { isWatchedEnough, resumeAction, resumeKey } from './resume'
+import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from './resume'
 import {
   readCache,
   refreshCatalog,
@@ -428,10 +428,13 @@ function navigatePlayer(season: number, episode: number): void {
   const next: PlayRequest = { ...player.context, season, episode }
   // Keep the provider already loaded: changing episode should not silently
   // change source under the user.
-  const selection = buildPlayUrl(enabledProviders(), {
-    ...next,
-    providerId: player.currentProviderId() ?? next.providerId,
-  })
+  const selection = buildPlayUrl(
+    enabledProviders(),
+    { ...next, providerId: player.currentProviderId() ?? next.providerId },
+    // The episode being stepped to has its own stored position — this is how
+    // going back to one you abandoned half-way lands in the right place.
+    resumeOfferFor(store.read().resumePoints, next),
+  )
   if (!selection) return
 
   player.context = next

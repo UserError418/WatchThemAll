@@ -29,6 +29,7 @@ import type { Store } from './store'
 import * as tmdb from './tmdb'
 import * as search from './search'
 import { buildPlayUrl } from './providers'
+import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
 import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
@@ -261,7 +262,16 @@ export function registerIpc(deps: IpcDeps): void {
      * than from reachability: a provider can answer every probe and still not
      * carry the episode, and "it responded" was never the question.
      */
-    const selection = buildPlayUrl(enabled, req)
+    /**
+     * Start where the user left off, by asking the provider to.
+     *
+     * Applied to every candidate rather than only the winner, because falling
+     * back to another source mid-episode used to restart the title from the
+     * beginning — which is the moment a resume matters most. The desktop's
+     * seek-after-load stays as the fallback for providers that read no
+     * parameter, and stands down on its own when one of these does.
+     */
+    const selection = buildPlayUrl(enabled, req, resumeOfferFor(store.read().resumePoints, req))
     if (selection) {
       openPlayer(selection.url, req.title, req, selection.candidates)
       return {
