@@ -49,6 +49,8 @@ const api: WtaChromeApi = {
     disconnect: () => ipcRenderer.invoke(CH.castDisconnect),
     beam: () => ipcRenderer.invoke(CH.castBeam),
     status: () => ipcRenderer.invoke(CH.castStatus),
+    control: (action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
+      ipcRenderer.invoke(CH.castControl, action, seconds),
   },
 
   setOverlayHeight: (height: number): void => {

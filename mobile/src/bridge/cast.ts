@@ -33,7 +33,7 @@
 
 import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
-import { buildCastBundle, isPlaylist } from '@main/hlsrewrite'
+import { buildCastBundle, isPlaylist, isWholeVideoFile } from '@main/hlsrewrite'
 
 /** One request the player made, as the native side recorded it. */
 interface Candidate {
@@ -127,7 +127,27 @@ interface Identified {
  * provider with its predecessor's stream — and `clearCandidates` on every
  * provider or episode change is the other half of it.
  */
+/**
+ * Find the best candidate something other than this app could play.
+ *
+ * **A whole progressive file beats a playlist.** That is the opposite of what
+ * quality would suggest, and it is what the receiver measured: a plain
+ * Chromecast running the Default Media Receiver plays an HTTP MP4 and rejects
+ * HLS outright with `LOAD_FAILED`, before it fetches anything. That was checked
+ * against a textbook HLS stream generated locally by ffmpeg, with no provider,
+ * no rewriting and no proxy involved, across four content types - so it is the
+ * device, not this code. A playlist is still returned when nothing else is
+ * available: it costs nothing, and a receiver that *can* play one then does.
+ *
+ * **Pieces of a film are not the film.** A media fragment plays for six seconds
+ * and an initialisation segment for none, and both are served as `video/mp4`
+ * exactly like the real thing - see `isWholeVideoFile`. They are skipped rather
+ * than reported as an error, because a later candidate is usually the real one.
+ */
 async function identifyStream(candidates: Candidate[]): Promise<Identified | null> {
+  /** The first playlist seen, used only if no whole file turns up. */
+  let playlist: Identified | null = null
+
   for (const candidate of candidates) {
     const headers = replayable(candidate.headers)
 
@@ -140,14 +160,20 @@ async function identifyStream(candidates: Candidate[]): Promise<Identified | nul
 
     if (response.status !== 200 && response.status !== 206) continue
 
-    if (isPlaylist(response.body)) return { url: candidate.url, headers, kind: 'hls' }
+    if (isPlaylist(response.body)) {
+      playlist ??= { url: candidate.url, headers, kind: 'hls' }
+      continue
+    }
 
     const type = response.contentType.toLowerCase()
-    if (PROGRESSIVE_TYPES.some((known) => type.startsWith(known))) {
+    if (
+      PROGRESSIVE_TYPES.some((known) => type.startsWith(known)) &&
+      isWholeVideoFile(response.body)
+    ) {
       return { url: candidate.url, headers, kind: 'progressive' }
     }
   }
-  return null
+  return playlist
 }
 
 /** What the cast needs to know about what is on screen. */

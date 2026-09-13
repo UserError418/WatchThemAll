@@ -187,6 +187,10 @@ export class CastSession {
       throw new Error('the TV started its media player but did not say where to reach it')
     }
 
+    // A relaunch means the media session behind the old id is gone; keeping it
+    // would let a later `control()` address a session the receiver forgot.
+    if (this.transportId !== app.transportId) this.mediaSessionId = null
+
     this.transportId = app.transportId
     // The CONNECT that is easy to miss. Without it, LOAD below is dropped in
     // silence and the television sits on its idle screen.
@@ -197,6 +201,24 @@ export class CastSession {
   /* ── Playback ─────────────────────────────────────────────────────────── */
 
   async load(media: CastMedia): Promise<void> {
+    if (!this.socket) throw new Error('not connected to a TV')
+
+    /*
+     * Relaunch before every load, rather than trusting the transport id from
+     * `connect()`.
+     *
+     * The Default Media Receiver shuts itself down after a spell with nothing
+     * playing, and it takes its transport id with it. The socket survives —
+     * the platform receiver is still there and still answering heartbeats — so
+     * nothing here notices, and the next LOAD is addressed to an application
+     * that no longer exists and is dropped without a reply. The user sees a
+     * cast that worked once and then never again, from the same app, the same
+     * provider and the same television.
+     *
+     * LAUNCH is idempotent: for an app that is already running it returns the
+     * running session, so this costs one round trip and nothing else.
+     */
+    await this.launch()
     if (!this.transportId) throw new Error('not connected to a TV')
 
     const answer = await this.request(
@@ -221,10 +243,26 @@ export class CastSession {
     )
 
     if (answer.type === 'LOAD_FAILED' || answer.type === 'LOAD_CANCELLED') {
-      // The most likely cause by far, and the one worth naming: the receiver
-      // fetches from this machine over the LAN, so anything between them —
-      // client isolation on the router, a firewall, the wrong interface —
-      // shows up exactly here and nowhere earlier.
+      /*
+       * Two very different causes, and the wrong guess sends the user to the
+       * router for an hour.
+       *
+       * For a playlist it is almost always the receiver itself. A plain
+       * Chromecast running the Default Media Receiver rejects HLS outright —
+       * measured against a textbook stream generated locally, with no provider
+       * and no proxy in the way, and it fails before it fetches a single byte
+       * while an HTTP MP4 from the same machine plays. Blaming the network
+       * there is confidently wrong.
+       *
+       * For a plain file the network really is the first suspect: the receiver
+       * has to reach this machine, so client isolation, a firewall or the wrong
+       * interface all surface exactly here and nowhere earlier.
+       */
+      if (media.contentType.includes('mpegurl')) {
+        throw new Error(
+          `${this.deviceName} will not play this kind of stream. This source hands out an HLS playlist, and a basic Chromecast can only play a plain video file. Try another source.`,
+        )
+      }
       throw new Error(
         `${this.deviceName} could not load the stream. It has to reach this computer over the network; check that both are on the same Wi-Fi and that client isolation is off.`,
       )

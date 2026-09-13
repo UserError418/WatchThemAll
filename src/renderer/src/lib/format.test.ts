@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { airDate, countdown, episodeCode, hasAired, runtime, timeAgo, year } from './format'
+import { airDate, clock, countdown, episodeCode, hasAired, runtime, timeAgo, year } from './format'
 
 /**
  * These are the strings the user actually reads. They are worth testing because
@@ -108,5 +108,31 @@ describe('hasAired', () => {
     // TMDB leaves air_date null for announced-but-unscheduled episodes, and
     // those must not be clickable.
     expect(hasAired(null, now)).toBe(false)
+  })
+})
+
+describe('clock', () => {
+  it('reads minutes and seconds with fixed columns', () => {
+    expect(clock(0)).toBe('0:00')
+    expect(clock(7)).toBe('0:07')
+    expect(clock(247)).toBe('4:07')
+  })
+
+  it('shows an hour only when there is one', () => {
+    expect(clock(3599)).toBe('59:59')
+    expect(clock(3600)).toBe('1:00:00')
+    expect(clock(5025)).toBe('1:23:45')
+  })
+
+  /* A position that reads past where the seek landed looks like a missed seek. */
+  it('rounds down rather than to nearest', () => {
+    expect(clock(59.9)).toBe('0:59')
+  })
+
+  it('treats nothing, negatives and infinities as the start', () => {
+    expect(clock(null)).toBe('0:00')
+    expect(clock(undefined)).toBe('0:00')
+    expect(clock(-5)).toBe('0:00')
+    expect(clock(Number.POSITIVE_INFINITY)).toBe('0:00')
   })
 })

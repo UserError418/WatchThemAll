@@ -24,10 +24,15 @@
 } from '@shared/ipc'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
+  import { clock } from './lib/format'
 
   const BAR_HEIGHT = 56
   const EPISODE_PANEL_HEIGHT = 226
   const SOURCE_PANEL_MAX = 300
+  /** `.panel`'s top margin, which sits between the bar and the panel itself. */
+  const PANEL_GAP = 6
+  /** Enough for the "Looking for a TV" line, until the panel has been measured. */
+  const CAST_PANEL_FALLBACK = 74
   /** How long the bar stays after the pointer stops asking for it. */
   const HIDE_AFTER_MS = 2_800
 
@@ -118,6 +123,66 @@
   let castBusy = $state(false)
   /** The last failure, in the user's words. Cleared when they try again. */
   let castError = $state<string | null>(null)
+  /** The cast panel's rendered height, bound from the DOM. See `panelHeight`. */
+  let castPanelHeight = $state(0)
+
+  /*
+   * Scrubbing, and why the slider does not simply show `castStatus.seconds`.
+   *
+   * Two moments would fight with the once-a-second poll. While a thumb is being
+   * dragged, every tick would yank it back to where the television still is;
+   * and just after a seek is committed, the television keeps reporting the old
+   * position for a beat, so the thumb would snap back and then jump forward —
+   * which reads as the seek having been ignored, and invites a second one.
+   *
+   * So a locally-held value wins for as long as it is fresh, and the poll takes
+   * over again once the television has caught up.
+   */
+  const SCRUB_HOLD_MS = 2500
+  let scrubHeld = $state(0)
+  let scrubHeldUntil = $state(0)
+  /** Re-evaluated by the same tick that polls status, so the hold can expire. */
+  let now = $state(Date.now())
+
+  const scrubSeconds = $derived(
+    now < scrubHeldUntil ? scrubHeld : (castStatus?.seconds ?? 0),
+  )
+
+  function onScrubInput(value: number): void {
+    scrubHeld = value
+    // Dragging is a stream of `input` events; the hold is refreshed by each so
+    // it only starts expiring once the thumb is let go.
+    scrubHeldUntil = Date.now() + SCRUB_HOLD_MS
+    now = Date.now()
+  }
+
+  async function commitScrub(value: number): Promise<void> {
+    onScrubInput(value)
+    await send('seek', value)
+  }
+
+  /** Jump relative to where the television actually is, clamped to the film. */
+  async function nudge(delta: number): Promise<void> {
+    const duration = castStatus?.duration ?? 0
+    const target = Math.max(0, Math.min(scrubSeconds + delta, duration > 0 ? duration : Infinity))
+    await commitScrub(target)
+  }
+
+  /**
+   * One path for every transport command, so a failure is never silent.
+   *
+   * The television is across the room; a button that did nothing and said
+   * nothing is indistinguishable from one that worked and a picture nobody is
+   * looking at.
+   */
+  async function send(action: 'play' | 'pause' | 'stop' | 'seek', seconds = 0): Promise<void> {
+    try {
+      await api.cast.control(action, seconds)
+      castStatus = await api.cast.status()
+    } catch (error) {
+      castError = error instanceof Error ? error.message : String(error)
+    }
+  }
 
   $effect(() => {
     void api?.cast.available().then((yes) => (castAvailable = yes))
@@ -136,7 +201,10 @@
     if (!castAvailable) return
     if (panel !== 'cast' && !castStatus?.connected) return
 
-    const tick = (): void => void api?.cast.status().then((next) => (castStatus = next))
+    const tick = (): void => {
+      now = Date.now()
+      void api?.cast.status().then((next) => (castStatus = next))
+    }
     tick()
     const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
@@ -145,14 +213,59 @@
   function openCast(): void {
     if (panel === 'cast') {
       panel = 'none'
-      void api.cast.stopDiscovery()
       return
     }
     panel = 'cast'
     castError = null
-    void api.cast.startDiscovery()
-    void api.cast.devices().then((found) => (castDevices = found))
   }
+
+  /**
+   * Sweep for televisions for as long as the panel is open.
+   *
+   * One query is not enough, and asking once was the second reason this button
+   * appeared to do nothing. On the desktop `startDiscovery` *is* the mDNS
+   * query — it takes three seconds and only then is there anything to read —
+   * so firing it and reading `devices()` in the same breath reliably returns
+   * the empty list from before it ran. Android's is a live scan that fills in
+   * over the same sort of interval.
+   *
+   * So: ask, read, ask again, until the panel closes. `MIN_SWEEP_MS` is a floor
+   * rather than a delay — it costs nothing on desktop, where the query already
+   * takes longer, and stops the loop spinning on a platform that returns at
+   * once.
+   */
+  const MIN_SWEEP_MS = 2500
+
+  $effect(() => {
+    if (!castAvailable || panel !== 'cast') return
+
+    let sweeping = true
+
+    const sweep = async (): Promise<void> => {
+      while (sweeping) {
+        const startedAt = Date.now()
+        try {
+          await api.cast.startDiscovery()
+          if (!sweeping) return
+          castDevices = await api.cast.devices()
+        } catch {
+          // A discovery that fails is not worth a message: the panel already
+          // says it is looking, and the next sweep may well succeed.
+        }
+        const elapsed = Date.now() - startedAt
+        if (elapsed < MIN_SWEEP_MS) {
+          await new Promise((resolve) => setTimeout(resolve, MIN_SWEEP_MS - elapsed))
+        }
+      }
+    }
+
+    void sweep()
+
+    return () => {
+      sweeping = false
+      void api.cast.stopDiscovery()
+    }
+  })
 
   /**
    * Connect, then move the stream across.
@@ -175,8 +288,8 @@
         castError = beamed.error ?? 'Could not start the stream on that TV.'
         return
       }
+      // Closing the panel tears the sweep down; see the effect above.
       panel = 'none'
-      void api.cast.stopDiscovery()
     } finally {
       castBusy = false
       castStatus = await api.cast.status()
@@ -357,8 +470,28 @@
     if (!barVisible) panel = 'none'
   })
 
+  /**
+   * Reserve the room the open panel needs.
+   *
+   * The two fixed panels declare their own height in CSS, so a constant is
+   * honest for them. The cast panel does not: it is a hint, or a list of
+   * however many televisions are on the Wi-Fi, or a pair of transport buttons,
+   * and each is a different size. So it is measured instead — which is also
+   * what keeps the reserved strip from swallowing clicks on the video below a
+   * panel that only needed a line of text.
+   *
+   * Leaving `cast` out of this is what made the button look dead: the panel
+   * rendered into a view still only `BAR_HEIGHT` tall and was clipped away
+   * entirely, so nothing appeared and nothing explained why.
+   */
   const panelHeight = $derived(
-    panel === 'episodes' ? EPISODE_PANEL_HEIGHT : panel === 'sources' ? SOURCE_PANEL_MAX : 0,
+    panel === 'episodes'
+      ? EPISODE_PANEL_HEIGHT
+      : panel === 'sources'
+        ? SOURCE_PANEL_MAX
+        : panel === 'cast'
+          ? (castPanelHeight || CAST_PANEL_FALLBACK) + PANEL_GAP
+          : 0,
   )
 
   /**
@@ -537,8 +670,17 @@
     {/if}
 
     {#if panel === 'cast'}
-      <div class="panel cast-panel">
-        {#if castStatus?.connected}
+      <div class="panel cast-panel" bind:clientHeight={castPanelHeight}>
+        <!--
+          `castBusy` is tested before `connected` on purpose. Connecting
+          succeeds a second or two before the stream is found, and a TV that is
+          attached with nothing playing reports exactly what a TV whose stream
+          died reports — so testing `connected` first puts a red "stream ended"
+          on screen for the whole of a perfectly normal beam.
+        -->
+        {#if castBusy}
+          <p class="hint">Starting the stream…</p>
+        {:else if castStatus?.connected}
           <div class="cast-now">
             <span class="name">Playing on {castStatus.deviceName}</span>
             {#if !castStatus.proxyRunning}
@@ -550,14 +692,42 @@
               <span class="tag bad">stream ended</span>
             {/if}
           </div>
-          <div class="cast-controls">
-            <button class="source" onclick={() => void api.cast.status().then(() => {})}>
-              {castStatus.playing ? 'Playing' : 'Paused'}
-            </button>
-            <button class="source" onclick={() => void stopCasting()}>Stop casting</button>
+          <!--
+            Transport for the television.
+            
+            The picture is on the other side of the room, so this is the only
+            way to reach it — the provider's own controls drive the copy still
+            running in this window, not the one on the TV.
+          -->
+          <div class="scrub">
+            <span class="time">{clock(scrubSeconds)}</span>
+            <input
+              type="range"
+              min="0"
+              max={Math.max(castStatus.duration, 1)}
+              step="1"
+              value={scrubSeconds}
+              disabled={castStatus.duration <= 0}
+              aria-label="Position on the TV"
+              oninput={(event) => onScrubInput(event.currentTarget.valueAsNumber)}
+              onchange={(event) => void commitScrub(event.currentTarget.valueAsNumber)}
+            />
+            <span class="time">{clock(castStatus.duration)}</span>
           </div>
-        {:else if castBusy}
-          <p class="hint">Starting the stream…</p>
+
+          <div class="cast-controls">
+            <button class="tv" title="Back 30 seconds" onclick={() => void nudge(-30)}>-30s</button>
+            <button
+              class="tv wide"
+              title={castStatus.playing ? 'Pause on the TV' : 'Play on the TV'}
+              onclick={() => void send(castStatus?.playing ? 'pause' : 'play')}
+            >
+              {castStatus.playing ? '❚❚ Pause' : '▶ Play'}
+            </button>
+            <button class="tv" title="Forward 30 seconds" onclick={() => void nudge(30)}>+30s</button>
+          </div>
+
+          <button class="source stop" onclick={() => void stopCasting()}>Stop casting</button>
         {:else if castDevices.length === 0}
           <p class="hint">Looking for a TV on your Wi-Fi…</p>
         {:else}
@@ -1016,8 +1186,17 @@
     }
   }
 
+  /* Sized and placed like the source list, and for the same reason: it drops
+     from a button at this end of the bar, and a panel is a strip of the picture
+     the user cannot click through — so it takes the width it needs and no more.
+     A house with a dozen Chromecasts scrolls rather than growing. */
   .cast-panel {
-    padding: 6px 0;
+    padding: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+    width: 260px;
+    margin-left: auto;
+    margin-right: 14px;
   }
 
   .cast-now {
@@ -1033,6 +1212,68 @@
 
   .cast-controls {
     display: flex;
+    gap: 6px;
+    padding: 4px 6px 6px;
+  }
+
+  /* The scrubber. Wide thumb and a tall hit area, because this is reached for
+     while looking at a television rather than at the slider. */
+  .scrub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 2px;
+  }
+
+  .scrub .time {
+    color: #9a9aa6;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    min-width: 34px;
+  }
+
+  .scrub .time:last-child {
+    text-align: right;
+  }
+
+  .scrub input[type='range'] {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: 0;
+    accent-color: #6ea8ff;
+    cursor: pointer;
+  }
+
+  .scrub input[type='range']:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  .tv {
+    flex: 1;
+    min-height: 32px;
+    padding: 0 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8e8ef;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .tv.wide {
+    flex: 1.6;
+  }
+
+  .tv:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .stop {
+    width: calc(100% - 12px);
+    margin: 0 6px 4px;
   }
 
   .hint.bad {

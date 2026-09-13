@@ -989,6 +989,7 @@ export async function createBridge(): Promise<WtaApi> {
       },
       status: () => castBridge.status(),
       beam: async () => beamToTv(),
+      control: (action, seconds) => castBridge.control(action, seconds),
     },
   })
 
