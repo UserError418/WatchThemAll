@@ -30,6 +30,25 @@ export function runtime(minutes: number | null | undefined): string {
   return rest ? `${hours}h ${rest}m` : `${hours}h`
 }
 
+/**
+ * A position on a timeline: `4:07`, `1:23:45`.
+ *
+ * Distinct from `runtime` on purpose. That one describes a length in the prose
+ * of a catalogue — "1h 22m" — while this one is read against a moving scrubber,
+ * where the eye wants fixed columns and a leading hour only when there is one.
+ * Rounds down, because a position that reads 4:08 while the seek lands on 4:07
+ * looks like the seek missed.
+ */
+export function clock(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '0:00'
+  const whole = Math.floor(seconds)
+  const hours = Math.floor(whole / 3600)
+  const minutes = Math.floor((whole % 3600) / 60)
+  const rest = whole % 60
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`
+}
+
 /** `3d 4h`, `4h 12m`, `12m`, `Airing now`, or an empty string. */
 export function countdown(date: string | null | undefined, now = Date.now()): string {
   if (!date) return ''

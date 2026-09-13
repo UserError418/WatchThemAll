@@ -28,6 +28,17 @@ import {
  * receiver, and looks identical to a network fault.
  */
 class FakeReceiver {
+  /** How many times its media app has been launched. */
+  launches = 0
+  /**
+   * Where the media app can be reached.
+   *
+   * Settable because a real receiver hands out a *different* one each time it
+   * starts its app, and an app left idle is stopped — which is the whole of
+   * the stale-transport bug this suite now covers.
+   */
+  transportId = 'transport-123'
+
   readonly received: Array<{ namespace: string; destinationId: string; payload: Record<string, unknown> }> = []
 
   private server: Server | null = null
@@ -99,12 +110,17 @@ class FakeReceiver {
 
     if (message.namespace === NS_RECEIVER && payload.type === 'LAUNCH') {
       if (this.ignoreLaunch) return
+      this.launches += 1
       this.reply(socket, NS_RECEIVER, {
         requestId,
         type: 'RECEIVER_STATUS',
         status: {
           applications: [
-            { appId: 'CC1AD845', transportId: 'transport-123', sessionId: 'session-1' },
+            {
+              appId: 'CC1AD845',
+              transportId: this.transportId,
+              sessionId: `session-${this.launches}`,
+            },
           ],
         },
       })
@@ -202,8 +218,43 @@ describe('CastSession', () => {
       // The one that is easy to miss: a CONNECT per destination. Without it a
       // real receiver silently discards the LOAD and sits on its idle screen.
       'CONNECT->transport-123',
+      // Launched again immediately before the load. Idempotent for an app that
+      // is already running, and the only way to notice one that is not — see
+      // the next test.
+      'LAUNCH->receiver-0',
+      'CONNECT->transport-123',
       'LOAD->transport-123',
     ])
+  })
+
+  /**
+   * The bug behind "it cast once and then never again".
+   *
+   * The Default Media Receiver stops its media app after a spell with nothing
+   * playing, and the transport id goes with it. The socket survives and keeps
+   * answering heartbeats, so a sender that cached the transport id from
+   * `connect()` notices nothing and addresses every later LOAD to an
+   * application that no longer exists — which is dropped without a reply.
+   */
+  it('loads to the transport the receiver reports now, not the one it reported at connect', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+
+    // The television's media app has died and come back somewhere else.
+    receiver.transportId = 'transport-456'
+    await session.load(MEDIA)
+
+    const load = receiver.received.find((m) => m.payload.type === 'LOAD')
+    expect(load?.destinationId).toBe('transport-456')
+    // And it is addressed, not merely sent: a destination with no CONNECT
+    // discards what arrives.
+    const connects = receiver.received
+      .filter((m) => m.payload.type === 'CONNECT')
+      .map((m) => m.destinationId)
+    expect(connects).toContain('transport-456')
   })
 
   it('sends the media exactly as the receiver expects it', async () => {

@@ -765,6 +765,14 @@ export interface WtaChromeApi {
     disconnect(): Promise<void>
     beam(): Promise<{ ok: boolean; error?: string }>
     status(): Promise<CastStatus>
+    /**
+     * Transport for the television.
+     *
+     * The chrome is the *only* document with a cast UI, so leaving this off
+     * its bridge did not merely omit a convenience — it made the television
+     * uncontrollable, with no way to pause or seek once a stream was running.
+     */
+    control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
   }
 }
 
