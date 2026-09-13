@@ -36,7 +36,7 @@
  * page by the preload instead, where they are part of it.
  */
 
-import { WebContentsView, BrowserWindow, ipcMain } from 'electron'
+import { WebContentsView, BrowserWindow, ipcMain, type Session } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, PlayerSuggestion } from '@shared/ipc'
@@ -79,6 +79,17 @@ export interface InlinePlayer {
   load: (url: string) => void
   /** Reload the current URL, for a source that loaded but then stalled. */
   reload: () => void
+  /**
+   * The embed's own session partition.
+   *
+   * Exposed so casting can watch what the provider fetches — `castcapture.ts`
+   * attaches an `onSendHeaders` observer to it, which is the only way the app
+   * can learn the stream's address at all. Read once, immediately after the
+   * player is created, because touching `webContents.session` after the view is
+   * destroyed throws.
+   */
+  session: Session
+
   /**
    * The provider's own playback position, or null if it exposes none.
    *
@@ -360,6 +371,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let closed = false
 
   const player: InlinePlayer = {
+    session: contents.session,
     context,
     candidates,
     candidateIndex: 0,

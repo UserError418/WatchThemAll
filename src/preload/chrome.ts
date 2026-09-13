@@ -33,30 +33,22 @@ const api: WtaChromeApi = {
    * unclickable. The document measures itself and main follows.
    */
   /**
-   * Casting, which the desktop does not do — see `src/main/ipc.ts`.
+   * Casting, over the same channels the app window uses.
    *
-   * `available` resolves false, so `PlayerChrome` never renders the button and
-   * none of the others is ever reached. They exist because the chrome contract
-   * is shared with the phone, and one renderer means one interface.
+   * The chrome is a separate document from the app's page, so it needs its own
+   * bridge — but it is the same contract and the same handlers in main, which
+   * is what keeps the desktop and the phone from drifting into two different
+   * cast features behind one button.
    */
   cast: {
-    available: () => Promise.resolve(false),
-    startDiscovery: () => Promise.resolve(),
-    stopDiscovery: () => Promise.resolve(),
-    devices: () => Promise.resolve([]),
-    connect: () => Promise.resolve({ ok: false, error: 'Casting is available in the Android app only.' }),
-    disconnect: () => Promise.resolve(),
-    beam: () => Promise.resolve({ ok: false, error: 'Casting is available in the Android app only.' }),
-    status: () =>
-      Promise.resolve({
-        available: false,
-        connected: false,
-        deviceName: '',
-        playing: false,
-        seconds: 0,
-        duration: 0,
-        proxyRunning: false,
-      }),
+    available: () => ipcRenderer.invoke(CH.castAvailable),
+    startDiscovery: () => ipcRenderer.invoke(CH.castStartDiscovery),
+    stopDiscovery: () => ipcRenderer.invoke(CH.castStopDiscovery),
+    devices: () => ipcRenderer.invoke(CH.castDevices),
+    connect: (deviceId: string) => ipcRenderer.invoke(CH.castConnect, deviceId),
+    disconnect: () => ipcRenderer.invoke(CH.castDisconnect),
+    beam: () => ipcRenderer.invoke(CH.castBeam),
+    status: () => ipcRenderer.invoke(CH.castStatus),
   },
 
   setOverlayHeight: (height: number): void => {
