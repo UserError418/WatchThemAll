@@ -237,7 +237,19 @@ export class CastSession {
     if (!this.transportId) throw new Error('not connected to a TV')
     if (this.mediaSessionId === null) throw new Error('nothing is playing on the TV yet')
 
-    const base = { mediaSessionId: this.mediaSessionId }
+    /*
+     * Every media command needs a `requestId`, and a real receiver silently
+     * ignores one without it.
+     *
+     * Measured against a Chromecast on 2026-09-13: PLAY, PAUSE and SEEK were
+     * accepted onto the wire and changed nothing — the film kept playing and a
+     * seek to 3600s left the position where it was. The loopback tests had
+     * passed because the fake receiver answered anything put in front of it,
+     * which is the failure mode of a fake that is more permissive than the
+     * thing it stands in for. `castsender.test.ts` now rejects a command with
+     * no requestId, so this cannot regress unnoticed.
+     */
+    const base = { mediaSessionId: this.mediaSessionId, requestId: this.requestId++ }
     const payload =
       action === 'play'
         ? { ...base, type: 'PLAY' }

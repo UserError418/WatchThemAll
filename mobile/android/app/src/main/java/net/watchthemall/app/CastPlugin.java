@@ -1,5 +1,7 @@
 package net.watchthemall.app;
 
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import androidx.mediarouter.media.MediaRouteSelector;
@@ -64,7 +66,21 @@ public class CastPlugin extends Plugin {
 
     private static final String TAG = "CastPlugin";
 
+    /** How long a television gets to finish connecting before we say so. */
+    private static final long CONNECT_TIMEOUT_MS = 20_000L;
+
     private final CastProxyServer proxy = new CastProxyServer();
+
+    /**
+     * The `connect` call still waiting for its session to actually exist.
+     *
+     * Selecting a route only *starts* a connection; the CastSession appears
+     * later, through the session listener. Resolving `connect` at selection
+     * time is what produced "the Chromecast is connected but not ready" on a
+     * real device — `beam` ran immediately afterwards and asked a session that
+     * was still being built for its RemoteMediaClient, which was null.
+     */
+    private PluginCall pendingConnect;
 
     private CastContext castContext;
     private MediaRouter mediaRouter;
@@ -332,15 +348,52 @@ public class CastPlugin extends Plugin {
             return;
         }
         getActivity().runOnUiThread(() -> {
+            // Already attached to something: nothing to wait for.
+            CastSession existing = currentSession();
+            if (existing != null && existing.isConnected()) {
+                call.resolve();
+                return;
+            }
+
             for (MediaRouter.RouteInfo route : mediaRouter.getRoutes()) {
-                if (route.getId().equals(id)) {
-                    mediaRouter.selectRoute(route);
-                    call.resolve();
-                    return;
-                }
+                if (!route.getId().equals(id)) continue;
+
+                if (pendingConnect != null) pendingConnect.reject("superseded by another connection");
+                pendingConnect = call;
+                // Held open deliberately — Capacitor would otherwise discard the
+                // call object once this method returns and the later resolve
+                // would go nowhere.
+                call.setKeepAlive(true);
+
+                mediaRouter.selectRoute(route);
+
+                /*
+                 * A television that is off, or busy with another sender, never
+                 * completes the session and never reports a failure either. A
+                 * bounded wait turns that into a sentence the user can act on
+                 * instead of a spinner that never stops.
+                 */
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (pendingConnect != call) return;
+                    pendingConnect = null;
+                    call.reject("the TV did not finish connecting — it may be off or in use");
+                }, CONNECT_TIMEOUT_MS);
+                return;
             }
             call.reject("no such device — it may have gone off the network");
         });
+    }
+
+    /** Finish whichever `connect` is outstanding, if any. */
+    private void settleConnect(boolean ok, String error) {
+        PluginCall call = pendingConnect;
+        if (call == null) return;
+        pendingConnect = null;
+        if (ok) {
+            call.resolve();
+        } else {
+            call.reject(error);
+        }
     }
 
     @PluginMethod
@@ -493,11 +546,15 @@ public class CastPlugin extends Plugin {
     private final SessionManagerListener<CastSession> sessionListener = new SessionManagerListener<CastSession>() {
         @Override
         public void onSessionStarted(CastSession session, String sessionId) {
+            // The moment `connect` has been waiting for: a session that can
+            // actually hand out a RemoteMediaClient.
+            settleConnect(true, null);
             notifyListeners("castSession", statusObject("started", session));
         }
 
         @Override
         public void onSessionResumed(CastSession session, boolean wasSuspended) {
+            settleConnect(true, null);
             notifyListeners("castSession", statusObject("resumed", session));
         }
 
@@ -510,6 +567,7 @@ public class CastPlugin extends Plugin {
 
         @Override
         public void onSessionStartFailed(CastSession session, int error) {
+            settleConnect(false, "the TV refused the connection (code " + error + ")");
             proxy.stop();
             CastKeepAliveService.stop(getContext());
             JSObject payload = statusObject("failed", session);

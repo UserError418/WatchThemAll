@@ -37,6 +37,8 @@ class FakeReceiver {
   failLoad = false
   /** Set to never answer LAUNCH, to exercise the timeout path. */
   ignoreLaunch = false
+  /** Media commands dropped for lacking a requestId, as a real receiver drops them. */
+  readonly ignoredForNoRequestId: string[] = []
 
   async listen(): Promise<number> {
     const server = createServer({ key: TEST_KEY, cert: TEST_CERT }, (socket) => {
@@ -260,6 +262,27 @@ describe('CastSession', () => {
     const seek = await waitFor(receiver, (p) => p.type === 'SEEK')
     expect(seek.mediaSessionId).toBe(7)
     expect(seek.currentTime).toBe(420)
+  })
+
+  /**
+   * The defect a too-permissive fake hid: a media command with no requestId is
+   * discarded by a real Chromecast without a word. Measured on hardware — a
+   * seek to 3600s left the film where it was.
+   */
+  it('puts a requestId on every media command, or the TV ignores it', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+    await session.load(MEDIA)
+
+    await session.control('pause')
+    await session.control('play')
+    await session.control('seek', 420)
+    await session.control('stop')
+
+    await waitFor(receiver, (p) => p.type === 'STOP')
+    expect(receiver.ignoredForNoRequestId).toEqual([])
   })
 
   it('refuses to control anything before something is loaded', async () => {
