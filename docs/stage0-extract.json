@@ -1,0 +1,262 @@
+[
+  {
+    "providerId": "vidlux",
+    "providerName": "VidLux",
+    "pageUrl": "https://vidlux.xyz/embed/movie/550",
+    "verdict": "open",
+    "stream": {
+      "url": "https://02pcembed.site/v1/proxy?data=%7B%22url%22%3A%22https%3A%2F%2Fmoonfirekeeper.lol%2Ffile1%2FNzk1ZjZkMmMyYTNmYTdhNDk1N2I1ZWI5YjRmMzg4ZGMxNzg5Mjc0NDE2NTQ4OTM%2F360p%2Fplaylist.m3u8%22%2C%22headers%22%3A%7B%22User-Agent%22%3A%22Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F131.0.0.0%20Safari%2F537.36%22%2C%22Accept%22%3A%22application%2Fjson%2C%20text%2Fjavascript%2C%20*%2F*%3B%20q%3D0.01%22%2C%22Accept-Language%22%3A%22en-US%2Cen%3Bq%3D0.9%22%2C%22Referer%22%3A%22https%3A%2F%2Fvidrock.net%2Fmovie%2F550%22%2C%22Origin%22%3A%22https%3A%2F%2Fvidrock.net%22%7D%7D",
+      "kind": "hls",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Referer": "https://vidlux.xyz/embed/movie/550",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 8912
+    },
+    "bareStatus": 200,
+    "replayStatus": 200,
+    "segmentOk": true,
+    "error": null
+  },
+  {
+    "providerId": "vidfast",
+    "providerName": "VidFast",
+    "pageUrl": "https://vidfast.vc/movie/tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "vidflix",
+    "providerName": "VidFlix",
+    "pageUrl": "https://vidflix.club/movie/tt0137523",
+    "verdict": "header-gated",
+    "stream": {
+      "url": "https://1x.cloudnestcdn.click/proxy?url=https%3A%2F%2Fnetoda.tech%2Fhls%2F632e1c70f73ddbe3-30807b3bfd9d6f8a91d181e0-4102b62632eff74c528296fa30b7335b252dca9e0a55b0215ad936bd29543eda2e27aca2e71b7cb3bc3a29db098f6563fd9e95%2Fmaster.m3u8&data=T3JpZ2luPWh0dHBzOi8vbmV0b2RhLnRlY2h8UmVmZXJlcj1odHRwczovL25ldG9kYS50ZWNoLw%3D%3D&type=/index.m3u8",
+      "kind": "hls",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "Range": "bytes=0-",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Referer": "https://player.vidflix.club/",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 1992
+    },
+    "bareStatus": 403,
+    "replayStatus": 200,
+    "segmentOk": false,
+    "error": null
+  },
+  {
+    "providerId": "cinemaos",
+    "providerName": "CinemaOS",
+    "pageUrl": "https://cinemaos.tech/movie/watch/550",
+    "verdict": "sealed",
+    "stream": {
+      "url": "https://sacdn.cinemaos.in/p/eyJSZWZlcmVyIjoiaHR0cHM6Ly9hcGkuaW5tb3ZpZWJveC5jb20iLCJVc2VyLUFnZW50IjoiTW96aWxsYS81LjAiLCJDb29raWUiOiJDbG91ZEZyb250LVBvbGljeT1leUpUZEdGMFpXMWxiblFpT2x0N0lsSmxjMjkxY21ObElqb2lhSFIwY0hNNkx5OXpZV05rYmk1b1lXdDFibUY1YldGMFlYUmhMbU52YlM5a1lYTm9MemN4TkRnd056a3dNamd3T1RVd05EVXpNRFJmTUY4d1h6UTRNRjlvTWpZMVh6ZzNOaThxSWl3aVEyOXVaR2wwYVc5dUlqcDdJa1JoZEdWTVpYTnpWR2hoYmlJNmV5SkJWMU02UlhCdlkyaFVhVzFsSWpveE56ZzVPRGsyTmpVMGZYMTlYWDBfO0Nsb3VkRnJvbnQtU2lnbmF0dXJlPWtkS1FGRm52UTl-RHZNVUtVY2U5VGEtUXdxZE1rOUxnaWVDLURiNDVYdFo2QXVkdXNLS0VRQ3MwUlI0ZzExSUNRQm1tcUF0SC04c2FHSzh2anFPb1VwaW15SmFrdnI1a2dEVnUySmh5eDRkZGo4WnNSbi1rZ2JlbzY5dWtLR1ptR003Y2k4UWlvQW5ZcFctREhkSElCeUphZjJScGxJUk9kdlRPZzBKNDh0WGM0dFVSQjhmRHhiT2ZNYi1NaEwzMkgwRGpQSkl2RXlmWjhXbWNXbmRPZ3o0NXFXZ0JXekJvWlhDYjZufmNHb0xiR3J1UHhKbWtRQzZiajJERWZifnlmYmVleGFiMjlXTFp2RkZoeG4zU2cyN0JSeGE3Mmc5OS0xbExvSTlucnNKTmhtdmtXV1J0TjF3VThLa2ZQMG9Eakdqay1sUVQtNDBRTWVLZEh2YjdFUV9fO0Nsb3VkRnJvbnQtS2V5LVBhaXItSWQ9S01ITjFMUTFIRVVQTDsifQ/aHR0cHM6Ly9zYWNkbi5oYWt1bmF5bWF0YXRhLmNvbS9kYXNoLzcxNDgwNzkwMjgwOTUwNDUzMDRfMF8wXzQ4MF9oMjY1Xzg3Ni9pbmRleF93ZWIubXBk.mpd?caps=avc1%2Cavc3%2Cvp09%2Cav01",
+      "kind": "dash",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Referer": "https://cinemaos.tech/",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 3596
+    },
+    "bareStatus": 415,
+    "replayStatus": 415,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "screenscape",
+    "providerName": "ScreenScape",
+    "pageUrl": "https://screenscape.me/embed?type=movie&imdb=tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "moviesapi",
+    "providerName": "MoviesAPI",
+    "pageUrl": "https://moviesapi.to/movie/tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "multiembed",
+    "providerName": "SuperEmbed",
+    "pageUrl": "https://multiembed.mov/?video_id=tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "vidsrc-me",
+    "providerName": "VidSrc",
+    "pageUrl": "https://vidsrcme.ru/embed/movie/tt0137523",
+    "verdict": "open",
+    "stream": {
+      "url": "https://comityofcognomen.site/pl/H4sIAAAAAAAAAwXBb3OCIBwA4K8koDR314vZ.Nkq8U8CwjvCPC_RueqW89PveSimIYlRF1xc.0Y3URfhiMYEWYtwR9HmvZQ8KMdgdetBnBAUVQMkuzFiJ49yhTTfJ4Sr58OK5WWaNpTpLK9M_rTjgLLR_HJmJik9dbX_476ndRpnFr6xW3tiJiivbM5OyPgMPu66qfRZ8smRHvTN7IR6Hs.pCPnwteg6WY7I72wwF3b1piZQWRy83ODWtmG4nYDUXkcl0lElTO7wopwEpD5FeCFeaCF9zhaoAR5qnyyGuPt5lFrAISnK7fYf2Kvy4wkBAAA-/master.m3u8?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJteS1hdXRoIiwiaWF0IjoxNzg5MjkyODU2LCJuYmYiOjE3ODkyOTI4NTYsImV4cCI6MTc4OTMwNzI1NiwiaXBfY2lkciI6IjJhMDI6ODEwYToxYzhmOjRkMDA6Oi82NCJ9.Pi6_lYpC4bcDFeZ7WeTtxSCAc5Ma9LjdiFpRmkWJXsk",
+      "kind": "hls",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Origin": "https://cloudorchestranova.com",
+        "Referer": "https://cloudorchestranova.com/",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 3428
+    },
+    "bareStatus": 200,
+    "replayStatus": 200,
+    "segmentOk": true,
+    "error": null
+  },
+  {
+    "providerId": "vidsrc-me-su",
+    "providerName": "VidSrc (.su mirror)",
+    "pageUrl": "https://vidsrcme.su/embed/movie/tt0137523",
+    "verdict": "sealed",
+    "stream": {
+      "url": "https://comityofcognomen.site/pl/H4sIAAAAAAAAAwXB2XKCMBQA0F8KiajtjC9piCBDgAg3kreEYLEs4xQty9f3HHM4Hn1jzd00.8ZihPa1vzM.8e77hpAP9ymBprLXiwIKtuBDgiGDICIuaHvL9FuPFK6e8PXQ9hrzBUo_jjd5kcAzEbxKd3aVvUmaAF_TMPIaVq15BzRGsrVIP90wI8ectES_i3Wac493V0LDFKrNYYg053OM3GgDfyxL2apQxxZNv3V4KYrHtHNIUMEEJOQbq27ZCpTMRrmyKZ9fcmt_1CizptNGeMAAV6g.a.bUK847cctx_zBM_mX56fQPBtR2ygkBAAA-/master.m3u8",
+      "kind": "hls",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Origin": "https://cloudorchestranova.com",
+        "Referer": "https://cloudorchestranova.com/",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 3318
+    },
+    "bareStatus": 401,
+    "replayStatus": 401,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "vidsrc-pm",
+    "providerName": "VidSrc PM",
+    "pageUrl": "https://vidsrc.pm/embed/movie/tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "videasy",
+    "providerName": "Videasy",
+    "pageUrl": "https://player.videasy.to/movie/550",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "vidcore",
+    "providerName": "VidCore",
+    "pageUrl": "https://www.vidcore.net/movie/tt0137523",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "vidzee",
+    "providerName": "VidZee",
+    "pageUrl": "https://player.vidzee.wtf/embed/movie/550",
+    "verdict": "header-gated",
+    "stream": {
+      "url": "https://cdn2.ngcorp.dad/movie/s1XfDkK-nTV6JaoO_g5A6SBHhhWKKhkD0w1m9_jOj50.5-vad_bB/bigtits.m3u8",
+      "kind": "hls",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Referer": "https://player.vidzee.wtf/",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 1572
+    },
+    "bareStatus": 403,
+    "replayStatus": 200,
+    "segmentOk": true,
+    "error": null
+  },
+  {
+    "providerId": "vidrock",
+    "providerName": "VidRock",
+    "pageUrl": "https://vidrock.net/movie/550",
+    "verdict": "open",
+    "stream": {
+      "url": "https://vidrock.net/demo-video.mp4",
+      "kind": "progressive",
+      "headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) watchthemall/1.5.2 Chrome/148.0.7778.271 Electron/42.5.0 Safari/537.36",
+        "sec-ch-ua": "\"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\", \"Not?A_Brand\";v=\"99\"",
+        "Range": "bytes=0-",
+        "sec-ch-ua-mobile": "?0",
+        "Accept": "*/*",
+        "Referer": "https://vidrock.net/movie/550",
+        "Accept-Language": "en-US"
+      },
+      "foundAtMs": 748
+    },
+    "bareStatus": 200,
+    "replayStatus": 200,
+    "segmentOk": null,
+    "error": null
+  },
+  {
+    "providerId": "one11movies",
+    "providerName": "111Movies",
+    "pageUrl": "https://player.vidlove.cc/movie/550",
+    "verdict": "none",
+    "stream": null,
+    "bareStatus": null,
+    "replayStatus": null,
+    "segmentOk": null,
+    "error": null
+  }
+]
