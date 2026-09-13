@@ -19,7 +19,9 @@
     PlayerSuggestion,
     TitleOutcome,
     TitleProviderState,
-  } from '@shared/ipc'
+  CastDevice,
+  CastStatus,
+} from '@shared/ipc'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
 
@@ -83,7 +85,7 @@
   const api = window.wtaChrome
 
   let context = $state<PlayerContext | null>(null)
-  let panel = $state<'none' | 'episodes' | 'sources'>('none')
+  let panel = $state<'none' | 'episodes' | 'sources' | 'cast'>('none')
   let barVisible = $state(true)
   let hoveringChrome = $state(false)
 
@@ -100,6 +102,92 @@
    * one without guessing.
    */
   let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null })
+
+  /* ── Casting ──────────────────────────────────────────────────────────────
+   *
+   * Offered from the player and nowhere else, because there is nothing to cast
+   * until the provider's own player has fetched a stream. The button is hidden
+   * entirely where casting cannot work — desktop, and any phone without Google
+   * Play Services — rather than shown and then apologising.
+   */
+
+  let castAvailable = $state(false)
+  let castDevices = $state<CastDevice[]>([])
+  let castStatus = $state<CastStatus | null>(null)
+  /** Set while a beam is in flight, so the panel can say what is happening. */
+  let castBusy = $state(false)
+  /** The last failure, in the user's words. Cleared when they try again. */
+  let castError = $state<string | null>(null)
+
+  $effect(() => {
+    void api?.cast.available().then((yes) => (castAvailable = yes))
+  })
+
+  /**
+   * Poll while connected, and only while connected.
+   *
+   * The position on the television is the one thing the phone cannot be told
+   * about — `RemoteMediaClient` reports it to native code, and pushing every
+   * tick across the bridge would cost more than reading it once a second. The
+   * interval is torn down when the panel closes so a backgrounded player is not
+   * waking the bridge forever.
+   */
+  $effect(() => {
+    if (!castAvailable) return
+    if (panel !== 'cast' && !castStatus?.connected) return
+
+    const tick = (): void => void api?.cast.status().then((next) => (castStatus = next))
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  })
+
+  function openCast(): void {
+    if (panel === 'cast') {
+      panel = 'none'
+      void api.cast.stopDiscovery()
+      return
+    }
+    panel = 'cast'
+    castError = null
+    void api.cast.startDiscovery()
+    void api.cast.devices().then((found) => (castDevices = found))
+  }
+
+  /**
+   * Connect, then move the stream across.
+   *
+   * Deliberately one action from the user's side. Connecting without beaming
+   * leaves a Chromecast showing its idle screen while the phone keeps playing,
+   * which looks like a failure even though both halves worked.
+   */
+  async function castTo(deviceId: string): Promise<void> {
+    castBusy = true
+    castError = null
+    try {
+      const connected = await api.cast.connect(deviceId)
+      if (!connected.ok) {
+        castError = connected.error ?? 'Could not connect to that TV.'
+        return
+      }
+      const beamed = await api.cast.beam()
+      if (!beamed.ok) {
+        castError = beamed.error ?? 'Could not start the stream on that TV.'
+        return
+      }
+      panel = 'none'
+      void api.cast.stopDiscovery()
+    } finally {
+      castBusy = false
+      castStatus = await api.cast.status()
+    }
+  }
+
+  async function stopCasting(): Promise<void> {
+    await api.cast.disconnect()
+    castStatus = await api.cast.status()
+  }
+
 
   /** Colour and tooltip together, so they cannot drift apart. */
   const OUTCOME_META: Record<TitleOutcome, { colour: string; title: string }> = {
@@ -378,6 +466,24 @@
         </button>
       {/if}
 
+      {#if castAvailable}
+        <!--
+          Two states, not one. A cast that is running is the more important
+          fact on this bar — the picture in front of the user is not where the
+          film is any more — so it says the device's name rather than an icon
+          that could mean either thing.
+        -->
+        <button
+          class="ghost cast"
+          class:active={panel === 'cast'}
+          class:casting={castStatus?.connected === true}
+          title="Play on a TV"
+          onclick={openCast}
+        >
+          {castStatus?.connected ? `▣ ${castStatus.deviceName}` : '▣ Cast'}
+        </button>
+      {/if}
+
       <button class="ghost" class:active={panel === 'sources'} onclick={openSources}>
         {context?.providerName ?? 'Source'} ▾
       </button>
@@ -419,6 +525,45 @@
               </button>
             {/each}
           </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if panel === 'cast'}
+      <div class="panel cast-panel">
+        {#if castStatus?.connected}
+          <div class="cast-now">
+            <span class="name">Playing on {castStatus.deviceName}</span>
+            {#if !castStatus.proxyRunning}
+              <!--
+                Connected but not serving. Worth its own words: the television
+                is attached and the stream behind it has stopped, which looks
+                identical to "paused" from the sofa.
+              -->
+              <span class="tag bad">stream ended</span>
+            {/if}
+          </div>
+          <div class="cast-controls">
+            <button class="source" onclick={() => void api.cast.status().then(() => {})}>
+              {castStatus.playing ? 'Playing' : 'Paused'}
+            </button>
+            <button class="source" onclick={() => void stopCasting()}>Stop casting</button>
+          </div>
+        {:else if castBusy}
+          <p class="hint">Starting the stream…</p>
+        {:else if castDevices.length === 0}
+          <p class="hint">Looking for a TV on your Wi-Fi…</p>
+        {:else}
+          {#each castDevices as device (device.id)}
+            <button class="source" onclick={() => void castTo(device.id)}>
+              <span class="dot" style:background={RESUME_COLOUR}></span>
+              <span class="name">{device.name}</span>
+            </button>
+          {/each}
+        {/if}
+
+        {#if castError}
+          <p class="hint bad">{castError}</p>
         {/if}
       </div>
     {/if}
@@ -808,5 +953,40 @@
 
   .tag.bad {
     color: #fb5c76;
+  }
+
+  /* ── Casting ──────────────────────────────────────────────────────────────
+     A running cast is a mode, not a setting, so it is coloured rather than
+     ticked: the picture on this screen is no longer where the film is, and
+     that has to be readable at a glance from across the room. */
+
+  .ghost.casting {
+    background: rgba(91, 157, 250, 0.22);
+    border-color: rgba(91, 157, 250, 0.55);
+    color: #cfe0ff;
+  }
+
+  .cast-panel {
+    padding: 6px 0;
+  }
+
+  .cast-now {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px 4px;
+  }
+
+  .cast-now .name {
+    color: #cfe0ff;
+  }
+
+  .cast-controls {
+    display: flex;
+  }
+
+  .hint.bad {
+    color: #fb5c76;
+    padding: 12px 16px;
   }
 </style>
