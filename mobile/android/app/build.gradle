@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+/**
+ * Read the version out of the repository's package.json.
+ *
+ * `JsonSlurper` rather than a shelled-out `node`: Gradle configuration has to
+ * work in a checkout that has never run `npm install`, and this file is four
+ * directories below the root only because `capacitor.config.ts` puts the
+ * generated project under `mobile/`.
+ */
+def wtaPackageJson = new groovy.json.JsonSlurper().parse(file("$rootDir/../../package.json"))
+def wtaVersionName = wtaPackageJson.version
+def wtaVersionCode = wtaVersionName.tokenize('.').withIndex().sum { part, index ->
+    part.toInteger() * (100 ** (2 - index))
+} as int
+
 android {
     namespace = "net.watchthemall.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +21,24 @@ android {
         applicationId "net.watchthemall.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        /**
+         * Both read from package.json, which is the one place this project
+         * writes a version down.
+         *
+         * They used to be Capacitor's template defaults, so every APK ever
+         * built here — including the one attached to the 1.5.1 release —
+         * reported itself as version 1.0 in Settings, in the installer's
+         * upgrade prompt, and to anything else that asks the package manager.
+         * The release page and the app disagreed, and the app was wrong.
+         *
+         * `versionCode` is the numeric ordering Android upgrades on and it
+         * must never go backwards, so the parts are packed rather than
+         * counted: 1.5.1 becomes 10501. Two digits per part caps a part at 99,
+         * which is a limit this project will not reach before it changes
+         * shape entirely.
+         */
+        versionName wtaVersionName
+        versionCode wtaVersionCode
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
