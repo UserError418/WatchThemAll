@@ -33,6 +33,7 @@ That is `mobile/src/bridge/`. Everything else is shared:
 | `src/main/migrate.ts`, `sync.ts` | verbatim | Same document, same export format. |
 | `src/main/malimport.ts`, `malapply.ts` | verbatim | Parser is `DOMParser`-free. |
 | `src/main/taste.ts`, `releases.ts` | verbatim | `releases` takes a structural store. |
+| `src/main/catalog.ts` | verbatim | Storage behind a port; see below. |
 | `src/main/store.ts` | replaced | Node `fs` -> `mobile/src/bridge/store.ts`. |
 | `src/main/playerview.ts`, `windows.ts` | not ported | Replaced by `bridge/playersurface.ts`. |
 
@@ -185,10 +186,30 @@ document by `bridge/chromeoverlay.ts` rather than into a second
 `WebContentsView`. It can be, because here the video surface is a DOM node and
 not a native layer — so ordinary z-index puts the chrome in front of it.
 
-**The remote provider catalogue.** The desktop app refreshes the catalogue in
-the background and caches it to disk. The phone ships whatever catalogue its
-APK was built with. That is a staleness problem rather than a correctness one,
-and the custom-provider form covers the urgent case.
+
+## The provider catalogue is managed here too
+
+Embed providers die and change domain constantly, so the list is fetched rather
+than compiled in — and a list compiled into an *APK* is the worst case of that,
+because the user cannot rebuild the app. The phone ran on its bundled list until
+`catalog.ts` was made storage-agnostic.
+
+The split is one interface. `CatalogStore` is `read(): Promise<string | null>`
+and `write(blob)`, and everything that makes the managed catalogue work — the
+URL, the ETag round trip, the all-or-nothing validation, the bundled/remote/
+custom resolution — stayed in the shared module. The desktop backs it with a
+JSON file; `bridge/catalogstore.ts` backs it with Capacitor Preferences, which
+is `SharedPreferences` underneath.
+
+Not the app's own store, deliberately: the catalogue is a cache of a public
+document, and putting it in `watchthemall.json` would send a hundred providers
+of public information through migration, through the sync merge and into every
+export, for devices that can each fetch them in a second.
+
+The refresh is fire-and-forget on launch, throttled to the desktop's twelve
+hours. Nothing waits for it — the bundled list works — and a failure is not
+surfaced, because an error about a background refresh the user never asked for
+describes a problem they cannot act on.
 
 ## Notifications, without a background process
 

@@ -23,8 +23,6 @@
  * good list in place rather than half-applying.
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
 import type { Provider, ProviderCatalog } from '@shared/types'
 import { REQUEST_HEADERS } from './identity'
 
@@ -156,14 +154,38 @@ export function validateCatalog(raw: unknown): { ok: true; catalog: ProviderCata
 
 /* ── Persistence ────────────────────────────────────────────────────────── */
 
-/** Where the last good fetch is kept, so a cold start is not a blank list. */
-export function cachePath(dataDir: string): string {
-  return join(dataDir, 'provider-catalog.json')
+/**
+ * Somewhere to keep the last good fetch, so a cold start is not a blank list.
+ *
+ * A port rather than a filesystem call, because the two apps that need this do
+ * not share a filesystem. The desktop writes a JSON file next to the store; the
+ * phone has no `node:fs` at all and keeps it in Capacitor Preferences. The
+ * fetch, the validation, the ETag handling and the three-layer resolution are
+ * identical either way, and were until this split the only part of the managed
+ * catalogue the phone could not have — so it shipped whatever list was compiled
+ * into its APK, which is exactly the staleness this module exists to fix.
+ *
+ * Both sides store and return a *string*. Deciding what a stored blob means is
+ * `decodeCache`'s job below, and having one decoder means a cache written by a
+ * newer version cannot be interpreted two different ways by the two apps.
+ */
+export interface CatalogStore {
+  /** The stored blob, or null when there is none. Must not throw. */
+  read(): Promise<string | null>
+  write(blob: string): Promise<void>
 }
 
-export async function readCache(dataDir: string): Promise<CachedCatalog | null> {
+/**
+ * Read a stored blob back, or null if it cannot be trusted.
+ *
+ * Null covers no cache, unreadable cache, and a cache from an incompatible
+ * version. All three mean the same thing to the caller: fall back to bundled
+ * and try to refresh.
+ */
+export function decodeCache(blob: string | null): CachedCatalog | null {
+  if (blob === null) return null
   try {
-    const raw = JSON.parse(await readFile(cachePath(dataDir), 'utf8')) as unknown
+    const raw = JSON.parse(blob) as unknown
     if (!isRecord(raw)) return null
 
     const validated = validateCatalog(raw.catalog)
@@ -175,16 +197,21 @@ export async function readCache(dataDir: string): Promise<CachedCatalog | null> 
       fetchedAt: typeof raw.fetchedAt === 'number' ? raw.fetchedAt : 0,
     }
   } catch {
-    // No cache, unreadable cache, or a cache from an incompatible version. All
-    // three mean the same thing: fall back to bundled and try to refresh.
     return null
   }
 }
 
-async function writeCache(dataDir: string, value: CachedCatalog): Promise<void> {
-  const path = cachePath(dataDir)
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(value, null, 2))
+/** Read the cache through a store, swallowing whatever the store throws. */
+export async function readCache(store: CatalogStore): Promise<CachedCatalog | null> {
+  try {
+    return decodeCache(await store.read())
+  } catch {
+    return null
+  }
+}
+
+export function encodeCache(value: CachedCatalog): string {
+  return JSON.stringify(value, null, 2)
 }
 
 /* ── Fetch ──────────────────────────────────────────────────────────────── */
@@ -197,11 +224,11 @@ async function writeCache(dataDir: string, value: CachedCatalog): Promise<void> 
  * is not shown an error about a background refresh they did not ask for.
  */
 export async function refreshCatalog(
-  dataDir: string,
+  store: CatalogStore,
   options: { url?: string; etag?: string | null } = {},
 ): Promise<RefreshResult> {
   const url = options.url ?? CATALOG_URL
-  const etag = options.etag ?? (await readCache(dataDir))?.etag ?? null
+  const etag = options.etag ?? (await readCache(store))?.etag ?? null
 
   try {
     const headers: Record<string, string> = { ...REQUEST_HEADERS, Accept: 'application/json' }
@@ -218,11 +245,13 @@ export async function refreshCatalog(
     const validated = validateCatalog(await response.json())
     if (!validated.ok) return { status: 'failed', reason: validated.reason }
 
-    await writeCache(dataDir, {
-      catalog: validated.catalog,
-      etag: response.headers.get('etag'),
-      fetchedAt: Date.now(),
-    })
+    await store.write(
+      encodeCache({
+        catalog: validated.catalog,
+        etag: response.headers.get('etag'),
+        fetchedAt: Date.now(),
+      }),
+    )
 
     return {
       status: 'updated',

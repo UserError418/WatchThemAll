@@ -43,6 +43,7 @@ import {
   REFRESH_INTERVAL_MS,
   type CachedCatalog,
 } from './catalog'
+import { fileCatalogStore } from './catalogcache'
 import { oauthClient } from '@shared/sync/credentials'
 import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
@@ -709,12 +710,13 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
      * them about a problem they cannot act on.
      */
     void (async () => {
-      cachedCatalog = await readCache(store.dir)
+      const catalogStore = fileCatalogStore(store.dir)
+      cachedCatalog = await readCache(catalogStore)
 
       const refresh = async (): Promise<void> => {
-        const result = await refreshCatalog(store.dir)
+        const result = await refreshCatalog(catalogStore)
         if (result.status === 'updated') {
-          cachedCatalog = await readCache(store.dir)
+          cachedCatalog = await readCache(catalogStore)
           console.log(
             `[catalog] updated: ${result.providers} providers, curated ${result.updatedAt}`,
           )
