@@ -35,3 +35,9 @@ dist-release/
 # machine that runs them.
 scripts/deploy-desktop.sh
 scripts/ship.sh
+
+# Internal development logs, plans and backlogs. These are working notes for
+# whoever is building the thing, not documentation for whoever is using it —
+# they date fast, describe code that may not exist yet, and read as somebody's
+# private notebook. Anything of that kind goes here and stays local.
+docs/internal/
