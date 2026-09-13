@@ -75,6 +75,7 @@ import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from '@main/resume'
+import { createCastBridge } from './cast'
 import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
@@ -392,6 +393,36 @@ export async function createBridge(): Promise<WtaApi> {
    */
   let currentPlayerState: PlayerState | null = null
 
+  /**
+   * Casting to a television.
+   *
+   * Constructed once and kept, because it owns the proxy's lifetime: a bridge
+   * rebuilt per call would lose track of a server it had already started.
+   */
+  const castBridge = createCastBridge()
+
+  /**
+   * What `beam` should tell the receiver it is playing.
+   *
+   * Reads the live position rather than the stored resume point where one is
+   * available: the user presses Cast *during* playback, and starting the
+   * television from the last saved position would rewind them by however long
+   * they have been watching.
+   */
+  const nowPlaying = (): { title: string; subtitle: string; providerName: string; startSeconds: number } | null => {
+    if (!currentPlayerState || !session) return null
+    const episode =
+      currentPlayerState.season !== null && currentPlayerState.episode !== null
+        ? `S${currentPlayerState.season}E${currentPlayerState.episode}`
+        : ''
+    return {
+      title: currentPlayerState.title,
+      subtitle: [episode, currentPlayerState.providerName ?? ''].filter(Boolean).join(' · '),
+      providerName: currentPlayerState.providerName ?? 'This source',
+      startSeconds: progress?.reading?.seconds ?? 0,
+    }
+  }
+
   /** Tell the renderer's chrome what it is framing. */
   const emitPlayerState = (): void => {
     if (!session) {
@@ -693,6 +724,19 @@ export async function createBridge(): Promise<WtaApi> {
     if (!candidate) return false
 
     session.index = index
+
+    /*
+     * Forget what the previous source fetched, before the next one starts.
+     *
+     * Everything `beam` can cast comes out of a buffer filled by watching the
+     * WebView, and for the first few seconds after a switch the newest thing in
+     * it still belongs to the *old* provider or the *old* episode. Casting then
+     * would put the wrong film on the television while the phone showed the
+     * right one — the same error as a provider sweep crediting each provider
+     * with its predecessor's stream, and just as hard to see.
+     */
+    void castBridge.forget()
+
     surface.show(candidate)
     if (progress) {
       progress.candidateShownAt = Date.now()
@@ -873,6 +917,27 @@ export async function createBridge(): Promise<WtaApi> {
         lastUsed: lastWorkingForTitle(streamOutcomes, key),
       }
     },
+    /**
+     * The chrome gets the same cast bridge the main API uses, not a second one.
+     *
+     * Two instances would each believe they owned the proxy, and stopping a
+     * cast from one would leave the other reporting a session that no longer
+     * exists.
+     */
+    cast: {
+      available: () => castBridge.available(),
+      startDiscovery: () => castBridge.startDiscovery(),
+      stopDiscovery: () => castBridge.stopDiscovery(),
+      devices: () => castBridge.devices(),
+      connect: (deviceId) => castBridge.connect(deviceId),
+      disconnect: () => castBridge.disconnect(),
+      status: () => castBridge.status(),
+      beam: async () => {
+        const now = nowPlaying()
+        if (now === null) return { ok: false, error: 'Nothing is playing.' }
+        return await castBridge.beam(now)
+      },
+    },
   })
 
   return {
@@ -1014,6 +1079,22 @@ export async function createBridge(): Promise<WtaApi> {
       switchProvider: playerSwitchProvider,
       dismissSuggestion: async () => {},
       reload: playerReload,
+    },
+
+    cast: {
+      available: () => castBridge.available(),
+      startDiscovery: () => castBridge.startDiscovery(),
+      stopDiscovery: () => castBridge.stopDiscovery(),
+      devices: () => castBridge.devices(),
+      connect: (deviceId) => castBridge.connect(deviceId),
+      disconnect: () => castBridge.disconnect(),
+      status: () => castBridge.status(),
+      control: (action, seconds) => castBridge.control(action, seconds),
+      beam: async () => {
+        const now = nowPlaying()
+        if (now === null) return { ok: false, error: 'Nothing is playing.' }
+        return await castBridge.beam(now)
+      },
     },
 
     mal: {

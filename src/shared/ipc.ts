@@ -108,6 +108,27 @@ export const CH = {
   syncDisconnect: 'sync:disconnect',
   /** Sync now, because the user pressed the button. */
   syncNow: 'sync:now',
+
+  /**
+   * Casting the current stream to a television.
+   *
+   * Present in the shared contract even though only the Android app can do it,
+   * because the renderer is one codebase and a platform check is a value it can
+   * read rather than a build it has to be compiled into. `castAvailable`
+   * answers false on the desktop and the UI never offers the button; see
+   * `mobile/src/bridge/cast.ts` for the implementation and why this cannot work
+   * without a proxy on the device.
+   */
+  castAvailable: 'cast:available',
+  castStartDiscovery: 'cast:start-discovery',
+  castStopDiscovery: 'cast:stop-discovery',
+  castDevices: 'cast:devices',
+  castConnect: 'cast:connect',
+  castDisconnect: 'cast:disconnect',
+  /** Move what is playing in the app onto the connected television. */
+  castBeam: 'cast:beam',
+  castStatus: 'cast:status',
+  castControl: 'cast:control',
 } as const
 
 /** Send channels: main → renderer, fire and forget. */
@@ -411,6 +432,31 @@ export interface PlayerState {
   providers: Array<{ id: string; name: string }>
 }
 
+/** A television the phone can see on the network. */
+export interface CastDevice {
+  id: string
+  name: string
+  selected: boolean
+}
+
+/** Where a cast is, as far as the phone can tell. */
+export interface CastStatus {
+  /** Google Cast exists on this device at all. False on desktop. */
+  available: boolean
+  connected: boolean
+  deviceName: string
+  playing: boolean
+  seconds: number
+  duration: number
+  /**
+   * Whether the phone is still serving segments.
+   *
+   * Worth surfacing separately from `connected`: the receiver can be attached
+   * and idle because the proxy stopped, and those two need different words.
+   */
+  proxyRunning: boolean
+}
+
 /** An offer to move to another source, raised when the current one stalls. */
 export interface PlayerSuggestion {
   /** What went wrong, in the user's words. */
@@ -549,6 +595,33 @@ export interface WtaApi {
    * before then, through the `syncStatus` event, so the screen can show it
    * while this promise is still outstanding.
    */
+  /**
+   * Putting the stream on a television.
+   *
+   * Android only in practice — `available()` is false everywhere else and the
+   * UI asks before it offers anything. The shape is deliberately close to
+   * `sync`: a handful of verbs, a status to poll, and no assumption that any of
+   * it succeeds.
+   *
+   * `beam()` is the whole feature in one call. It finds the stream the player
+   * actually fetched, works out whether it can be played by something that is
+   * not this WebView, rewrites its playlist to route through the phone, starts
+   * the proxy and hands the receiver a URL. Every one of those can fail for a
+   * reason the user can act on, which is why it resolves with an error string
+   * rather than throwing.
+   */
+  cast: {
+    available(): Promise<boolean>
+    /** Discovery is active and costs battery; the picker starts and stops it. */
+    startDiscovery(): Promise<void>
+    stopDiscovery(): Promise<void>
+    devices(): Promise<CastDevice[]>
+    connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
+    disconnect(): Promise<void>
+    beam(): Promise<{ ok: boolean; error?: string; providerName?: string }>
+    status(): Promise<CastStatus>
+    control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+  }
   sync: {
     status(): Promise<SyncStatus>
     connect(): Promise<{ ok: boolean; error?: string }>
@@ -671,6 +744,28 @@ export interface WtaChromeApi {
   onSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
   /** Pointer near the top of the picture, reported by the view that can see it. */
   onPointerTop(cb: (nearTop: boolean) => void): () => void
+
+  /**
+   * Casting, from the one place it makes sense to offer it.
+   *
+   * The button belongs in the player chrome rather than on the detail page
+   * because casting needs a stream, and a stream only exists once the provider's
+   * player has fetched one — see `mobile/src/bridge/cast.ts`. Offering it before
+   * playback starts would be offering something that cannot work yet.
+   *
+   * `available()` is false on the desktop and the chrome renders nothing, so
+   * this costs the desktop a handful of no-op methods and no UI.
+   */
+  cast: {
+    available(): Promise<boolean>
+    startDiscovery(): Promise<void>
+    stopDiscovery(): Promise<void>
+    devices(): Promise<CastDevice[]>
+    connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
+    disconnect(): Promise<void>
+    beam(): Promise<{ ok: boolean; error?: string }>
+    status(): Promise<CastStatus>
+  }
 }
 
 declare global {

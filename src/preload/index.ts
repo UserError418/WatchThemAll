@@ -76,6 +76,17 @@ const api: WtaApi = {
     import: (payload: unknown) => ipcRenderer.invoke(CH.dataImport, payload),
     dir: () => ipcRenderer.invoke(CH.dataDir),
   },
+  cast: {
+    available: () => ipcRenderer.invoke(CH.castAvailable),
+    startDiscovery: () => ipcRenderer.invoke(CH.castStartDiscovery),
+    stopDiscovery: () => ipcRenderer.invoke(CH.castStopDiscovery),
+    devices: () => ipcRenderer.invoke(CH.castDevices),
+    connect: (deviceId: string) => ipcRenderer.invoke(CH.castConnect, deviceId),
+    disconnect: () => ipcRenderer.invoke(CH.castDisconnect),
+    beam: () => ipcRenderer.invoke(CH.castBeam),
+    status: () => ipcRenderer.invoke(CH.castStatus),
+    control: (action: string, seconds?: number) => ipcRenderer.invoke(CH.castControl, action, seconds),
+  },
   sync: {
     status: () => ipcRenderer.invoke(CH.syncStatus),
     connect: () => ipcRenderer.invoke(CH.syncConnect),

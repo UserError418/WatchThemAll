@@ -68,6 +68,8 @@ export interface ChromeDeps {
   reload(): Promise<void>
   season(tmdbId: number, season: number): Promise<Season | null>
   outcomes(media: TitleRef): Promise<TitleProviderState>
+  /** The cast controls, already built — see `createCastBridge`. */
+  cast: WtaChromeApi['cast']
 }
 
 /** A subscription that will never fire. Returns an unsubscribe that is a no-op. */
@@ -93,6 +95,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     reload: () => deps.reload(),
     season: (tmdbId, season) => deps.season(tmdbId, season),
     outcomes: (media) => deps.outcomes(media),
+    cast: deps.cast,
 
     /** Nothing raises a suggestion here, so there is never one to dismiss. */
     dismissSuggestion: async () => {},

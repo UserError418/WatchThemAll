@@ -292,6 +292,19 @@ public final class CastProxyServer {
             // The receiver's range, not the captured one — see NOT_REPLAYED.
             if (range != null) connection.setRequestProperty("Range", range);
 
+            /*
+             * Refuse compression, and mean it.
+             *
+             * Left alone, HttpURLConnection adds `Accept-Encoding: gzip` on its
+             * own and transparently decompresses the body — while
+             * getContentLengthLong() keeps reporting the *compressed* length.
+             * The response would then advertise fewer bytes than it sends, and
+             * the receiver would read a truncated segment: a stream that plays
+             * for a few seconds and then stutters or stops, with nothing in any
+             * log to say why.
+             */
+            connection.setRequestProperty("Accept-Encoding", "identity");
+
             int status = connection.getResponseCode();
             String contentType = connection.getContentType();
             long length = connection.getContentLengthLong();

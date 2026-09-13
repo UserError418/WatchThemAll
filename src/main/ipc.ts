@@ -16,6 +16,7 @@ import { writeFileSync, readFileSync } from 'node:fs'
 import { CH, EV } from '@shared/ipc'
 import { isOpenableExternally } from './externalurl'
 import type {
+  CastStatus,
   DiscoverRequest,
   GenreRowRequest,
   PlayRequest,
@@ -44,6 +45,24 @@ import type { SyncStatus } from '@shared/sync/types'
 import type { SyncService } from './syncservice'
 
 /** What the renderer sees when this build has no OAuth client at all. */
+/**
+ * Why the desktop declines to cast.
+ *
+ * A sentence rather than a bare false, because it is shown to anyone who
+ * reaches a cast control through a path that did not check `available` first.
+ */
+const NO_CAST_REASON = 'Casting is available in the Android app only.'
+
+const UNAVAILABLE_CAST_STATUS: CastStatus = {
+  available: false,
+  connected: false,
+  deviceName: '',
+  playing: false,
+  seconds: 0,
+  duration: 0,
+  proxyRunning: false,
+}
+
 const UNAVAILABLE_SYNC_STATUS: SyncStatus = {
   state: 'off',
   accountEmail: null,
@@ -236,6 +255,29 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.syncCancel, () => sync?.cancel())
   ipcMain.handle(CH.syncDisconnect, () => sync?.disconnect())
   ipcMain.handle(CH.syncNow, () => sync?.now() ?? { ok: false, error: NO_CLIENT_REASON })
+  /**
+   * Casting, which the desktop does not do.
+   *
+   * These exist for the same reason the sync handlers above answer when there
+   * is no client: the contract declares the channels and main asserts at
+   * startup that every one has a handler, so a missing handler is a failure to
+   * launch rather than a missing feature.
+   *
+   * `available: false` is the whole answer — the renderer asks before it offers
+   * anything, so the cast button never appears here. Implementing it would mean
+   * a Cast sender for Electron, which is a different problem from the phone's:
+   * the desktop has no Google Play Services and would need the protocol itself.
+   */
+  ipcMain.handle(CH.castAvailable, () => false)
+  ipcMain.handle(CH.castStartDiscovery, () => undefined)
+  ipcMain.handle(CH.castStopDiscovery, () => undefined)
+  ipcMain.handle(CH.castDevices, () => [])
+  ipcMain.handle(CH.castConnect, () => ({ ok: false, error: NO_CAST_REASON }))
+  ipcMain.handle(CH.castDisconnect, () => undefined)
+  ipcMain.handle(CH.castBeam, () => ({ ok: false, error: NO_CAST_REASON }))
+  ipcMain.handle(CH.castStatus, () => UNAVAILABLE_CAST_STATUS)
+  ipcMain.handle(CH.castControl, () => undefined)
+
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
 
   ipcMain.handle(CH.playOpen, (_e, req: PlayRequest) => {
