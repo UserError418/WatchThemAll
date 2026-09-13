@@ -76,7 +76,7 @@ that already happened once.
 
 ## Testing
 
-Vitest. 457 tests across twenty-eight suites, concentrated on the code where
+Vitest. 539 tests across thirty-two suites, concentrated on the code where
 being wrong is silent rather than loud:
 
 - `migrate.test.ts` — schema migration and position repair. It runs on **every
