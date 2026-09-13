@@ -14,6 +14,7 @@ import { EV } from '@shared/ipc'
 import type { PlayRequest } from '@shared/ipc'
 import { Store } from './store'
 import { registerIpc } from './ipc'
+import { createCastService } from './castservice'
 import { buildMenu, createTray, type MenuDeps } from './menu'
 import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
@@ -158,6 +159,15 @@ async function createMainWindow(): Promise<void> {
  * renderer instead would mean a visible gap between hitting play and anything
  * appearing.
  */
+/**
+ * Casting to a television.
+ *
+ * Process-wide and created once, because it owns a proxy's lifetime and a TLS
+ * session — a second instance would each believe it owned them, and stopping a
+ * cast from one would leave the other reporting a session that is gone.
+ */
+const cast = createCastService()
+
 function openPlayer(
   url: string,
   title: string,
@@ -172,6 +182,13 @@ function openPlayer(
   closePlayer(false)
 
   const [width = 1280, height = 800] = win.getContentSize()
+
+  /*
+   * The previous title's manifest is still the newest thing in the capture
+   * buffer for the first seconds of this one, so casting now would put the
+   * wrong film on the television while the screen showed the right one.
+   */
+  cast.forget()
 
   player = createInlinePlayer({
     window: win,
@@ -252,8 +269,23 @@ function openPlayer(
       if (reason !== 'episode') rememberPosition(current, player?.position() ?? null)
       return savedPositionFor(current)
     },
-    onProviderChanged: () => sendPlayerState(),
+    /*
+     * A new source means the previous one's captures are stale, and for a few
+     * seconds they are also the *newest* thing in the buffer — so a cast
+     * started right after a switch would send the old provider's stream.
+     */
+    onProviderChanged: () => {
+      cast.forget()
+      sendPlayerState()
+    },
   })
+
+  /*
+   * Watch this embed's network for the stream, which is the only way the app
+   * can learn its address: the video is resolved inside a cross-origin frame.
+   * Read immediately — `webContents.session` throws once the view is destroyed.
+   */
+  cast.watch(player.session)
 
   // Previews stop while something plays; see `EV.playbackActive`.
   send(EV.playbackActive, true)
@@ -692,6 +724,23 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       },
       keepWaiting: () => player?.keepWaiting(),
       reloadPlayer: () => player?.reload(),
+      cast,
+      castNowPlaying: () => {
+        if (!player) return null
+        const context = player.context
+        const provider = player.candidates[player.candidateIndex]?.provider
+        const episode =
+          context.season !== null && context.episode !== null ? `S${context.season}E${context.episode}` : ''
+        return {
+          title: context.title,
+          subtitle: [episode, provider?.name ?? ''].filter(Boolean).join(' · '),
+          providerName: provider?.name ?? 'This source',
+          // The live position, not the stored resume point: the user pressed
+          // Cast during playback, and the saved point is however far back the
+          // last write was.
+          startSeconds: player.position()?.seconds ?? 0,
+        }
+      },
       checkReleases,
       allProviders,
       orderProviders: orderedForRequest,

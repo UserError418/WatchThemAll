@@ -85,7 +85,8 @@ const api: WtaApi = {
     disconnect: () => ipcRenderer.invoke(CH.castDisconnect),
     beam: () => ipcRenderer.invoke(CH.castBeam),
     status: () => ipcRenderer.invoke(CH.castStatus),
-    control: (action: string, seconds?: number) => ipcRenderer.invoke(CH.castControl, action, seconds),
+    control: (action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
+      ipcRenderer.invoke(CH.castControl, action, seconds),
   },
   sync: {
     status: () => ipcRenderer.invoke(CH.syncStatus),
