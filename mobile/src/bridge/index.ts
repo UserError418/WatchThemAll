@@ -409,6 +409,59 @@ export async function createBridge(): Promise<WtaApi> {
    * television from the last saved position would rewind them by however long
    * they have been watching.
    */
+  /**
+   * Move what is playing onto the television, and stand the phone down.
+   *
+   * The blanking is not a nicety. While casting, the phone is *serving* the
+   * stream to the receiver; if its own iframe keeps playing the same film it is
+   * pulling the whole thing twice and playing audio in two rooms. The embed is
+   * blanked rather than closed so the chrome, the episode list and the source
+   * picker all stay where they are and `restore` can bring the picture back.
+   */
+  const beamToTv = async (): Promise<{ ok: boolean; error?: string; providerName?: string }> => {
+    const now = nowPlaying()
+    if (now === null) return { ok: false, error: 'Nothing is playing.' }
+
+    const result = await castBridge.beam(now)
+    if (result.ok) surface.blank()
+    return result
+  }
+
+  /**
+   * Casting stopped: take the film back, at the position the television reached.
+   *
+   * Written as a resume point rather than passed along, so the existing
+   * mechanism does the work — `buildPlayUrl` appends the provider's own start
+   * parameter, which is how resuming works on this platform at all. Without
+   * this the embed would come back at whatever position it was blanked at,
+   * rewinding the user by however long they watched on the TV.
+   */
+  const reclaimFromTv = async (): Promise<void> => {
+    const status = await castBridge.status()
+    if (session && status.seconds > 0) {
+      const context = contextFor(session.req, progress?.reading ?? null)
+      store.collection('resumePoints').put({
+        key: resumeKey(context),
+        tmdbId: context.tmdbId,
+        seconds: status.seconds,
+        duration: status.duration,
+      })
+      storeChanged.emit()
+    }
+    surface.restore()
+  }
+
+  /*
+   * A cast can end without the app asking. The television is switched off, the
+   * Chromecast is claimed by another phone, the Wi-Fi drops. In every one of
+   * those the picture here is still blank and the user is looking at a black
+   * rectangle wondering what happened — so the same recovery runs, driven by
+   * the session event rather than by a button.
+   */
+  castBridge.onSession((state) => {
+    if (state === 'ended' || state === 'failed') void reclaimFromTv()
+  })
+
   const nowPlaying = (): { title: string; subtitle: string; providerName: string; startSeconds: number } | null => {
     if (!currentPlayerState || !session) return null
     const episode =
@@ -930,13 +983,12 @@ export async function createBridge(): Promise<WtaApi> {
       stopDiscovery: () => castBridge.stopDiscovery(),
       devices: () => castBridge.devices(),
       connect: (deviceId) => castBridge.connect(deviceId),
-      disconnect: () => castBridge.disconnect(),
-      status: () => castBridge.status(),
-      beam: async () => {
-        const now = nowPlaying()
-        if (now === null) return { ok: false, error: 'Nothing is playing.' }
-        return await castBridge.beam(now)
+      disconnect: async () => {
+        await reclaimFromTv()
+        await castBridge.disconnect()
       },
+      status: () => castBridge.status(),
+      beam: async () => beamToTv(),
     },
   })
 
@@ -1087,14 +1139,13 @@ export async function createBridge(): Promise<WtaApi> {
       stopDiscovery: () => castBridge.stopDiscovery(),
       devices: () => castBridge.devices(),
       connect: (deviceId) => castBridge.connect(deviceId),
-      disconnect: () => castBridge.disconnect(),
+      disconnect: async () => {
+        await reclaimFromTv()
+        await castBridge.disconnect()
+      },
       status: () => castBridge.status(),
       control: (action, seconds) => castBridge.control(action, seconds),
-      beam: async () => {
-        const now = nowPlaying()
-        if (now === null) return { ok: false, error: 'Nothing is playing.' }
-        return await castBridge.beam(now)
-      },
+      beam: async () => beamToTv(),
     },
 
     mal: {
