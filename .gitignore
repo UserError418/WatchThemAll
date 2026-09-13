@@ -1,4 +1,8 @@
-node_modules/
+# No trailing slash, deliberately. `node_modules/` matches a directory and
+# not a symlink, and a worktree that borrows the real one by symlinking to it
+# therefore slips straight past the rule — which happened, got committed, and
+# then overwrote the real directory on the next checkout.
+node_modules
 dist-packages/win-unpacked/
 dist-packages/
 *.log
