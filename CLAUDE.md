@@ -245,9 +245,9 @@ Anything new that must sit over the video goes in the chrome host.
 Data lives in `/root/.config/watchthemall/data/watchthemall.json`. Back it up
 before any test that resets it.
 
-## Casting to a TV (Android)
+## Casting to a TV
 
-The phone can put a provider's stream on a Chromecast. It is not "send the
+Both platforms can put a provider's stream on a Chromecast. It is not "send the
 video" — the app never holds one — so it captures what the provider's player
 fetched off `shouldInterceptRequest`, decides which capture is a stream **by
 fetching it rather than by matching `.m3u8`**, rewrites the playlist so every
@@ -256,9 +256,21 @@ server replays the provider's `Referer`; a Chromecast sends none and the Cast
 API cannot attach one, because the receiver does the fetching.
 
 `src/main/hlsrewrite.ts` holds every part of that which can be a pure function,
-deliberately: the proxy has to be Java and nothing there is covered by the four
-gates. `docs/internal/casting.md` (local, unpublished) has the diagram, the
-verification table and the known limits.
+deliberately: the Android proxy has to be Java and nothing there is covered by
+the four gates. `docs/internal/casting.md` (local, unpublished) has the diagram,
+the verification tables and the known limits.
+
+**The desktop shares the content path and nothing else.** Android gets discovery
+and the protocol from Play Services; Electron has neither, so `castmessage.ts`,
+`castdiscovery.ts` and `castsender.ts` implement CastV2 and mDNS by hand rather
+than take `castv2-client` (2019, pulls protobufjs@6) into a project with no
+runtime dependencies.
+
+**Test it with `scripts/fake-chromecast.ts`** — a receiver that speaks the
+protocol, stands on the real LAN under `avahi-publish-service`, and fetches the
+URL it is handed from its own side of the network. That last part is what no
+loopback test reaches, and it is how the desktop path was verified without a
+Chromecast in the building.
 
 Two things to know before changing any of it:
 
@@ -268,8 +280,15 @@ Two things to know before changing any of it:
 - **No proxy route takes a URL.** Ids are registered up front. The query-string
   design would make the phone an open relay for the network while a cast runs.
 
+Two traps worth knowing beyond those: **extracted stream URLs expire within
+hours**, so any check against a stored extract measures the clock rather than
+the stream — re-capture first. And **the desktop player does not press play**,
+so a beam before a real `xdotool` click on the overlay correctly reports "no
+stream a TV can play", which looks like a bug and is not.
+
 ```bash
 npx vite-node scripts/cast-proxy-check.ts -- --extract /tmp/e.json  # mpv is the judge
+npx vite-node scripts/fake-chromecast.ts 8009                       # a TV that is not a TV
 ```
 
 ## legacy/
