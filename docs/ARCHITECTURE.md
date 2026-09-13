@@ -1,251 +1,173 @@
-# WatchThemAll — architecture
+# Architecture
 
-Written 2026-09-06, at the start of the rewrite. This is the design the code is
-being moved *to*. Where the code and this document disagree, the code is either
-not there yet or this document is stale — say which in the commit that fixes it.
-
-## What this app is
-
-A desktop client for watching TV and film through third-party embed providers.
-It does not host or stream anything itself: it builds provider URLs, opens them
-in a player window, and keeps track of what you watched and what is coming out.
-
-The value is entirely in the layers *around* the embed: knowing what exists,
-what is worth watching, where you left off, and when the next episode lands.
-
-## Why this is a rewrite and not a refactor
-
-The original was generated in one pass by a weaker model and ported from a
-Chrome extension without unwinding the extension's assumptions. Three things in
-it are not fixable in place:
-
-- **`src/app-ui.js` is a 3189-line class holding all state and all DOM.** It
-  renders by concatenating HTML strings and re-attaching every listener on every
-  change. The recommendation dashboard builds up to 700 tiles in one string.
-  There is no seam to refactor along — the state, the fetch, and the markup are
-  the same statements.
-- **The renderer still thinks it is a browser extension.** `storage.js` calls
-  `chrome.storage.local`, which only resolves because `app.html` aliases a
-  preload shim onto `window.chrome`. The renderer also makes its own network
-  calls, which is why the app needs `webSecurity: false`.
-- **Metadata comes from TVmaze**, which serves 210×295 portraits and nothing
-  else. A browse UI built on cover art cannot be built on that source.
-
-So the renderer, the data layer, and the discovery engine are all replaced. What
-survives is `main.js`'s window/tray/menu/store skeleton, the provider URL
-template model, and the accumulated knowledge of which providers work.
+A desktop and Android client for watching TV and film through third-party embed
+providers. It hosts and streams nothing itself: it builds provider URLs, frames
+them, and owns everything around that — knowing what exists, where you left off,
+and when the next episode lands.
 
 ## Processes
 
-Standard Electron three-target split, built by `electron-vite`.
+An Electron three-target split, built by `electron-vite`.
 
 ```
 src/main/        Node. Windows, menu, tray, store, TMDB client, IPC handlers.
-src/preload/     The only bridge. Exposes a typed, enumerated API surface.
+src/preload/     The only bridge. A typed, enumerated API surface.
 src/renderer/    Svelte 5 + TypeScript. No Node, no direct network access.
 src/shared/      Types and the IPC channel contract, imported by all three.
 ```
 
-**The renderer makes no network requests.** Every TMDB call goes through the
-main process, which owns the API key, the cache, and the rate limiting. This is
-what lets us turn `webSecurity` back on for the main window: the renderer only
-ever loads local files and TMDB image URLs.
+`src/main` is the business layer, not "the Electron half". Only `store.ts`,
+`windows.ts`, `menu.ts`, `playerview.ts`, `catalog.ts` and `localserver.ts`
+touch Node or Electron. TMDB, IMDB, search, providers, outcomes, migration,
+sync, taste and releases are plain TypeScript over the store document, which is
+what let the Android app reuse them unchanged. Importing `electron` into one of
+them breaks that, and `lint-imports` enforces it.
 
-Player windows are a separate matter — they load untrusted third-party pages and
-keep `webSecurity: false` because video CDNs are cross-origin from the embed
-page. They are isolated: no Node, context isolation on, all popups denied, and
-the preload there talks over a single narrow channel.
+`src/shared/ipc.ts` is the contract. All three processes import it, so a channel
+the renderer can name but main does not handle is a compile error, and main
+asserts at startup that every channel has a handler.
+
+**The renderer makes no network requests.** Every TMDB call goes through main,
+which owns the API key, the cache and the rate limiting. That is what allows
+`webSecurity: true` on the app window behind a CSP permitting only local files
+and `image.tmdb.org`.
+
+Player windows are the exception. They load untrusted third-party pages and need
+`webSecurity: false`, because video CDNs are cross-origin from the embed page.
+They are isolated in every other respect: no Node, context isolation on, all
+pop-ups denied, and a preload that speaks over one narrow channel.
 
 ## Data sources
 
-**TMDB is the only metadata source.** Verified 2026-09-06 as covering everything
-the app needs:
+**TMDB** provides browse rows (`trending/*`, `tv/top_rated`, `tv/on_the_air`,
+`discover/tv`), show and season detail, air dates via `next_episode_to_air`, and
+all artwork.
 
-| Need | Endpoint |
-|------|----------|
-| Browse rows | `trending/*`, `tv/top_rated`, `tv/on_the_air`, `discover/tv` |
-| Search | `search/multi` |
-| Show + season detail | `tv/{id}`, `tv/{id}/season/{n}` |
-| Release countdown | `next_episode_to_air` on `tv/{id}` |
-| Provider URL building | `tv/{id}/external_ids` → `imdb_id` |
-| Artwork | `backdrop_path`, `poster_path`, `still_path` |
-
-TVmaze is retired. It was a second source of truth for the same facts, with
-worse artwork and no popularity signal.
-
-**API key.** The repo currently carries a public key that has been shared around
-the internet for years. It works today, and it is a liability: it is in a public
-repo and it is rate-limited across every project using it. Replace it with a
-personal key injected at build time via `VITE_TMDB_KEY`, and keep the public one
-only as a development fallback.
+**IMDB's suggestion endpoint** provides general search. Both sources are needed:
+providers key their URLs on IMDB ids, and TMDB search returns a TMDB id that
+needs a second `external_ids` round trip — or has no `imdb_id` at all, which
+makes the title unplayable rather than merely slower.
 
 ## Storage
 
-One JSON file, as before, at `{userData}/data/watchthemall.json`, written
-atomically through a temp file and rename.
-
-Two changes from the original. Writes are **debounced and coalesced** — the old
-code rewrote the whole file synchronously on every `storage:set`, which cost 20
-full-file writes before the first paint. And the store is **namespaced and
-typed** rather than a flat bag of `vidsrc_*` keys inherited from the extension.
+One JSON file at `{userData}/data/watchthemall.json`, written atomically through
+a temp file and rename. Writes are debounced and coalesced. The document is
+namespaced and typed.
 
 SQLite was considered and rejected: the data is a few hundred records, and
 `better-sqlite3` is a native module that complicates every `electron-builder`
 target for no benefit at this size.
 
-The export/import format stays byte-compatible with the Android app and the
-ReelVault extension. That cross-app sync is a real feature and breaking it
-silently would be the worst kind of regression.
+The export/import format in `src/main/sync.ts` is **frozen**. It is the
+interchange format shared with the Android app and the ReelVault extension, and
+it is deliberately narrower than the internal document — it cannot grow fields
+the extension does not understand. That is why it makes good interop and a poor
+sync basis; cross-device sync uses `src/shared/store` instead. See
+[SYNC.md](SYNC.md).
 
 ## Information architecture
 
-Four surfaces, matching how the app is actually used.
-
-- **Browse** — the default view. Full-bleed hero backdrop, then horizontally
-  scrolling rows: Trending, Because You Like *(top genre)*, Top Rated, New &
-  Upcoming, and per-genre rows. Rows load lazily as they enter the viewport;
-  tiles inside a row page in as it scrolls.
-- **Search** — TMDB multi-search, results as a card grid.
-- **Watchlist** — what you are actually watching, with resume position, plus the
-  History timeline of everything played.
-- **Releases** — series you have asked to be told about. Countdown to the next
-  episode or season, and an OS notification when one lands.
-
-The old app split this as Bookmarks / Watchlist / History with the sidebar as
-the primary surface. The concepts survive under clearer names: old *Bookmarks*
-became **Watchlist**, old *Watchlist* became **Releases**.
+- **Browse** — the default view. A full-bleed hero, then horizontally scrolling
+  rows: Trending, Because You Like *(top genre)*, Top Rated, New & Upcoming, and
+  per-genre rows. Rows load lazily as they enter the viewport.
+- **Search** — federated search, results as a card grid.
+- **Watchlist** — what you are watching, with resume position, plus the history
+  timeline.
+- **Releases** — series you have asked to be told about, with countdowns and OS
+  notifications.
 
 ## Rendering
 
-Svelte 5, chosen over React because the failure mode being escaped is
-re-render cost on large lists, and Svelte compiles to direct DOM updates rather
-than diffing a virtual tree. A row of 100 poster tiles should not be a
-performance decision the developer has to remember to make.
+Svelte 5, chosen because the cost being avoided is re-rendering large lists, and
+Svelte compiles to direct DOM updates rather than diffing a virtual tree. A row
+of 100 poster tiles should not be a performance decision anyone has to remember
+to make.
 
-Two rules that exist because the original violated both:
+Two rules follow: no `innerHTML` or string-built markup, and long lists are
+windowed to what is in view plus a small buffer.
 
-- **No `innerHTML` and no string-built markup.** Components take data.
-- **Long lists are windowed.** A browse row renders the tiles in view plus a
-  small buffer, not all 100.
+## Constraints
 
-## Removed
-
-The **HLS downloader** is gone, by decision on 2026-09-06. It opened a hidden
-browser window, sniffed `.m3u8` requests, required the user to manually click
-play, downloaded segments in parallel and concatenated them into a raw `.ts`
-file. Its quality picker was wired to two IPC channels that had no handler in
-the main process, so it never worked. It was the most fragile subsystem in the
-app and the most exposed to providers changing their delivery.
-
-## Hard-won constraints
-
-Things that are not obvious from the code and that a future change will break
-if it does not know them.
+Each of these is a bug that shipped once. They are not obvious from the code and
+a change that does not know them will reintroduce them.
 
 **Reactive state cannot cross the IPC boundary.** Svelte 5 `$state` values are
 Proxies, and `structuredClone` — which is what `contextBridge` and
-`ipcRenderer.invoke` use — throws `An object could not be cloned` on one. Every
-write must go through `$state.snapshot()` first. This failed silently in
-development: the optimistic UI update had already happened, so the app looked
-completely healthy until it was restarted and the changes were gone. That is
-why `library.persistError` exists and is rendered as a banner rather than only
-logged.
+`ipcRenderer.invoke` use — throws on one. Every write goes through
+`$state.snapshot()` first. This fails silently: the optimistic UI update has
+already happened, so the app looks healthy until it is restarted and the changes
+are gone. `library.persistError` exists for that reason and renders as a banner.
 
-**Seasons and episodes are 1-based everywhere.** A zero means a caller failed
-to parse something. `setPosition` and `setWatched` reject non-positive values,
-and `migrate` repairs stored positions that already hold one — the original
-wrote `S00E00` over real positions whenever its player preload could not parse
-an episode from a path-style provider URL.
+**Seasons and episodes are 1-based everywhere.** A zero means a caller failed to
+parse something. `setPosition` and `setWatched` reject non-positive values, and
+`migrate` repairs stored positions that already hold one.
 
-**"Not worth saving" and "forget what you saved" are different answers.** The
-resume point is written from a position read off the provider's own `<video>`,
-and plenty of providers nest that element somewhere unreachable — so the routine
-outcome of a poll is *no reading at all*. Collapsing that into the same branch
-as "watched to the end" is what made resuming look random across sources: a
-provider with no reachable element did not merely fail to save a position, it
-deleted the one a working provider had stored, and switching back found nothing.
-`resumeAction` in `resume.ts` returns three values for that reason, and `keep`
-is the default. Forgetting requires positive evidence the title is finished.
+**"Nothing worth saving" and "forget what was saved" are different answers.**
+The resume point is read off the provider's own `<video>`, and many providers
+nest that element out of reach, so the routine outcome of a poll is no reading
+at all. Treating that as "watched to the end" deletes a good position stored by
+a working provider. `resumeAction` in `resume.ts` returns three values, `keep`
+is the default, and forgetting requires positive evidence the title is finished.
 
 **Navigating within a title is not leaving it.** A provider switch, a reload and
-a crash fallback all stay on the same episode, so none of them should settle
-progress: `settleProgress` decides "watched" and drains the elapsed-time
-counter, and that counter is the *only* progress signal for a provider with no
-reachable `<video>`. Draining it on every switch split one episode into three
-stretches, none of them long enough to count. Settling belongs to `closePlayer`
-and to `navigatePlayer`, the two places where the title actually changes.
+a crash fallback all stay on the same episode. `settleProgress` decides "watched"
+and drains the elapsed-time counter, and that counter is the only progress signal
+for a provider with no reachable `<video>` — draining it on every switch splits
+one episode into stretches too short to count. Settling belongs to `closePlayer`
+and `navigatePlayer`, where the title actually changes.
 
-**A disabled provider is never a fallback.** An earlier version of the play
-handler appended disabled providers after the enabled ones as a last resort,
-which meant a provider switched off deliberately could still be opened. If
-nothing enabled can serve a title, that is an error with a reason, not a cue to
-try something else.
+**A disabled provider is never a fallback.** If nothing enabled can serve a
+title, that is an error with a reason, not a cue to try something else.
 
 **The player window is told what it is showing.** It does not read its own URL.
-The main process knows which template built that URL and sends the context over
-`EV.playerContext`; navigation goes back the other way over `EV.playerNavigate`
-and is rebuilt from the same template. The original guessed with three fallback
-heuristics and mis-detected episodes whenever a path contained other digits.
+Main knows which template built it and sends the context over `EV.playerContext`;
+navigation goes back over `EV.playerNavigate` and is rebuilt from the same
+template. Guessing from the URL mis-detects episodes whenever a path contains
+other digits.
 
-**A cross-origin iframe hides the pointer from the view that contains it.**
-`webContents.on('input-event')` was believed to be a stream no frame could
-suppress; it is not. Chromium hit-tests the first move and then routes pointer
-events straight to the target widget, and on a playing embed the target is the
-provider's own out-of-process iframe. Measured: dragging the pointer from the
-middle of the picture to the top edge produced exactly one report — the
-position where it entered the view — and then nothing. The player chrome hung
-off that signal and was therefore never summoned once, on any provider, with
-nothing in any log to say why. It is now summoned by a live strip the overlay
-keeps along the top edge (`HOT_ZONE_PX`), which needs no cooperation from the
-page at all.
+**A cross-origin iframe hides the pointer from the view containing it.**
+Chromium hit-tests the first move and then routes pointer events straight to the
+target widget, which on a playing embed is the provider's out-of-process iframe.
+`webContents.on('input-event')` therefore reports the position where the pointer
+entered the view and nothing after. Player chrome is summoned by a live strip
+the overlay keeps along the top edge (`HOT_ZONE_PX`), which needs no cooperation
+from the page.
 
 **Detaching a `WebContentsView` does not close it.** `removeChildView` takes it
-out of the window's tree and leaves the web contents running in its own
-renderer process. Three players opened in one session left three live
-`chrome.html` targets in the debugger. Teardown has to call
-`view.webContents.close()`.
+out of the window tree and leaves the web contents running in its own process.
+Teardown must call `view.webContents.close()`.
 
-**Anything drawn in the app window is *under* the video, so it must not be a
-dialog.** The window's own page always paints beneath its child views, which is
-why the player chrome, the source list and the failed-source banner all live in
-a second transparent `WebContentsView` stacked above the player. The banner was
-the last holdout: rendered in the app window it could only make itself visible
-by reserving a band of layout, and that reservation is what pushed the picture
-down every time a provider failed. The matching obligation is that the overlay
-**swallows every mouse event inside its bounds**, so it reports its own
-measured height to main and is sized to exactly what it draws.
+**Anything drawn in the app window paints *under* the video, so it cannot be a
+dialog.** Player chrome, the source list and the failed-source banner live in a
+second transparent `WebContentsView` stacked above the player. The obligation
+that comes with it: the overlay swallows every mouse event inside its bounds, so
+it reports its measured height to main and is sized to exactly what it draws.
 
-**`electron-vite` 5 does not support Vite 8**, and
-`@sveltejs/vite-plugin-svelte` 7 requires it. The working combination is Vite 7
-with plugin-svelte 6. Do not resolve the conflict with `--legacy-peer-deps`.
+**`electron-vite` 5 does not support Vite 8**, and `@sveltejs/vite-plugin-svelte`
+7 requires it. The working combination is Vite 7 with plugin-svelte 6. Do not
+resolve the conflict with `--legacy-peer-deps`.
 
-**The renderer's Vite root is `src/renderer`**, so `build.outDir` must be an
-absolute path or the bundle lands in `src/renderer/out` and gets linted as
-source.
+**The renderer's Vite root is `src/renderer`**, so `build.outDir` must be
+absolute or the bundle lands in `src/renderer/out` and gets linted as source.
 
 ## Testing
 
-Vitest, replacing the `node:vm` sandbox harness that existed only because the
-renderer files were globals in script tags.
+Vitest. Coverage is concentrated where being wrong is silent rather than loud:
+store migration, the export/import merge, and URL template substitution. Each of
+those suites exists because that code shipped a defect once.
 
-The original's 25 tests covered the data models, the URL template parser, and
-the JSON store — all worth keeping, and they port directly. The gap to close is
-everything else: the TMDB client, the store's merge and migration logic, and the
-provider URL builder against real provider templates.
-
-Priority is the code where being wrong is silent: the store migration, the
-export/import merge, and the URL template substitution. All three are covered,
-and each suite exists because that code shipped a defect once.
+`migrate` and `merge` are tested **composed**, not only separately. A defect once
+lived in the seam between them — only `merge` read a field that only `migrate`
+corrupted — and both had passing tests.
 
 The UI is verified against the running app over the Chrome DevTools Protocol
-rather than by screenshot — launch with `--remote-debugging-port`, then
-`Runtime.evaluate` against the renderer target via `scripts/cdp.py`. That yields
-assertable facts (which image origins actually loaded, CSP violations, DOM
-counts, paint timing) instead of a picture somebody has to interpret, and it
-works in environments where screen capture does not.
+rather than by screenshot: launch with `--remote-debugging-port` and evaluate
+against the renderer target with `scripts/cdp.py`. That yields assertable facts —
+which image origins loaded, CSP violations, DOM counts, paint timing — and works
+where screen capture does not.
 
 **Verify against a window that is actually visible.** A window reporting
-`document.hidden` gets no rendering lifecycle, which silently disables
-`requestAnimationFrame`, `IntersectionObserver` and scroll events — so lazy rows
-never load and scroll-driven UI never updates. Chasing that as an application
-bug is wasted effort; check `document.visibilityState` first.
+`document.hidden` gets no rendering lifecycle, which disables
+`requestAnimationFrame`, `IntersectionObserver` and scroll events. Lazy rows
+never load and scroll-driven UI never updates. Check `document.visibilityState`
+before chasing it as an application bug.
