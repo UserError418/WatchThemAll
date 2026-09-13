@@ -85,6 +85,7 @@ export function watchedThresholdSeconds(duration: number): number {
 // bar from a stored point. Re-exported here so this module still reads as the
 // whole of resume behaviour.
 export { resumeKey } from '@shared/types'
+import { resumeKey } from '@shared/types'
 
 /**
  * Is this position worth writing down?
@@ -100,6 +101,37 @@ export function shouldStorePosition(seconds: number, duration: number): boolean 
   // nothing left to resume *into*, and storing one produces an offer to jump
   // into the credits of something the app has already ticked off.
   return seconds < watchedThresholdSeconds(duration)
+}
+
+/**
+ * Where the user left this title, if anywhere — the thing a player is asked to
+ * start from.
+ *
+ * `duration` is null when nothing ever read one. Plenty of providers never
+ * report it, and the position is still usable in that case: only the "is this
+ * past the credits" half of the check goes unanswered.
+ */
+export interface ResumeOffer {
+  seconds: number
+  duration: number | null
+}
+
+/**
+ * The stored position for one episode or film, or null.
+ *
+ * A separate function from the raw lookup because two things have to be true
+ * before a position is worth offering, and only one of them is "a row exists":
+ * a zero-second point is written by providers that report a position the
+ * instant they load, and resuming into it is indistinguishable from not
+ * resuming while costing a query parameter that some providers reject.
+ */
+export function resumeOfferFor(
+  points: readonly { key: string; seconds: number; duration: number }[],
+  context: { tmdbId: number; season: number | null; episode: number | null },
+): ResumeOffer | null {
+  const point = points.find((p) => p.key === resumeKey(context))
+  if (point === undefined || !Number.isFinite(point.seconds) || point.seconds <= 0) return null
+  return { seconds: point.seconds, duration: point.duration > 0 ? point.duration : null }
 }
 
 /** One reading, or as much of one as is available. */

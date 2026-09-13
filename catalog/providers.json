@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-06",
+  "updatedAt": "2026-09-13",
   "providers": [
     {
       "id": "vidlux",
@@ -105,6 +105,7 @@
       },
       "tier": "core",
       "group": "vidsrc",
+      "resumeParam": "startAt",
       "note": "Restored after being wrongly deleted. Its page vendors disable-devtool wired to a handler that pauses the video, strips its src and navigates away when it thinks a devtools panel is open — so an automated probe always records 'nothing played' no matter how long it waits. Serves a full 54KB player to an ordinary request."
     },
     {
@@ -119,6 +120,7 @@
       },
       "tier": "extras",
       "group": "vidsrc",
+      "resumeParam": "startAt",
       "note": "Byte-identical player to vidsrcme.ru, down to the asset version string. Kept as a spare domain rather than a second choice — when one of these dies the other is usually still up."
     },
     {
@@ -133,6 +135,7 @@
       },
       "tier": "extras",
       "group": "vidsrc",
+      "resumeParam": "startAt",
       "note": "Same player family, different path shape. Streams only after a click on the page, which is why a probe that does not synthesise one records it as dead."
     },
     {
@@ -147,6 +150,7 @@
       },
       "tier": "core",
       "group": "peakstorm",
+      "resumeParam": "progress",
       "note": "Verified streaming. Redirects from player.videasy.net, so the catalogue names the destination directly. Shares the peakstorm.top backend with VidCore."
     },
     {

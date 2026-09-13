@@ -141,6 +141,21 @@ export interface Provider {
    */
   group?: string
   /**
+   * The query parameter this provider reads a start position from, in seconds.
+   *
+   * This is the only way to resume on Android. The desktop can reach into a
+   * cross-origin frame and set `currentTime`; a WebView cannot, and neither can
+   * JavaScript inside an iframe's parent — so a provider that takes the
+   * position in its URL is the difference between resuming and starting over.
+   *
+   * Absent means "does not take one", which is the default and is not a guess:
+   * every value here was measured by loading the embed with the parameter and
+   * reading the frame's own `<video>` back. Adding one on the strength of a
+   * documentation page would be worse than leaving it out, because the failure
+   * is silent — the player simply starts at zero.
+   */
+  resumeParam?: string
+  /**
    * Why this entry looks the way it does — a stale domain kept for
    * compatibility, a template quirk, a known coverage gap. Shown in the
    * provider panel, so it has to read as a sentence to a user.

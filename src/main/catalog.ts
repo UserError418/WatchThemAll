@@ -110,6 +110,13 @@ function isValidProvider(value: unknown): value is Provider {
   // appears in, and would silently never be chosen.
   if (!value.tv && !value.movie) return false
 
+  // Optional, but if present it has to be a usable parameter name: this value
+  // is written straight into the play URL, and a published document is the one
+  // input to this app that nobody here reviews before it arrives.
+  if (value.resumeParam !== undefined) {
+    if (typeof value.resumeParam !== 'string' || !value.resumeParam.trim()) return false
+  }
+
   return true
 }
 
