@@ -36,11 +36,8 @@
  * - `none` — no media request appeared at all. See `streamprobe` for why.
  */
 
-import { BrowserWindow } from 'electron'
 import type { Provider } from '@shared/types'
-import { applyBrowserIdentity, applyProviderReferer } from './identity'
-import { clickCentre, clickPlayInFrames } from './pressplay'
-import { renderTemplate } from './providers'
+import { probeStream } from './streamprobe'
 import type { ProbeSubject } from './streamprobe'
 
 /** HLS covers essentially this whole space; the rest are for the few outliers. */
@@ -88,6 +85,16 @@ export interface ExtractResult {
 }
 
 /** Headers a re-request must not replay verbatim. */
+/**
+ * How long to wait when asking for a URL ourselves, rather than watching the
+ * page ask for it.
+ *
+ * Deliberately generous: several providers sign a manifest and its segments
+ * separately and answer the second request slowly. It is a ceiling against a
+ * provider that never answers at all, not a latency budget.
+ */
+const VERIFY_TIMEOUT_MS = 20_000
+
 const HOP_BY_HOP = new Set([
   'host',
   'connection',
@@ -107,7 +114,11 @@ const HOP_BY_HOP = new Set([
  * is why `streamprobe` looks at Chromium's own `resourceType` as well — the
  * broadest signal available, and one that does not depend on the URL's shape.
  */
-function classify(url: string, resourceType: string): StreamKind | null {
+function classify(url: string, resourceType: string, mime: string): StreamKind | null {
+  // MIME first: it is the only signal that is right when the URL is an
+  // extensionless proxy path, which is the common case for a manifest.
+  if (/mpegurl/i.test(mime)) return 'hls'
+  if (/dash\+xml/i.test(mime)) return 'dash'
   if (/\.m3u8(\?|$)|\/manifest|playlist/i.test(url)) return 'hls'
   if (/\.mpd(\?|$)/i.test(url)) return 'dash'
   if (PROGRESSIVE_PATTERN.test(url)) return 'progressive'
@@ -128,119 +139,47 @@ async function capture(
   provider: Provider,
   subject: ProbeSubject,
   timeoutMs: number,
+  verbose = false,
 ): Promise<{ pageUrl: string | null; stream: CapturedStream | null; error: string | null }> {
-  const pageUrl = renderTemplate(provider, {
-    tmdbId: subject.tmdbId,
-    imdbId: subject.imdbId,
-    type: subject.type,
-    season: subject.season ?? null,
-    episode: subject.episode ?? null,
-  })
-  if (!pageUrl) return { pageUrl: null, stream: null, error: 'no template for this subject' }
+  const started = Date.now()
+  let stream: CapturedStream | null = null
 
-  const partition = `extract-${provider.id}-${Date.now()}`
-  const win = new BrowserWindow({
-    show: false,
-    width: 1280,
-    height: 720,
-    webPreferences: {
-      partition,
-      // The same four settings `streamprobe` documents, and for the same
-      // reasons: without `autoplayPolicy` the player never starts and no
-      // manifest is ever requested, and a hidden window is throttled by
-      // default — which defers exactly the timers these pages chain their
-      // requests with. Measured: with the defaults, VidLux reported no media
-      // in 20 seconds against the 1.4s the probe measures.
-      webSecurity: false,
-      autoplayPolicy: 'no-user-gesture-required',
-      backgroundThrottling: false,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
+  /**
+   * The page loading, the clicking and the watching are `streamprobe`'s, not
+   * ours.
+   *
+   * This file used to do all three itself, from the same recipe, and the copy
+   * rotted: against Videasy the probe saw a manifest in under three seconds
+   * while this saw three requests and a dead page. The two configurations
+   * looked identical line by line and the difference was never found — which is
+   * the whole argument for not having two. What is genuinely this module's own
+   * question is everything below: whether the URL survives being asked for by
+   * something that is not that page.
+   */
+  const result = await probeStream(provider, subject, {
+    timeoutMs,
+    verbose,
+    onMedia: ({ url, headers, mime }) => {
+      if (stream) return
+      const kind = classify(url, 'media', mime)
+      if (!kind) return
+      const replayable: Record<string, string> = {}
+      for (const [name, value] of Object.entries(headers)) {
+        if (HOP_BY_HOP.has(name.toLowerCase())) continue
+        replayable[name] = value
+      }
+      stream = { url, kind, headers: replayable, foundAtMs: Date.now() - started }
     },
   })
 
-  const started = Date.now()
-  let found: CapturedStream | null = null
-
-  try {
-    const contents = win.webContents
-    applyBrowserIdentity(contents.session)
-    applyProviderReferer(contents.session, provider.rootUrl)
-    // Popups here are ads, exactly as in the player.
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-
-    contents.session.webRequest.onSendHeaders((details) => {
-      if (found) return
-      const kind = classify(details.url, details.resourceType)
-      if (!kind) return
-
-      const headers: Record<string, string> = {}
-      for (const [name, value] of Object.entries(details.requestHeaders ?? {})) {
-        if (HOP_BY_HOP.has(name.toLowerCase())) continue
-        headers[name] = String(value)
-      }
-      found = { url: details.url, kind, headers, foundAtMs: Date.now() - started }
-    })
-
-    /**
-     * Started, never awaited.
-     *
-     * `loadURL` resolves when the document settles, and these pages routinely
-     * never settle — a stuck subframe or a pending ad request leaves the
-     * promise hanging with no rejection. Awaiting it froze the first run on its
-     * second provider until it was killed by hand. `streamprobe` makes the same
-     * point about talking to hostile pages: the wait must be a deadline we own,
-     * not a promise they control.
-     */
-    void win.loadURL(pageUrl).catch(() => {})
-
-    /**
-     * Press play, the way `streamprobe` does.
-     *
-     * Without this the measurement is wrong in the pessimistic direction, and
-     * it was: four of eight providers reported `none` — no media URL at all —
-     * because they resolve the stream only after a click on their own play
-     * overlay, and nothing here ever clicked. `autoplayPolicy` removes
-     * Chromium's *policy* block on autoplay; it does not touch a `<div>` the
-     * provider draws over the video and waits on.
-     *
-     * Two presses, at the same offsets the probe uses: the first catches a page
-     * that is already interactive, the second a slow one whose player had not
-     * mounted yet.
-     */
-    const press = (): void => {
-      clickCentre(win.webContents, 1280, 720)
-      void clickPlayInFrames(win.webContents)
-    }
-    const clicks = [setTimeout(press, 2_500), setTimeout(press, 6_000)]
-
-    // Poll rather than race a promise, for the same reason: the manifest
-    // arrives from a chain of the page's own requests, with no event of ours to
-    // hang a resolution on.
-    const deadline = Date.now() + timeoutMs
-    while (!found && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250))
-    }
-    for (const timer of clicks) clearTimeout(timer)
-
-    return { pageUrl, stream: found, error: null }
-  } catch (error) {
-    return { pageUrl, stream: null, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    if (!win.isDestroyed()) win.destroy()
+  return {
+    pageUrl: result.url,
+    stream,
+    // A probe that failed to reach the page at all is worth reporting as such
+    // rather than as "this provider has no usable stream".
+    error: result.verdict === 'unreachable' || result.verdict === 'blocked' ? result.verdict : null,
   }
 }
-
-/**
- * How long any one verification request gets.
- *
- * These hosts are under no obligation to answer, and `fetch` without a signal
- * waits forever. A run of fifteen providers that stalls on the third measures
- * nothing and looks like it is still working, which is the failure mode worth
- * spending three lines to avoid.
- */
-const VERIFY_TIMEOUT_MS = 20_000
 
 /** Fetch, returning the status alone; a thrown or timed-out request is 0. */
 async function status(url: string, headers?: Record<string, string>): Promise<number> {
@@ -293,8 +232,9 @@ export async function extractStream(
   provider: Provider,
   subject: ProbeSubject,
   timeoutMs = 20_000,
+  verbose = false,
 ): Promise<ExtractResult> {
-  const { pageUrl, stream, error } = await capture(provider, subject, timeoutMs)
+  const { pageUrl, stream, error } = await capture(provider, subject, timeoutMs, verbose)
 
   const base: ExtractResult = {
     providerId: provider.id,

@@ -82,6 +82,26 @@ const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm)(\?|$)|\/segment|\/manifest/i
 
 const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|video\/|audio\/)/i
 
+/**
+ * Is this request the media, by any of the three signals available?
+ *
+ * Exported because `streamextract` asks the same question and had its own
+ * answer, which was quietly weaker: it tested the URL and Chromium's
+ * `resourceType` but never the response's `Content-Type`. That is the signal
+ * that matters most in practice — an HLS manifest is fetched by hls.js over
+ * XHR, so Chromium calls it `xhr` rather than `media`, and providers routinely
+ * serve it from an extensionless proxy path so the URL says nothing either.
+ * The result was two measurements of the same thing disagreeing: this file
+ * reported Videasy and ScreenScape streaming ten times out of ten while the
+ * extractor reported no media URL at all.
+ *
+ * `mime` is empty at request time. A caller that only has the request must
+ * expect misses; ask on the response.
+ */
+export function isMediaRequest(url: string, resourceType: string, mime: string): boolean {
+  return resourceType === 'media' || MEDIA_PATTERN.test(url) || MEDIA_MIME.test(mime)
+}
+
 /** Words a challenge or block page puts in its title. */
 const BLOCK_PATTERN = /just a moment|attention required|access denied|verify you are human|cf-browser/i
 
@@ -107,6 +127,19 @@ export interface ProbeOptions {
    * relaxes the rule, the reverse.
    */
   frameUrl?: (providerUrl: string) => string
+  /**
+   * Called once, with the first media response and the headers that fetched it.
+   *
+   * Exists so `streamextract` can ask its question — "is that URL usable by
+   * anything other than the page that produced it" — without owning a second
+   * copy of "load a provider page and watch its requests". It had one, and the
+   * two drifted badly: this file reported Videasy streaming ten times out of
+   * ten while the extractor's copy saw three requests and gave up. Several
+   * hours went into finding the difference and it was never found, which is
+   * the argument for there being one implementation rather than a better
+   * diff.
+   */
+  onMedia?: (media: { url: string; headers: Record<string, string>; mime: string }) => void
 }
 
 /**
@@ -143,7 +176,7 @@ export async function probeStream(
   subject: ProbeSubject,
   options: ProbeOptions = {},
 ): Promise<StreamProbeResult> {
-  const { timeoutMs = 12_000, verbose = false, frameUrl } = options
+  const { timeoutMs = 12_000, verbose = false, frameUrl, onMedia } = options
 
   /**
    * A watchdog the page cannot outlive.
@@ -163,7 +196,7 @@ export async function probeStream(
   const watchdogMs = timeoutMs * 2 + 8_000
 
   return Promise.race([
-    runProbe(provider, subject, { timeoutMs, verbose, frameUrl }, partial),
+    runProbe(provider, subject, { timeoutMs, verbose, frameUrl, onMedia }, partial),
     new Promise<StreamProbeResult>((resolve) =>
       setTimeout(() => {
         const result = partial.current
@@ -194,12 +227,14 @@ export async function probeStream(
 async function runProbe(
   provider: Provider,
   subject: ProbeSubject,
-  // Defaults are resolved by the caller; `frameUrl` stays optional because
-  // "do not wrap" is a meaningful choice, not a missing value.
-  options: Required<Omit<ProbeOptions, 'frameUrl'>> & Pick<ProbeOptions, 'frameUrl'>,
+  // Defaults are resolved by the caller. `frameUrl` and `onMedia` stay optional
+  // because absence is a meaningful choice for both — "do not wrap this URL"
+  // and "nobody is listening" — rather than a value somebody forgot to pass.
+  options: Required<Omit<ProbeOptions, 'frameUrl' | 'onMedia'>> &
+    Pick<ProbeOptions, 'frameUrl' | 'onMedia'>,
   partial: { current: StreamProbeResult | null },
 ): Promise<StreamProbeResult> {
-  const { timeoutMs, verbose, frameUrl } = options
+  const { timeoutMs, verbose, frameUrl, onMedia } = options
 
   const base: StreamProbeResult = {
     providerId: provider.id,
@@ -299,16 +334,45 @@ async function runProbe(
 
   const filter = { urls: ['http://*/*', 'https://*/*'] }
 
+  /**
+   * Request headers, kept until the matching response arrives.
+   *
+   * `onSendHeaders` is the last event before the wire and the only one where
+   * `Cookie` has been added, so it is the only honest source for "what did the
+   * page actually send". The response is where the decision is made, hence the
+   * handover.
+   */
+  const sentHeaders = new Map<string, Record<string, string>>()
+
+  probeSession.webRequest.onSendHeaders(filter, (details) => {
+    if (!onMedia) return
+    const headers: Record<string, string> = {}
+    for (const [name, value] of Object.entries(details.requestHeaders ?? {})) {
+      headers[name] = String(value)
+    }
+    sentHeaders.set(details.url, headers)
+    // These pages make hundreds of requests and one of them matters.
+    if (sentHeaders.size > 500) {
+      const oldest = sentHeaders.keys().next().value
+      if (oldest !== undefined) sentHeaders.delete(oldest)
+    }
+  })
+
+  let mediaReported = false
+
   probeSession.webRequest.onCompleted(filter, (details) => {
     base.requestCount += 1
 
     const mime = String(details.responseHeaders?.['content-type'] ?? details.responseHeaders?.['Content-Type'] ?? '')
-    const looksLikeMedia =
-      details.resourceType === 'media' || MEDIA_PATTERN.test(details.url) || MEDIA_MIME.test(mime)
+    const looksLikeMedia = isMediaRequest(details.url, details.resourceType, mime)
 
     if (looksLikeMedia && details.statusCode < 400) {
       firstMediaAt ??= Date.now()
       if (base.mediaSamples.length < 4) base.mediaSamples.push(details.url.slice(0, 160))
+      if (onMedia && !mediaReported) {
+        mediaReported = true
+        onMedia({ url: details.url, headers: sentHeaders.get(details.url) ?? {}, mime })
+      }
     }
 
     /**
