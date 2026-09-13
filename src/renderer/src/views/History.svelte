@@ -436,7 +436,7 @@
     /* Six tiles that reflow rather than a fixed row: the widest figure is
        "1h 25m" and the narrowest is "3", and a fixed grid gives both the same
        room. */
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(var(--stat-min, 120px), 1fr));
     gap: var(--space-3);
   }
 
@@ -517,6 +517,17 @@
     font-size: var(--text-2xs);
     color: var(--text-tertiary);
     flex: none;
+    /*
+      Pinned, because the strip opens scrolled to the most recent week and the
+      labels are at the far other end of it. Unpinned they are visible only
+      after scrolling back six months, which is the one moment nobody needs
+      to be told which row is Wednesday.
+    */
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--bg-base);
+    padding-right: var(--space-1);
   }
 
   .weekdays span {

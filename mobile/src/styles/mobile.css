@@ -556,8 +556,19 @@ body {
  * the same reason the rest of this file is mostly token values.
  */
 :root {
+  /*
+    Three columns of totals rather than two, so the tiles do not eat the whole
+    first screen before the calendar appears. 412px less the view padding is
+    about 360, which three 100px tracks fit with room for the gaps.
+  */
+  --stat-min: 100px;
+
   --heat-cell: 15px;
-  /* Bleed to the window edges so the strip reads as scrollable rather than as
-     a clipped block, which is the usual way this pattern goes wrong. */
-  --heat-bleed: var(--space-4);
+  /*
+    No bleed. Letting the strip run under the view's padding looked better in
+    isolation and put a sliver of scrolling calendar to the left of the pinned
+    weekday labels, which reads as a rendering fault rather than as a scroll.
+    The property stays because the choice is worth being able to revisit.
+  */
+  --heat-bleed: 0px;
 }

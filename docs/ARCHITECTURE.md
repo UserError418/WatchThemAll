@@ -99,21 +99,30 @@ silently would be the worst kind of regression.
 
 ## Information architecture
 
-Four surfaces, matching how the app is actually used.
+Five surfaces, matching how the app is actually used.
 
 - **Browse** — the default view. Full-bleed hero backdrop, then horizontally
   scrolling rows: Trending, Because You Like *(top genre)*, Top Rated, New &
   Upcoming, and per-genre rows. Rows load lazily as they enter the viewport;
   tiles inside a row page in as it scrolls.
 - **Search** — TMDB multi-search, results as a card grid.
-- **Watchlist** — what you are actually watching, with resume position, plus the
-  History timeline of everything played.
+- **Watchlist** — what you are actually watching, with resume position.
 - **Releases** — series you have asked to be told about. Countdown to the next
   episode or season, and an OS notification when one lands.
+- **History** — what was watched, when, and for how long. Totals, then a
+  calendar of the last twenty-six weeks, then the timeline grouped by day; the
+  calendar is also the filter.
 
 The old app split this as Bookmarks / Watchlist / History with the sidebar as
 the primary surface. The concepts survive under clearer names: old *Bookmarks*
 became **Watchlist**, old *Watchlist* became **Releases**.
+
+History was a fold-away section at the bottom of Watchlist until 1.5.3, on the
+argument that the two answer the same question at different granularities. They
+do not: one is a list to act on and the other is a record to read, and the fold
+was shut by default, so in practice the record was invisible. It is a surface
+of its own now, and the data behind it records how long each play ran rather
+than only that it started.
 
 ## Rendering
 
