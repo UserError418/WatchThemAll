@@ -23,7 +23,16 @@ npm run apk         # the Android build: web bundle -> cap sync -> assembleDebug
 ```
 
 The APK needs JDK 21 and the Android SDK; `scripts/provision-android.sh`
-installs both and documents why the system JDK 26 will not do. The phone app is
+installs both and documents why the system JDK 26 will not do.
+
+**`build:win` needs `wine` on PATH**, and fails in the worst possible way
+without it: electron-builder exits 0, writes a **547 KB stub** next to a
+separate `.nsis.7z` payload, and that stub is an installer that cannot install
+anything. Wine is what runs `rcedit` and `signtool`, both Windows binaries, to
+put the icon and the version resource into the exe. Releases 1.3.0 through
+1.5.1 shipped with no Windows artefact because of it. A real installer is
+around 100 MB; `scripts/ship.sh` now asserts both the presence of wine and the
+size of what comes out. The phone app is
 the same Svelte renderer with a different `window.wta` — see
 [`mobile/README.md`](mobile/README.md).
 
