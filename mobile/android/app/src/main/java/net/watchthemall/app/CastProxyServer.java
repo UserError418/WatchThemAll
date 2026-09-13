@@ -76,6 +76,16 @@ public final class CastProxyServer {
     private static final int BUFFER_BYTES = 64 * 1024;
 
     /**
+     * Largest response held in memory to measure it. See `proxy`.
+     *
+     * Sized for a segment, which is what this ever applies to: a six-second
+     * chunk of 1080p is single-digit megabytes. Anything past this is streamed
+     * instead, because a progressive MP4 of a whole film would arrive here as
+     * one response and must never be buffered.
+     */
+    private static final int BUFFERABLE_BYTES = 24 * 1024 * 1024;
+
+    /**
      * Request headers that must never be replayed upstream.
      *
      * `Range` is the one that matters. It was captured from whatever byte the
@@ -306,26 +316,43 @@ public final class CastProxyServer {
             connection.setRequestProperty("Accept-Encoding", "identity");
 
             int status = connection.getResponseCode();
-            String contentType = connection.getContentType();
             long length = connection.getContentLengthLong();
             String contentRange = connection.getHeaderField("Content-Range");
+            String contentType = mediaContentType(connection.getContentType(), upstream);
 
-            writeHead(
-                out,
-                status,
-                status == 206 ? "Partial Content" : "OK",
-                contentType != null ? contentType : "application/octet-stream",
-                length,
-                contentRange
-            );
-
+            InputStream body = null;
             if (!"HEAD".equalsIgnoreCase(method)) {
-                InputStream body = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                if (body != null) {
-                    byte[] buffer = new byte[BUFFER_BYTES];
-                    int read;
-                    while ((read = body.read(buffer)) != -1) out.write(buffer, 0, read);
-                }
+                body = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            }
+
+            /*
+             * Give the receiver a length even when the provider does not.
+             *
+             * A chunked upstream leaves getContentLengthLong() at -1, and the
+             * response then has to be terminated by closing the socket. mpv
+             * tolerates that and says so loudly ("Stream ends prematurely");
+             * whether a given Cast receiver tolerates it is not knowable from
+             * here, and a receiver that does not would stall on every segment.
+             *
+             * Buffering one segment to measure it is cheap — they run a few
+             * megabytes — so below the cap this trades a little memory for a
+             * well-formed response. Above it, streaming is still the only
+             * option and the old behaviour stands.
+             */
+            byte[] buffered = null;
+            if (body != null && length < 0) {
+                buffered = readAtMost(body, BUFFERABLE_BYTES);
+                if (buffered != null) length = buffered.length;
+            }
+
+            writeHead(out, status, status == 206 ? "Partial Content" : "OK", contentType, length, contentRange);
+
+            if (buffered != null) {
+                out.write(buffered);
+            } else if (body != null) {
+                byte[] buffer = new byte[BUFFER_BYTES];
+                int read;
+                while ((read = body.read(buffer)) != -1) out.write(buffer, 0, read);
             }
             out.flush();
         } catch (IOException error) {
@@ -334,6 +361,53 @@ public final class CastProxyServer {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    /**
+     * Read a whole response, or give up and let the caller stream it.
+     *
+     * Returns null past the cap, having consumed nothing the caller can no
+     * longer use — the stream is positioned partway through, so the buffered
+     * prefix is handed back as the start of it. In practice the cap is only
+     * reached by a progressive file, which is streamed.
+     */
+    private static byte[] readAtMost(InputStream body, int cap) throws IOException {
+        java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream(BUFFER_BYTES);
+        byte[] buffer = new byte[BUFFER_BYTES];
+        int read;
+        while ((read = body.read(buffer)) != -1) {
+            collected.write(buffer, 0, read);
+            if (collected.size() > cap) return null;
+        }
+        return collected.toByteArray();
+    }
+
+    /**
+     * What to tell the receiver this is.
+     *
+     * Providers are careless here: VidSrc serves its transport-stream segments
+     * as `text/html`, measured on 2026-09-13. mpv ignores the header and plays
+     * them; a Cast receiver that sniffs it could decide the segment is a web
+     * page and refuse the stream. So a text/* answer on binary media is
+     * replaced — by the type the URL implies where it implies one, and
+     * otherwise by `application/octet-stream`, which claims nothing.
+     *
+     * Anything that is not text/* is passed through untouched: a provider that
+     * bothered to be accurate should be believed.
+     */
+    private static String mediaContentType(String upstreamType, String url) {
+        if (upstreamType == null || upstreamType.isEmpty()) return "application/octet-stream";
+        if (!upstreamType.toLowerCase(Locale.ROOT).startsWith("text/")) return upstreamType;
+
+        String path = url.toLowerCase(Locale.ROOT);
+        int query = path.indexOf('?');
+        if (query >= 0) path = path.substring(0, query);
+
+        if (path.endsWith(".ts")) return "video/mp2t";
+        if (path.endsWith(".m4s") || path.endsWith(".mp4")) return "video/mp4";
+        if (path.endsWith(".aac")) return "audio/aac";
+        if (path.endsWith(".webm")) return "video/webm";
+        return "application/octet-stream";
     }
 
     /* ── Wire format ────────────────────────────────────────────────────── */
