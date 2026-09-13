@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import {
   buildCastBundle,
+  isFragmentInitSegment,
+  isWholeVideoFile,
   isMasterPlaylist,
   isPlaylist,
   rewritePlaylist,
@@ -267,5 +269,50 @@ describe('buildCastBundle', () => {
     // Self-referential: the id is allocated once, so it is queued once.
     expect(calls).toBeLessThanOrEqual(2)
     expect(bundle.playlists.length).toBeLessThanOrEqual(2)
+  })
+})
+
+describe('isFragmentInitSegment', () => {
+  /**
+   * The strings below are the shape of what a real provider handed the
+   * television: `ftyp`, a `moov` carrying `mvex`, and no `mdat` anywhere. The
+   * receiver reported the film's true duration off it and never drew a frame.
+   */
+  const INIT_SEGMENT = 'ftypisomisomavc1moovmvhdmvextrextrakmdiaminf'
+  const REAL_FILE = 'ftypisomisommp42moovmvhdtrakmdiaminfstblmdat video-bytes'
+
+  it('recognises an init segment by mvex without mdat', () => {
+    expect(isFragmentInitSegment(INIT_SEGMENT)).toBe(true)
+  })
+
+  it('passes a whole file that carries its media', () => {
+    expect(isFragmentInitSegment(REAL_FILE)).toBe(false)
+  })
+
+  /* A fragment carries mdat, so only the header-only case is rejected. */
+  it('passes a media fragment', () => {
+    expect(isFragmentInitSegment('stypmoofmfhdtrafmdat bytes')).toBe(false)
+  })
+
+  it('is not fooled by a playlist or by an empty body', () => {
+    expect(isFragmentInitSegment('#EXTM3U' + String.fromCharCode(10))).toBe(false)
+    expect(isFragmentInitSegment('')).toBe(false)
+  })
+})
+
+describe('isWholeVideoFile', () => {
+  it('accepts a self-contained file, wherever its moov sits', () => {
+    expect(isWholeVideoFile('ftypisommp42moovmvhdtrakmdat video')).toBe(true)
+    // Never prepared for streaming: the index is at the end, past what was
+    // sniffed, so the body holds no `moov` at all.
+    expect(isWholeVideoFile('ftypisommp42mdat lots and lots of video bytes')).toBe(true)
+  })
+
+  it('rejects a media fragment, which would play for six seconds', () => {
+    expect(isWholeVideoFile('stypmsdhmoofmfhdtrafmdat bytes')).toBe(false)
+  })
+
+  it('rejects an initialisation segment, which would play for none', () => {
+    expect(isWholeVideoFile('ftypisomisomavc1moovmvhdmvextrex')).toBe(false)
   })
 })
