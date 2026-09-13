@@ -28,6 +28,10 @@
   const BAR_HEIGHT = 56
   const EPISODE_PANEL_HEIGHT = 226
   const SOURCE_PANEL_MAX = 300
+  /** `.panel`'s top margin, which sits between the bar and the panel itself. */
+  const PANEL_GAP = 6
+  /** Enough for the "Looking for a TV" line, until the panel has been measured. */
+  const CAST_PANEL_FALLBACK = 74
   /** How long the bar stays after the pointer stops asking for it. */
   const HIDE_AFTER_MS = 2_800
 
@@ -118,6 +122,8 @@
   let castBusy = $state(false)
   /** The last failure, in the user's words. Cleared when they try again. */
   let castError = $state<string | null>(null)
+  /** The cast panel's rendered height, bound from the DOM. See `panelHeight`. */
+  let castPanelHeight = $state(0)
 
   $effect(() => {
     void api?.cast.available().then((yes) => (castAvailable = yes))
@@ -145,14 +151,59 @@
   function openCast(): void {
     if (panel === 'cast') {
       panel = 'none'
-      void api.cast.stopDiscovery()
       return
     }
     panel = 'cast'
     castError = null
-    void api.cast.startDiscovery()
-    void api.cast.devices().then((found) => (castDevices = found))
   }
+
+  /**
+   * Sweep for televisions for as long as the panel is open.
+   *
+   * One query is not enough, and asking once was the second reason this button
+   * appeared to do nothing. On the desktop `startDiscovery` *is* the mDNS
+   * query — it takes three seconds and only then is there anything to read —
+   * so firing it and reading `devices()` in the same breath reliably returns
+   * the empty list from before it ran. Android's is a live scan that fills in
+   * over the same sort of interval.
+   *
+   * So: ask, read, ask again, until the panel closes. `MIN_SWEEP_MS` is a floor
+   * rather than a delay — it costs nothing on desktop, where the query already
+   * takes longer, and stops the loop spinning on a platform that returns at
+   * once.
+   */
+  const MIN_SWEEP_MS = 2500
+
+  $effect(() => {
+    if (!castAvailable || panel !== 'cast') return
+
+    let sweeping = true
+
+    const sweep = async (): Promise<void> => {
+      while (sweeping) {
+        const startedAt = Date.now()
+        try {
+          await api.cast.startDiscovery()
+          if (!sweeping) return
+          castDevices = await api.cast.devices()
+        } catch {
+          // A discovery that fails is not worth a message: the panel already
+          // says it is looking, and the next sweep may well succeed.
+        }
+        const elapsed = Date.now() - startedAt
+        if (elapsed < MIN_SWEEP_MS) {
+          await new Promise((resolve) => setTimeout(resolve, MIN_SWEEP_MS - elapsed))
+        }
+      }
+    }
+
+    void sweep()
+
+    return () => {
+      sweeping = false
+      void api.cast.stopDiscovery()
+    }
+  })
 
   /**
    * Connect, then move the stream across.
@@ -175,8 +226,8 @@
         castError = beamed.error ?? 'Could not start the stream on that TV.'
         return
       }
+      // Closing the panel tears the sweep down; see the effect above.
       panel = 'none'
-      void api.cast.stopDiscovery()
     } finally {
       castBusy = false
       castStatus = await api.cast.status()
@@ -357,8 +408,28 @@
     if (!barVisible) panel = 'none'
   })
 
+  /**
+   * Reserve the room the open panel needs.
+   *
+   * The two fixed panels declare their own height in CSS, so a constant is
+   * honest for them. The cast panel does not: it is a hint, or a list of
+   * however many televisions are on the Wi-Fi, or a pair of transport buttons,
+   * and each is a different size. So it is measured instead — which is also
+   * what keeps the reserved strip from swallowing clicks on the video below a
+   * panel that only needed a line of text.
+   *
+   * Leaving `cast` out of this is what made the button look dead: the panel
+   * rendered into a view still only `BAR_HEIGHT` tall and was clipped away
+   * entirely, so nothing appeared and nothing explained why.
+   */
   const panelHeight = $derived(
-    panel === 'episodes' ? EPISODE_PANEL_HEIGHT : panel === 'sources' ? SOURCE_PANEL_MAX : 0,
+    panel === 'episodes'
+      ? EPISODE_PANEL_HEIGHT
+      : panel === 'sources'
+        ? SOURCE_PANEL_MAX
+        : panel === 'cast'
+          ? (castPanelHeight || CAST_PANEL_FALLBACK) + PANEL_GAP
+          : 0,
   )
 
   /**
@@ -537,8 +608,17 @@
     {/if}
 
     {#if panel === 'cast'}
-      <div class="panel cast-panel">
-        {#if castStatus?.connected}
+      <div class="panel cast-panel" bind:clientHeight={castPanelHeight}>
+        <!--
+          `castBusy` is tested before `connected` on purpose. Connecting
+          succeeds a second or two before the stream is found, and a TV that is
+          attached with nothing playing reports exactly what a TV whose stream
+          died reports — so testing `connected` first puts a red "stream ended"
+          on screen for the whole of a perfectly normal beam.
+        -->
+        {#if castBusy}
+          <p class="hint">Starting the stream…</p>
+        {:else if castStatus?.connected}
           <div class="cast-now">
             <span class="name">Playing on {castStatus.deviceName}</span>
             {#if !castStatus.proxyRunning}
@@ -556,8 +636,6 @@
             </button>
             <button class="source" onclick={() => void stopCasting()}>Stop casting</button>
           </div>
-        {:else if castBusy}
-          <p class="hint">Starting the stream…</p>
         {:else if castDevices.length === 0}
           <p class="hint">Looking for a TV on your Wi-Fi…</p>
         {:else}
@@ -1016,8 +1094,17 @@
     }
   }
 
+  /* Sized and placed like the source list, and for the same reason: it drops
+     from a button at this end of the bar, and a panel is a strip of the picture
+     the user cannot click through — so it takes the width it needs and no more.
+     A house with a dozen Chromecasts scrolls rather than growing. */
   .cast-panel {
-    padding: 6px 0;
+    padding: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+    width: 260px;
+    margin-left: auto;
+    margin-right: 14px;
   }
 
   .cast-now {
