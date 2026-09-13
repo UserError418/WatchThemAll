@@ -243,10 +243,26 @@ export class CastSession {
     )
 
     if (answer.type === 'LOAD_FAILED' || answer.type === 'LOAD_CANCELLED') {
-      // The most likely cause by far, and the one worth naming: the receiver
-      // fetches from this machine over the LAN, so anything between them —
-      // client isolation on the router, a firewall, the wrong interface —
-      // shows up exactly here and nowhere earlier.
+      /*
+       * Two very different causes, and the wrong guess sends the user to the
+       * router for an hour.
+       *
+       * For a playlist it is almost always the receiver itself. A plain
+       * Chromecast running the Default Media Receiver rejects HLS outright —
+       * measured against a textbook stream generated locally, with no provider
+       * and no proxy in the way, and it fails before it fetches a single byte
+       * while an HTTP MP4 from the same machine plays. Blaming the network
+       * there is confidently wrong.
+       *
+       * For a plain file the network really is the first suspect: the receiver
+       * has to reach this machine, so client isolation, a firewall or the wrong
+       * interface all surface exactly here and nowhere earlier.
+       */
+      if (media.contentType.includes('mpegurl')) {
+        throw new Error(
+          `${this.deviceName} will not play this kind of stream. This source hands out an HLS playlist, and a basic Chromecast can only play a plain video file. Try another source.`,
+        )
+      }
       throw new Error(
         `${this.deviceName} could not load the stream. It has to reach this computer over the network; check that both are on the same Wi-Fi and that client isolation is off.`,
       )

@@ -351,14 +351,34 @@ describe('CastSession', () => {
    * router client isolation, a firewall or the wrong interface all land exactly
    * here and nowhere earlier.
    */
-  it('explains a refused load in terms the user can act on', async () => {
+  /**
+   * A refused playlist is the receiver, not the router.
+   *
+   * Measured against a real device: a plain Chromecast rejects HLS before it
+   * fetches a byte, while an HTTP MP4 from the same machine plays. Sending the
+   * user to check client isolation there is confidently wrong, and costs them
+   * an evening.
+   */
+  it('blames the receiver, not the network, when a playlist is refused', async () => {
     receiver = new FakeReceiver()
     receiver.failLoad = true
     const port = await receiver.listen()
     session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
     await session.connect()
 
-    await expect(session.load(MEDIA)).rejects.toThrow(/same Wi-Fi|client isolation/i)
+    await expect(session.load(MEDIA)).rejects.toThrow(/will not play this kind of stream/i)
+  })
+
+  it('blames the network when a plain file is refused, where it is the first suspect', async () => {
+    receiver = new FakeReceiver()
+    receiver.failLoad = true
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+
+    await expect(
+      session.load({ ...MEDIA, url: 'http://192.168.1.5:41000/s0', contentType: 'video/mp4' }),
+    ).rejects.toThrow(/same Wi-Fi|client isolation/i)
   })
 
   it('reports an unreachable television rather than hanging', async () => {
