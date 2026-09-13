@@ -210,10 +210,24 @@ async function capture(
   }
 }
 
-/** Fetch, returning the status alone; a thrown request is reported as 0. */
+/**
+ * How long any one verification request gets.
+ *
+ * These hosts are under no obligation to answer, and `fetch` without a signal
+ * waits forever. A run of fifteen providers that stalls on the third measures
+ * nothing and looks like it is still working, which is the failure mode worth
+ * spending three lines to avoid.
+ */
+const VERIFY_TIMEOUT_MS = 20_000
+
+/** Fetch, returning the status alone; a thrown or timed-out request is 0. */
 async function status(url: string, headers?: Record<string, string>): Promise<number> {
   try {
-    const response = await fetch(url, { headers, redirect: 'follow' })
+    const response = await fetch(url, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    })
     // Drain, or the connection stays open and the run leaks sockets.
     await response.arrayBuffer().catch(() => new ArrayBuffer(0))
     return response.status
@@ -233,7 +247,10 @@ async function segmentReachable(
   headers: Record<string, string>,
 ): Promise<boolean> {
   try {
-    const response = await fetch(manifestUrl, { headers })
+    const response = await fetch(manifestUrl, {
+      headers,
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    })
     if (!response.ok) return false
     const body = await response.text()
     const lines = body.split('\n').map((line) => line.trim())
