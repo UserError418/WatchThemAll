@@ -63,7 +63,10 @@ import {
   record,
   titleKey,
 } from '@main/outcomes'
+import type { Outcome } from '@main/outcomes'
 import { checkAll } from '@main/releases'
+import type { PlayerReading } from '@main/playermessage'
+import { isWatchedEnough, resumeAction, resumeKey } from '@main/resume'
 import { App as CapacitorApp } from '@capacitor/app'
 import { createPlayerSurface } from './playersurface'
 import { createChromeApi } from './chrome'
@@ -250,7 +253,82 @@ export async function createBridge(): Promise<WtaApi> {
     index: number
   }
 
-  const surface = createPlayerSurface()
+  /**
+   * What the current episode has told us about itself, and for how long.
+   *
+   * Two clocks rather than one, because two different questions are being
+   * asked and they have different scopes:
+   *
+   * - `episodeOpenedAt` spans provider switches, because switching source is
+   *   still watching the same episode. This is the desktop's rule and it was
+   *   arrived at the hard way there: draining the counter on every switch split
+   *   one viewing into three stretches, none long enough to count as watched,
+   *   on exactly the providers where elapsed time is the only evidence there is.
+   * - `candidateShownAt` is per provider, because the outcome being recorded is
+   *   about *that provider* serving *this* episode.
+   *
+   * `reading` spans switches for the same reason `episodeOpenedAt` does: a
+   * position learned from one source is a fact about the episode, not about the
+   * source that happened to report it.
+   */
+  interface Progress {
+    reading: PlayerReading | null
+    episodeOpenedAt: number
+    candidateShownAt: number
+    candidateReported: boolean
+  }
+
+  let progress: Progress | null = null
+
+  const surface = createPlayerSurface({
+    onReading: (reading) => {
+      if (!progress || !session) return
+
+      /**
+       * Is this reading even about what we asked for?
+       *
+       * It often is not, for one message. VidFast posts its entire progress
+       * library the moment the frame loads, and the freshest entry in it is
+       * the *previous* session's title until the current one has advanced far
+       * enough to be written. Everything downstream files something under
+       * `session.req`, so an unchecked reading would write last night's
+       * position onto tonight's episode and credit this provider with
+       * streaming it.
+       *
+       * A provider's own links are the other way this happens — the frame is
+       * the provider's site and its site has somewhere else to go — and the
+       * same comparison covers it.
+       */
+      if (reading.tmdbId !== null && reading.tmdbId !== session.req.tmdbId) return
+
+      const held = progress.reading
+
+      /**
+       * The provider moved on by itself.
+       *
+       * Its own "next episode" button is outside the app entirely, so the only
+       * notice we get is the episode number in the next reading changing. The
+       * episode being left has to be settled *here* — by the time the player is
+       * closed, the held reading is about the new one and the old episode would
+       * never be marked watched despite having been watched to the end.
+       */
+      const advanced =
+        held !== null &&
+        held.season !== null &&
+        held.episode !== null &&
+        reading.season !== null &&
+        reading.episode !== null &&
+        (held.season !== reading.season || held.episode !== reading.episode)
+
+      if (advanced) {
+        settleProgress(session.req)
+        progress.episodeOpenedAt = Date.now()
+      }
+
+      progress.reading = reading
+      progress.candidateReported = true
+    },
+  })
   const chrome = createChromeOverlay()
   let session: Session | null = null
 
@@ -286,22 +364,158 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   /**
-   * Record a hand-off as a successful stream.
+   * How long a provider has to hold the screen before we call it a stream.
    *
-   * Optimistic, and deliberately so: nothing on this platform can see inside
-   * the frame to know whether the video actually played, and recording every
-   * play as a failure would poison the ranking that decides what to open next
-   * time. The user's own correction is switching provider, which records the
-   * new one the same way.
+   * The behavioural stand-in for the desktop's direct observation of the frame.
+   * A minute is longer than anyone spends on a source that shows an error page,
+   * a dead player or a wall of ads, and shorter than any real viewing.
    */
-  const recordStream = (req: PlayRequest, providerId: string): void => {
+  const DWELL_STREAM_MS = 60_000
+
+  /**
+   * Below this, switching away is a complaint rather than a preference.
+   *
+   * Only *switching* counts. Closing the player quickly means the user changed
+   * their mind about watching, which says nothing about the provider, and
+   * recording that as a failure would demote whichever source happened to be
+   * first in the order.
+   */
+  const DWELL_FAILED_MS = 20_000
+
+  /**
+   * Write down what a provider actually proved, when it proved anything.
+   *
+   * This replaced an optimistic record written the instant a URL was handed to
+   * the iframe, which marked every play a success — so `automaticOrder` saw an
+   * unbroken run of wins for every provider ever opened, and the source
+   * picker's dots were green across the board whatever had really happened.
+   * That is not a ranking, it is a list of things that have been clicked.
+   *
+   * There are now three answers rather than one, and the third is the important
+   * one: **say nothing.** A provider shown for half a minute and then left has
+   * demonstrated neither success nor failure, and silence keeps it exactly
+   * where the user's own ordering put it. Guessing in either direction is what
+   * produced the useless ranking.
+   */
+  const settleOutcome = (req: PlayRequest, providerId: string, switching: boolean): void => {
+    if (!progress) return
+    const shownMs = Date.now() - progress.candidateShownAt
+
+    // Proof, not inference: the provider's player posted a position out, which
+    // it only does once it has something to play.
+    const outcome: Outcome | null = progress.candidateReported
+      ? 'stream'
+      : shownMs >= DWELL_STREAM_MS
+        ? 'stream'
+        : switching && shownMs < DWELL_FAILED_MS
+          ? 'failed'
+          : null
+    if (outcome === null) return
+
     store.collection('streamOutcomes').replaceAll(
       record(store.read().streamOutcomes, {
         providerId,
         mediaKey: mediaKey(req),
-        outcome: 'stream',
+        outcome,
       }),
     )
+  }
+
+  /**
+   * The request a reading is really about.
+   *
+   * Not always the one the app opened. Several providers carry their own
+   * "next episode" control, and a user who presses it is watching E2 while the
+   * app still believes it is showing E1 — the reading says so, and filing its
+   * position under the app's belief would write E2's progress onto E1 and
+   * resume the wrong episode next time.
+   */
+  const contextFor = (req: PlayRequest, reading: PlayerReading | null): PlayRequest => {
+    if (reading === null || reading.season === null || reading.episode === null) return req
+    if (reading.season === req.season && reading.episode === req.episode) return req
+    return { ...req, season: reading.season, episode: reading.episode }
+  }
+
+  /**
+   * Save the place being left. Position only, deliberately.
+   *
+   * Called on every navigation *within* a title — a provider switch or a
+   * reload. `settleProgress` additionally decides "watched" and drains the
+   * elapsed-time counter, and neither belongs here: the desktop used to settle
+   * on every switch and it cost real progress, because switching source three
+   * times split one viewing into three stretches, none long enough to count.
+   */
+  const rememberPosition = (req: PlayRequest): void => {
+    const reading = progress?.reading ?? null
+    const context = contextFor(req, reading)
+    const points = store.collection('resumePoints')
+
+    // `resumeAction` rather than a threshold of our own. Its three answers exist
+    // because collapsing "nothing was learned" into "forget what you knew" is
+    // what made resuming flaky on the desktop, and a provider that reports
+    // nothing is the *normal* case here rather than the exception.
+    const action = resumeAction(
+      reading === null ? null : { seconds: reading.seconds, duration: reading.duration ?? 0, ended: reading.ended },
+    )
+    if (action === 'keep') return
+    if (action === 'forget') {
+      points.remove(resumeKey(context))
+      return
+    }
+
+    points.put({
+      key: resumeKey(context),
+      tmdbId: context.tmdbId,
+      seconds: reading!.seconds,
+      duration: reading!.duration ?? 0,
+    })
+    storeChanged.emit()
+  }
+
+  /**
+   * Longer than any amount of browsing, shorter than most of what anyone opens
+   * on purpose. The desktop's number, for the same reason: it is what stands in
+   * when there is no position and TMDB has no runtime either.
+   */
+  const WATCHED_FALLBACK_MS = 15 * 60_000
+
+  /**
+   * Settle the episode being left: save the place, and decide whether it counts
+   * as watched.
+   *
+   * Only on actually leaving an episode — closing the player, or stepping to
+   * another one. Never on starting one, which is the mistake that marked a
+   * title watched for having been opened and backed out of.
+   *
+   * `playedMs` here is time the player was *open*, where the desktop measures
+   * time the video was *playing*. It is a weaker signal — a paused player still
+   * accumulates it — and it is the only one available, because the frame that
+   * would know is cross-origin. It matters only for providers that report no
+   * position at all, and only past fifteen minutes.
+   */
+  const settleProgress = (req: PlayRequest): void => {
+    if (!progress) return
+    const reading = progress.reading
+    const context = contextFor(req, reading)
+
+    rememberPosition(req)
+
+    const watched = isWatchedEnough({
+      seconds: reading?.seconds ?? null,
+      duration: reading?.duration ?? null,
+      playedMs: Date.now() - progress.episodeOpenedAt,
+      runtimeMinutes: req.runtimeMinutes,
+      fallbackMs: WATCHED_FALLBACK_MS,
+      ended: reading?.ended ?? false,
+    })
+    if (!watched) return
+
+    episodeWatched.emit({
+      tmdbId: context.tmdbId,
+      type: context.type,
+      season: context.season,
+      episode: context.episode,
+    })
   }
 
   /**
@@ -312,10 +526,28 @@ export async function createBridge(): Promise<WtaApi> {
    * `player.close` from the app renderer — and an exit that forgot to take the
    * chrome down with it would leave a bar floating over the browse view.
    */
+  /**
+   * Settle whatever is on screen before anything replaces it.
+   *
+   * Split out because the two halves have different scopes and are needed in
+   * different combinations: the *candidate* is settled on every provider
+   * switch, the *episode* only when the episode is genuinely being left.
+   */
+  const leaveCandidate = (switching: boolean): void => {
+    if (!session || !progress) return
+    const current = session.candidates[session.index]
+    if (current) settleOutcome(session.req, current.provider.id, switching)
+  }
+
   const closePlayer = (): void => {
+    if (session) {
+      leaveCandidate(false)
+      settleProgress(session.req)
+    }
     chrome.close()
     surface.close()
     session = null
+    progress = null
     playbackActive.emit(false)
     emitPlayerState()
   }
@@ -345,7 +577,17 @@ export async function createBridge(): Promise<WtaApi> {
     const selection = buildPlayUrl(orderedForRequest(req), req)
     if (!selection) return
 
+    // Settle the episode being left while `session.req` still names it. After
+    // the line below, its time and its position would be credited to the
+    // episode being moved to.
+    leaveCandidate(false)
+    settleProgress(session.req)
+
     session = { req, candidates: selection.candidates, index: 0 }
+    if (progress) {
+      progress.reading = null
+      progress.episodeOpenedAt = Date.now()
+    }
     showCandidate(0)
   }
 
@@ -353,10 +595,19 @@ export async function createBridge(): Promise<WtaApi> {
     if (!session) return false
     const index = session.candidates.findIndex((c) => c.provider.id === providerId)
     if (index < 0) return false
+
+    // Still the same episode, so the position carries over and "watched" is not
+    // decided here — only the outgoing provider's outcome is, and switching
+    // away quickly is the user telling us it did not work.
+    leaveCandidate(true)
+    rememberPosition(session.req)
     return showCandidate(index)
   }
 
   const playerReload = async (): Promise<void> => {
+    // Save the place first: the frame is about to be thrown away, and whatever
+    // it reported is the last thing anything will know about this attempt.
+    if (session) rememberPosition(session.req)
     surface.reload()
   }
 
@@ -368,7 +619,10 @@ export async function createBridge(): Promise<WtaApi> {
 
     session.index = index
     surface.show(candidate)
-    recordStream(session.req, candidate.provider.id)
+    if (progress) {
+      progress.candidateShownAt = Date.now()
+      progress.candidateReported = false
+    }
     emitPlayerState()
     return true
   }
@@ -597,7 +851,7 @@ export async function createBridge(): Promise<WtaApi> {
      * The same shape as the desktop: the renderer mounts its player chrome off
      * `playerState`, and the platform layer puts a video surface in the hole
      * that chrome leaves. Only the surface differs — a `WebContentsView` there,
-     * a sandboxed iframe here.
+     * an iframe here.
      */
     play: async (req: PlayRequest) => {
       const enabled = orderedForRequest(req)
@@ -610,7 +864,21 @@ export async function createBridge(): Promise<WtaApi> {
         return { ok: false, error: 'No enabled provider can play this' }
       }
 
+      // Playing something new while something else is up: settle the old one
+      // first, exactly as closing the player would.
+      if (session) {
+        leaveCandidate(false)
+        settleProgress(session.req)
+      }
+
       session = { req, candidates: selection.candidates, index: 0 }
+      const now = Date.now()
+      progress = {
+        reading: null,
+        episodeOpenedAt: now,
+        candidateShownAt: now,
+        candidateReported: false,
+      }
       showCandidate(0)
       chrome.open()
       playbackActive.emit(true)
