@@ -90,6 +90,23 @@ describe('the totals', () => {
     expect(summary.films).toBe(1)
   })
 
+  it('counts plays separately from measured plays', () => {
+    // A library from before 1.5.3 has a full history and no durations. The
+    // screen shows counts in that case, so it has to be able to tell.
+    const history = [entry(NOON), entry(NOON - DAY), entry(NOON - 30 * DAY)]
+    const summary = summarise(history, NOON)
+
+    expect(summary.plays).toBe(3)
+    expect(summary.weekPlays).toBe(2)
+    expect(summary.measured).toBe(0)
+    expect(summary.totalMs).toBe(0)
+  })
+
+  it('counts a play as measured only once it has a duration', () => {
+    const history = [entry(NOON, { playedMs: 10 * MINUTE }), entry(NOON - DAY)]
+    expect(summarise(history, NOON).measured).toBe(1)
+  })
+
   it('names the busiest day', () => {
     const history = [
       entry(NOON, { playedMs: 10 * MINUTE }),
