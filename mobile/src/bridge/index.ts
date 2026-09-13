@@ -52,6 +52,13 @@ import type {
 import * as tmdb from '@main/tmdb'
 import * as search from '@main/search'
 import BUNDLED_CATALOG from '@main/providers.json'
+import {
+  readCache,
+  refreshCatalog,
+  resolveProviders,
+  REFRESH_INTERVAL_MS,
+  type CachedCatalog,
+} from '@main/catalog'
 import { buildPlayUrl } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
@@ -72,6 +79,7 @@ import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
+import { preferencesCatalogStore } from './catalogstore'
 import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
@@ -206,20 +214,50 @@ export async function createBridge(): Promise<WtaApi> {
   let pendingMal: MalEntry[] = []
 
   /**
-   * Every provider the app knows about.
+   * The managed provider list, refreshed in the background.
    *
-   * The bundled list plus the user's custom entries. The desktop app also
-   * merges a remote catalogue it refreshes in the background and caches to
-   * disk; that is deliberately not here yet, so the phone ships whatever
-   * catalogue its APK was built with. It is a staleness problem, not a
-   * correctness one, and the custom-provider form covers the urgent case.
+   * Embed providers die and change domain constantly, and a list compiled into
+   * an APK is stale the week it ships — with no remedy at all on a phone, where
+   * the user cannot rebuild the app. So the phone now runs the desktop's
+   * catalogue: same URL, same validation, same three layers, differing only in
+   * where the cache is kept. See `catalogstore.ts`.
+   *
+   * Held in memory because it is read on every play and every render of the
+   * providers panel, and null until the first read finishes — which is why
+   * `resolveProviders` accepts null and answers with the bundled list.
    */
+  let cachedCatalog: CachedCatalog | null = null
+
   const allProviders = (): Provider[] => {
-    const custom = store.read().customProviders
-    const overridden = new Set(custom.map((p) => p.id))
     const bundled = BUNDLED_CATALOG.providers as unknown as Provider[]
-    return [...bundled.filter((p) => !overridden.has(p.id)), ...custom]
+    return resolveProviders(bundled, cachedCatalog, store.read().customProviders)
   }
+
+  /**
+   * Load the cached catalogue, then look for a newer one.
+   *
+   * Deliberately not awaited by anything: the bundled list is a working
+   * catalogue, so nothing has to wait for this, and a phone on a bad connection
+   * must not have a ten-second fetch between it and its own library.
+   *
+   * A failure is not surfaced either, for the same reason the desktop does not
+   * surface it — an error about a background refresh the user never asked for
+   * describes a problem they cannot act on.
+   */
+  const catalogStore = preferencesCatalogStore()
+  void (async () => {
+    cachedCatalog = await readCache(catalogStore)
+    if (cachedCatalog !== null) storeChanged.emit()
+
+    const fresh = Date.now() - (cachedCatalog?.fetchedAt ?? 0) < REFRESH_INTERVAL_MS
+    if (fresh) return
+
+    const result = await refreshCatalog(catalogStore)
+    if (result.status !== 'updated') return
+    cachedCatalog = await readCache(catalogStore)
+    // The providers panel and the source picker both render off this list.
+    storeChanged.emit()
+  })()
 
   const enabledProviders = (): Provider[] => {
     const { activeProviderIds } = store.read()
