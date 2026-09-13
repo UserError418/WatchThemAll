@@ -22,6 +22,7 @@
     "sync:mobile": "cap sync android",
     "apk": "scripts/build-apk.sh",
     "probe:streams": "electron-vite build && electron . --no-sandbox --extract-streams",
+    "probe:playback": "scripts/probe-playback.py",
     "probe:ui": "electron-vite build && electron . --no-sandbox --probe-ui"
   },
   "build": {

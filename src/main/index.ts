@@ -785,6 +785,20 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
 }
 
 app.on('window-all-closed', () => {
+  /**
+   * A probe run has no windows *between* subjects, and that is not the end of
+   * it.
+   *
+   * `--extract-streams` and its siblings create one hidden `BrowserWindow` per
+   * provider and destroy it before moving to the next. Without this guard the
+   * gap between the first and second provider looks exactly like the user
+   * closing the app: `window-all-closed` fires, `app.quit()` runs, and the
+   * process exits **zero** partway through a fifteen-minute measurement. It
+   * reported success and one result, which is the worst shape a failure can
+   * take — `probeAndQuit` owns the exit for these runs and calls `app.exit(0)`
+   * when it is genuinely finished.
+   */
+  if (isProbeRun(process.argv)) return
   if (process.platform !== 'darwin') app.quit()
 })
 
