@@ -70,6 +70,7 @@ const api: WtaApi = {
     preview: () => ipcRenderer.invoke(CH.malPreview),
     commit: (decisions: MalDecisions) => ipcRenderer.invoke(CH.malImport, decisions),
   },
+  openExternal: (url: string) => ipcRenderer.invoke(CH.openExternal, url),
   data: {
     export: () => ipcRenderer.invoke(CH.dataExport),
     import: (payload: unknown) => ipcRenderer.invoke(CH.dataImport, payload),

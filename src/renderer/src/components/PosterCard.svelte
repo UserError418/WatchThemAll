@@ -44,10 +44,24 @@
   <button class="hit" onclick={() => onselect?.(media)} title={media.title}>
     <div class="art">
       {#if src}
+        <!--
+          `sizes` is an HTML attribute and cannot read a CSS custom property.
+          It used to say `var(--poster-width)`, which parses as nothing, and an
+          unparseable `sizes` means `100vw` — so every poster in a grid fetched
+          the 500w asset for a slot a fifth that wide, on the platform least able
+          to afford it.
+
+          `auto` is the real fix: it tells the browser to use the element's own
+          laid-out width, which is what the custom property was reaching for. It
+          needs `loading="lazy"`, which is already here. The two entries after it
+          are the fallback for anything that does not support it, and are the
+          desktop and phone values of `--poster-width` — duplicated knowingly,
+          because the attribute has no way to reach the token.
+        -->
         <img
           {src}
           {srcset}
-          sizes="var(--poster-width)"
+          sizes="auto, (max-width: 600px) 104px, 168px"
           alt=""
           loading="lazy"
           decoding="async"

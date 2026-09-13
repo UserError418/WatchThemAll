@@ -79,6 +79,17 @@ export const CH = {
   /** Commit a reviewed import. This is the part that reaches TMDB. */
   malImport: 'mal:import',
   dataDir: 'data:dir',
+  /**
+   * Hand a URL to the platform's browser.
+   *
+   * Needed because neither platform lets the app's own page navigate away or
+   * open a window: the desktop denies `window.open` outright, and the phone
+   * blocks popups in `WebSettings` and refuses third-party main-frame
+   * navigations in `PlayerNavigationClient`. Those defences are load-bearing —
+   * every provider embed monetises with popunders — so the one legitimate case
+   * needs a channel of its own rather than a hole in them.
+   */
+  openExternal: 'shell:open-external',
 
   /**
    * Cross-device sync.
@@ -471,6 +482,16 @@ export interface WtaApi {
    * when TMDB does not know the title, which is a real outcome, not an error.
    */
   resolve(item: MediaSummary): Promise<MediaSummary | null>
+  /**
+   * Open `url` in whatever browses the web on this platform.
+   *
+   * Resolves false when the URL is not something the app will hand to the
+   * operating system — see `isOpenableExternally`. The renderer is expected to
+   * keep whatever the user could otherwise read and retype on screen, because
+   * this can also fail for reasons no one here can see: no browser installed,
+   * an intent with no handler, a user who dismissed the chooser.
+   */
+  openExternal(url: string): Promise<boolean>
   providers: {
     list(): Promise<Provider[]>
     /**

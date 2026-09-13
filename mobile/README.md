@@ -205,9 +205,22 @@ rebuilds the whole schedule from the trackers, so a corrected air date fixes
 itself on the next launch. A sweep also runs on `resume`, throttled to once an
 hour.
 
-Alarms are inexact on purpose: exact ones need `SCHEDULE_EXACT_ALARM`, which
-Android 14 does not grant without sending the user to a settings page, and an
-episode notification is worth the same whether it lands at 09:00 or 09:20.
+Alarms are inexact on purpose: an episode notification is worth the same
+whether it lands at 09:00 or 09:20, and exact ones need `SCHEDULE_EXACT_ALARM`,
+which Android does not grant without sending the user to a settings page.
+
+**Saying so takes `isExactNotification: false`, not `allowWhileIdle: false`.**
+Those are different flags and only the first one is about exactness; the second
+is about waking the device out of Doze. Setting the wrong one meant every
+notification asked for an exact alarm, and the plugin — which declares
+`SCHEDULE_EXACT_ALARM` in its own manifest, so the app inherits it — responded
+by launching the "Alarms & reminders" settings page and leaving `schedule()`
+unresolved. Measured: the user was ejected from the app and **no notification
+was ever posted**. Every release sweep did it. If notifications ever go quiet
+again, check that flag before anything else.
+
+Tapping a notification opens the Releases tab, which is what the desktop's
+notification click handler does.
 
 ## Other platform behaviour
 
@@ -221,6 +234,12 @@ episode notification is worth the same whether it lands at 09:00 or 09:20.
 - **Fullscreen rotates to landscape** and hides the status bar, then restores
   both on exit. Only on fullscreen, never on play: rotating the screen out from
   under someone watching in bed is how an app gets uninstalled.
+- **Signing in can be done on the phone itself.** Pairing shows an address and
+  a code, and the panel adds a button for each: one opens the address in a
+  Custom Tab, which shares the system browser's cookies and so usually lands on
+  a page already signed in, and one copies the code. Both are shortcuts over a
+  flow that still works without them — the address and code stay on screen,
+  because a button that silently fails must not be the only way through.
 - **The store flushes on `pause`.** Writes are debounced 400ms, which is right
   in the foreground and wrong the instant Android may kill the process.
 - **An unreadable store is quarantined** to `watchthemall.corrupt.json` before
