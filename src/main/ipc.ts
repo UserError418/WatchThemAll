@@ -16,7 +16,6 @@ import { writeFileSync, readFileSync } from 'node:fs'
 import { CH, EV } from '@shared/ipc'
 import { isOpenableExternally } from './externalurl'
 import type {
-  CastStatus,
   DiscoverRequest,
   GenreRowRequest,
   PlayRequest,
@@ -42,26 +41,12 @@ import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
 import type { SyncStatus } from '@shared/sync/types'
+import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
 
 /** What the renderer sees when this build has no OAuth client at all. */
-/**
- * Why the desktop declines to cast.
- *
- * A sentence rather than a bare false, because it is shown to anyone who
- * reaches a cast control through a path that did not check `available` first.
- */
-const NO_CAST_REASON = 'Casting is available in the Android app only.'
-
-const UNAVAILABLE_CAST_STATUS: CastStatus = {
-  available: false,
-  connected: false,
-  deviceName: '',
-  playing: false,
-  seconds: 0,
-  duration: 0,
-  proxyRunning: false,
-}
+/** Shown when a cast is asked for with no player open. */
+const NOTHING_PLAYING_REASON = 'Nothing is playing.'
 
 const UNAVAILABLE_SYNC_STATUS: SyncStatus = {
   state: 'off',
@@ -116,6 +101,23 @@ export interface IpcDeps {
   keepWaiting: () => void
   /** Reload the embed currently playing, in place. */
   reloadPlayer: () => void
+  /**
+   * Casting to a television.
+   *
+   * Injected rather than constructed here for the same reason as `sync`: it
+   * owns a proxy's lifetime and a TLS session, and exactly one place should
+   * decide when those start and stop.
+   */
+  cast: CastService
+  /**
+   * What the receiver should be told it is playing, or null when nothing is.
+   *
+   * Lives with the window rather than here because the player's state does.
+   * The position is the *live* one: casting mid-film and starting the
+   * television from the last saved point would rewind the user by however long
+   * they had been watching.
+   */
+  castNowPlaying: () => NowPlaying | null
 }
 
 /**
@@ -268,15 +270,22 @@ export function registerIpc(deps: IpcDeps): void {
    * a Cast sender for Electron, which is a different problem from the phone's:
    * the desktop has no Google Play Services and would need the protocol itself.
    */
-  ipcMain.handle(CH.castAvailable, () => false)
-  ipcMain.handle(CH.castStartDiscovery, () => undefined)
-  ipcMain.handle(CH.castStopDiscovery, () => undefined)
-  ipcMain.handle(CH.castDevices, () => [])
-  ipcMain.handle(CH.castConnect, () => ({ ok: false, error: NO_CAST_REASON }))
-  ipcMain.handle(CH.castDisconnect, () => undefined)
-  ipcMain.handle(CH.castBeam, () => ({ ok: false, error: NO_CAST_REASON }))
-  ipcMain.handle(CH.castStatus, () => UNAVAILABLE_CAST_STATUS)
-  ipcMain.handle(CH.castControl, () => undefined)
+  const { cast } = deps
+  ipcMain.handle(CH.castAvailable, () => true)
+  ipcMain.handle(CH.castStartDiscovery, () => cast.startDiscovery())
+  ipcMain.handle(CH.castStopDiscovery, () => cast.stopDiscovery())
+  ipcMain.handle(CH.castDevices, () => cast.devices())
+  ipcMain.handle(CH.castConnect, (_e, deviceId: string) => cast.connect(deviceId))
+  ipcMain.handle(CH.castDisconnect, () => cast.disconnect())
+  ipcMain.handle(CH.castStatus, () => cast.status())
+  ipcMain.handle(CH.castControl, (_e, action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
+    cast.control(action, seconds),
+  )
+  ipcMain.handle(CH.castBeam, () => {
+    const now = deps.castNowPlaying()
+    if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON }
+    return cast.beam(now)
+  })
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
 

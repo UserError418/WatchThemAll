@@ -1,0 +1,58 @@
+/**
+ * A self-signed certificate for the fake Chromecast in `castsender.test.ts`.
+ *
+ * Not a secret and never used outside the test: it exists because a real
+ * receiver speaks TLS and the session under test connects with
+ * `rejectUnauthorized: false`, so the fake has to present *something*.
+ * Generating one per run would need `openssl` on the machine running the
+ * tests, which is a dependency the suite does not otherwise have.
+ */
+
+export const TEST_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC/DZl67Bs7LYzp
+sghv0yE2O6yAl+nc44he3rlUcz38bpNACjDOqtKCKHSHwCvu+4uglYtemrKLz8lN
+o0oiGSLBwFPRJCYRhpyn9G2oMv5HeyUFYfm4RH+d4w1mwDYMTAYf6W+Gf9jA4Hbk
+ovQn0BlOzzKKplgbGJCTPd9aXyZlUxOyiT59SD1QnOTBcfCTT6Xtyu+eExRUVyH/
+AJvaQVCeythlSowqSLvLUiF7WYyqNRwgzypoL7U2eWGNS+udmT88b7PQ21Ao32Ac
+oR8Oq0qEVb7Fawl6qvjkzdTbtOMH9kkRXhea1R7X94xN6HxCBbCKhes+7b+O8jog
+XmpukoKVAgMBAAECggEAEENtRML+NcU/YRINg3i9XjCp6GUbfHkGqKNyCFJ/vNIs
+M7/fqWrDh7PqPjdpe1WrbEyT9BuGxmhg56cro4fF5yi4RIM8wFzX+g4lxYiDD9JX
+nkPZrkoac6DFM8bPSFsHtxtify25OwCrQ57sL3Vt/2ubjvpGYWwaZoZWUeBBVE+e
+eaqOMMXxBhc2ddexnCiSAByEhKtsK5eXkYMAEPu5Yw4+ptUnWQxz57j6BvDYJx4G
+x7R3FI7ec/8UWdL3JaB57MIfsxRKG7J256DcBpAXEGkSCNmgpz+xYqUQGt4S+ZIX
+l9h5gnIm6AN3UpcdIALbhz/oS0ziVgfWlvWf77KxgwKBgQDzAqGkwRdlL/dg8WVs
+i5gvNZqacTjmfbF3XrtHkkzPTa6qv0jCOW0MIReysY9l0Xs0tNCk5DzWi6NFyAwv
+RyqzcQxkK1cqo8ptqot6+q/ZOOKB1VyTR3ZIoXo0vCg4l1jRGGle7IqjfJGRQh86
+bQpSEEY95DHle4/muDtnNIwJxwKBgQDJQ/ulDec0KVq3LnSw0sbh47xE4GAcGDN1
+umC2hRJmOPt9NOMqcOy2cM4gUvJCzyxeNPiig/GCCKj0TcfydT1h9QGA3AYPuUqE
+LFSpIRfXW05LFRp4BqIIZ81Ytbds0kLZIJeZUfkD1bfMYClMRfk9uVzUQ+1T7zta
+nN/3v2BwwwKBgBGrJk+RTn8n7qeYxZQPzj/YeOYzxzxS9T1FoP5CL91+u21kvQiK
+Hlica1mtuUxg38FkSCtFAPtkabmgIuqpFPy5AnqiABN0lzpEBSIq6fA0R5vDBJkc
+wAfl3bnJ2G7M6kNBsB+buTTL0NWr5hNcbDytPD4xwkL6KetPh9ooIupvAoGBAMUs
+AL+2WybSzLhgnpkMJSLvRGYFmqJrYx6WtGCbBWd3s4j54wKVFpG0+XrZR9UDuWeh
+ZWNw94x4h2yvNo7lJHlu2UYwRw/oaoQKGfaHISAtpwoPZprnhJ3Pc3DQtR267xpf
+v6TIlbeYDDQAkPTUKFS736Fj2oE8AV3ICfJgXk6ZAoGAYnjL1RX9szXPps/agQ81
+pl7H2adhjstmkWeEUU9I0bTaOyeKY+KlRUJSt+vznVR8p6SKv7MFjgpwwo7CrjHs
+MrUzjgYQg5kKln9nZFCkh9tbzHFm497R9R7QoP8nIrhIAKhBfXvcZ9/7VEx6KEaM
++/ENuvoum64qizfjMnWI8MM=
+-----END PRIVATE KEY-----`
+
+export const TEST_CERT = `-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUezMPMdLdHDWdg98kaxMSZrtWiVMwDQYJKoZIhvcNAQEL
+BQAwGjEYMBYGA1UEAwwPZmFrZS1jaHJvbWVjYXN0MCAXDTI2MDkxMzE2NTExNloY
+DzIxMjYwODIwMTY1MTE2WjAaMRgwFgYDVQQDDA9mYWtlLWNocm9tZWNhc3QwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC/DZl67Bs7LYzpsghv0yE2O6yA
+l+nc44he3rlUcz38bpNACjDOqtKCKHSHwCvu+4uglYtemrKLz8lNo0oiGSLBwFPR
+JCYRhpyn9G2oMv5HeyUFYfm4RH+d4w1mwDYMTAYf6W+Gf9jA4HbkovQn0BlOzzKK
+plgbGJCTPd9aXyZlUxOyiT59SD1QnOTBcfCTT6Xtyu+eExRUVyH/AJvaQVCeythl
+SowqSLvLUiF7WYyqNRwgzypoL7U2eWGNS+udmT88b7PQ21Ao32AcoR8Oq0qEVb7F
+awl6qvjkzdTbtOMH9kkRXhea1R7X94xN6HxCBbCKhes+7b+O8jogXmpukoKVAgMB
+AAGjUzBRMB0GA1UdDgQWBBSHNR8bP4Wam1h2XvSipc108ilWITAfBgNVHSMEGDAW
+gBSHNR8bP4Wam1h2XvSipc108ilWITAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQClj0jjHwArivZjTzEVob0TOwde2CSqG91QsekGpxUN7yUz1zqT
+zRn6viW12IpQWfR+rWYvVmCu0G1XGdJyny3WgRhN+riWtMEhKMf420JpKPxrtzwh
+HN3EWTG4GMJql+IGrvsNfd5hmh45w2vRpEtjUWBvjf0CFAu1mq8Q/kIKJSw3kdx5
+VOFGI2lfxfyVE1lDM81tjbcbmLf0EclihsuGgPAW6WFN619KuToMdMuq/xq/tNtK
+jZEFEtgySw0+4GOHHTrLV6O1Jcto3wbqXUGSqZytl5wAKKCKmnQ4JC5v8OrSeQxB
+TKq5MQm3TEE0TwgVlRuo133SXfIH42bSz0J7
+-----END CERTIFICATE-----`
