@@ -38,18 +38,34 @@
  * has the same effect on `window.open` in every frame and exposes no attribute
  * to detect. That file records what it does and does not claim to stop.
  *
+ * ## How the position is read without reading the frame
+ *
+ * It is not read. Several providers *post it out*, and the frame is asked for
+ * nothing — see `@main/playermessage`, which holds the measured payloads and
+ * the parser. This file's only job in that exchange is the part a parser cannot
+ * do: proving the message came from the video and not from somewhere else in
+ * the page. `event.source === frame.contentWindow` is that proof, and it is
+ * available cross-origin precisely because it compares window identities rather
+ * than reading anything through one.
+ *
+ * Origin is deliberately *not* checked on top of it. A provider redirects
+ * through its own CDNs and switches host between titles, so a fixed origin
+ * list would reject working players, and `event.source` already answers the
+ * only question that matters: is this the frame we put there.
+ *
  * ## What is still missing
  *
- * Position tracking, stall detection and the auto-switch countdown. Those need
- * to read a `<video>` inside a cross-origin document, which on desktop is a
- * privilege of the Electron embedder (`WebFrameMain.executeJavaScript` runs in
- * any frame). A WebView grants nothing like it, and neither does an iframe.
- * Switching provider by hand *does* work now, which it did not before.
+ * Stall detection and the auto-switch countdown. Both need to know that a video
+ * *stopped* advancing, and a provider that reports nothing is indistinguishable
+ * from one that has stalled — three of the eight core providers report nothing
+ * at all. Seeking to a stored position is missing for the same reason in
+ * reverse: the position can be read, but nothing here can write one back.
  */
 
 import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { StatusBar } from '@capacitor/status-bar'
 
+import { parsePlayerMessage, type PlayerReading } from '@main/playermessage'
 import type { PlayCandidate } from '@main/providers'
 
 /** Where the renderer's player chrome wants the video, in CSS pixels. */
@@ -153,6 +169,46 @@ function followFullscreen(): () => void {
   }
 }
 
+/**
+ * Listen for position reports from one frame, and only that frame.
+ *
+ * `window` receives messages from every frame in the document and from anything
+ * that can reach `window.parent` or `window.opener`, so the filter is the whole
+ * security of this path. Comparing `event.source` against the iframe's own
+ * `contentWindow` cannot be spoofed: a page can claim any origin string it
+ * likes in a payload, but it cannot make the browser hand us a different window
+ * object as the sender.
+ *
+ * The listener is installed with the frame and removed with it, so a torn-down
+ * player cannot keep writing resume points for whatever loads next.
+ */
+function listenForReadings(
+  frame: HTMLIFrameElement,
+  onReading: (reading: PlayerReading) => void,
+): () => void {
+  const onMessage = (event: MessageEvent): void => {
+    if (event.source !== frame.contentWindow) return
+    const reading = parsePlayerMessage(event.data)
+    // Null is the ordinary case — providers post analytics, ad beacons and
+    // their own internal chatter through the same channel.
+    if (reading !== null) onReading(reading)
+  }
+
+  window.addEventListener('message', onMessage)
+  return () => window.removeEventListener('message', onMessage)
+}
+
+export interface PlayerSurfaceOptions {
+  /**
+   * Called for every position report the current frame volunteers.
+   *
+   * Most providers never call it, and a session that ends without a single
+   * reading is normal rather than broken — `resumeAction` treats "no reading"
+   * as "we learned nothing", not as "start again from the beginning".
+   */
+  onReading?(reading: PlayerReading): void
+}
+
 export interface PlayerSurface {
   /** Show `candidate` in the surface, creating it on first use. */
   show(candidate: PlayCandidate): void
@@ -165,11 +221,12 @@ export interface PlayerSurface {
   url(): string | null
 }
 
-export function createPlayerSurface(): PlayerSurface {
+export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerSurface {
   let host: HTMLDivElement | null = null
   let frame: HTMLIFrameElement | null = null
   let current: string | null = null
   let stopFollowingFullscreen: (() => void) | null = null
+  let stopListening: (() => void) | null = null
 
   const wakeLock = createWakeLock()
 
@@ -200,6 +257,7 @@ export function createPlayerSurface(): PlayerSurface {
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
+    if (options.onReading) stopListening = listenForReadings(frame, options.onReading)
     return frame
   }
 
@@ -236,6 +294,8 @@ export function createPlayerSurface(): PlayerSurface {
       wakeLock.release()
       stopFollowingFullscreen?.()
       stopFollowingFullscreen = null
+      stopListening?.()
+      stopListening = null
     },
 
     url: () => current,

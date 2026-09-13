@@ -102,19 +102,76 @@ Every provider URL is an *embed* endpoint — being framed is the product — an
 the headers agree: across the eight core providers none sends a restrictive
 `X-Frame-Options` or `frame-ancestors`, and two allow framing explicitly.
 
-## What is missing, and why
+## Progress, without reading the video
 
-**Position tracking, stall detection, and the auto-switch countdown.** These
-need to read a `<video>` inside a cross-origin document. On desktop that is a
-privilege of the Electron embedder — `WebFrameMain.executeJavaScript` runs in
-any frame regardless of origin — and neither a WebView nor an iframe grants
-anything like it. So there is no resume-to-exact-position and no automatic
-recovery from a dead source; `player.dismissSuggestion` stays a no-op because
-nothing can raise a suggestion. Switching source by hand does work.
+The desktop learns where a video is by reading `currentTime` off the provider's
+own `<video>`, which `WebFrameMain.executeJavaScript` allows in any frame
+regardless of origin. Neither a WebView nor an iframe grants anything like it,
+and this file said for three versions that progress tracking was therefore
+impossible here.
 
-The same blindness is why a play is recorded as a *successful* stream: nothing
-here can observe whether it played, and recording every play as a failure would
-poison the ranking that decides what to open next time.
+That was true of the approach and not of the problem. **Several providers post
+their position out to whatever is framing them**, and nobody had looked.
+Measured on an emulator, listening on the app's own window:
+
+| Provider | Posts | Carries |
+|---|---|---|
+| VidFast | `PLAYER_EVENT`, `MEDIA_DATA` | position, duration, season, episode, tmdb id |
+| Videasy | `PLAYER_EVENT` | position, duration, season, episode, tmdb id |
+| VidLux, VidFlix, VidRock | nothing | — |
+
+`src/main/playermessage.ts` is the parser — pure, in the business layer, and
+tested against the transcribed payloads. Two things about it are load-bearing:
+
+- **The sender is checked, not the origin.** `event.source ===
+  frame.contentWindow` is a window-identity comparison that works cross-origin
+  and cannot be forged by another frame. An origin allowlist would reject
+  working players, because providers redirect through their own CDNs.
+- **Every reading names its title, and the bridge checks it.** VidFast's
+  `MEDIA_DATA` is its *entire* progress library, and picking an entry out of it
+  means guessing which one is on screen. The guess is right once something has
+  played and wrong for the first message of every session, where the freshest
+  entry belongs to whatever ran last time.
+
+Thresholds are the desktop's, imported from `@main/resume` rather than restated
+— including the three-way `resumeAction`, which matters far more here than
+there: a provider that reports nothing is the *normal* case on this platform,
+and treating "learned nothing" as "forget the position" would wipe a good
+position every time the user tried a silent source.
+
+**What this gets you:** a real resume point and a real progress bar, and
+`on.episodeWatched` firing for the first time, so watching something on the
+phone moves the library forward the way it does on the desktop.
+
+**What it does not:** *seeking* to a stored position. Reading a number out of a
+frame and writing one back are not symmetric, and nothing here can write. In
+practice the providers that report progress also restore it themselves, so the
+video resumes anyway — but that is their feature, not ours, and the app cannot
+fix it when they get it wrong.
+
+**Stall detection and the auto-switch countdown are still missing**, and for a
+reason that will not go away: they need to know a video *stopped* advancing, and
+a provider that never reports is indistinguishable from one that has stalled.
+`player.dismissSuggestion` stays a no-op because nothing can raise a suggestion.
+
+### What an outcome now means
+
+A play used to be recorded as a successful stream the instant its URL was handed
+to the iframe. That marked every attempt a success, so the source picker's dots
+were green across the board and `automaticOrder` saw an unbroken run of wins for
+everything ever opened. It was not a ranking, it was a list of things that had
+been clicked.
+
+Outcomes are now settled on *leaving* a provider, with three answers:
+
+- **stream** — it reported a position, or it held the screen for a minute.
+- **failed** — the user switched away from it inside twenty seconds. Only
+  switching counts; closing the player quickly means they changed their mind
+  about watching, which says nothing about the source.
+- **nothing at all** — anything else. This is the important one. A provider that
+  demonstrated neither success nor failure stays exactly where the user's own
+  ordering put it, and guessing in either direction is what produced the useless
+  ranking in the first place.
 
 **The chrome bar does not auto-hide.** On desktop it fades and returns when the
 pointer nears the top edge, half of that signal arriving from the player view's

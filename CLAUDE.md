@@ -217,6 +217,23 @@ segments for several seconds after the iframe is navigated away, so a sweep
 that switches provider and starts counting immediately credits each one with
 its predecessor's stream. Blank the surface, wait, then count — the probe does.
 
+**A provider's position can be read, and the way to check is to listen.** Some
+providers `postMessage` their playback position to the framing window — see
+`src/main/playermessage.ts` for the measured payloads. Surveying a new one takes
+one paste into the running app:
+
+```js
+window.__m = []
+addEventListener('message', (e) => {
+  if (e.source === document.querySelector('#wta-player-surface iframe')?.contentWindow)
+    window.__m.push(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))
+})
+```
+
+Give it thirty seconds *with the video actually playing* — several providers say
+nothing at all until their `<video>` exists, and a survey taken off the poster
+screen concludes they are silent when they are not.
+
 **The app's own layers, and what may paint over what.** The video is an
 `<iframe>` at z-index 299, `PlayerFrame`'s slot is a transparent hole at 300,
 and `PlayerChrome` is mounted into its own host at 400. This is the inverse of
