@@ -436,7 +436,7 @@ export async function runExtractCli(providers: Provider[], argv: string[]): Prom
   const results: ExtractResult[] = []
   for (const provider of targets) {
     process.stderr.write(`  … ${provider.id}\n`)
-    const result = await extractStream(provider, subject, options.timeoutMs)
+    const result = await extractStream(provider, subject, options.timeoutMs, options.verbose)
     results.push(result)
 
     const bits = [
