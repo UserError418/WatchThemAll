@@ -269,7 +269,22 @@ export interface ReleaseTracker {
   lastChecked: number
 }
 
-/** One play event. Append-only; the Watchlist tab renders it as a timeline. */
+/**
+ * One play event — the History tab's raw material.
+ *
+ * Written when a title is opened, then *amended* when the player is left, which
+ * is the only moment anything knows how long it actually ran. That two-step is
+ * why the tail of this interface is optional: an entry that was opened but
+ * never settled — the app was killed, the device slept — keeps its `watchedAt`
+ * and simply has nothing to say about duration. So do all entries written
+ * before 1.5.3.
+ *
+ * Optional rather than defaulted on migration on purpose. The export format is
+ * shared with the Android app and the ReelVault extension and is frozen; adding
+ * fields an older reader can ignore costs nothing, while rewriting every
+ * existing record would restamp the whole collection and hand the migrating
+ * device every conflict on the next sync.
+ */
 export interface HistoryEntry {
   id: string
   tmdbId: number
@@ -279,6 +294,14 @@ export interface HistoryEntry {
   season: number | null
   episode: number | null
   watchedAt: number
+  /** How long the player actually ran, in milliseconds. */
+  playedMs?: number
+  /** Where the video was left, in seconds, when a provider reported it. */
+  seconds?: number | null
+  /** How long the whole thing is, in seconds, when a provider reported it. */
+  duration?: number | null
+  /** Whether this settled as watched — the same judgement the library uses. */
+  completed?: boolean
 }
 
 /**
@@ -483,7 +506,15 @@ export interface Settings {
    * are hovering.
    */
   previewAudio: boolean
-  /** Watchlist view: whether the History section is folded away. */
+  /**
+   * Dead since 1.5.3, when History became its own tab and stopped being a
+   * collapsible section at the bottom of the Watchlist.
+   *
+   * Kept because removing a field from `Settings` is a schema change: the
+   * export format is shared with the Android app and the ReelVault extension,
+   * and a document written by this version still has to load in an older one.
+   * Nothing reads it.
+   */
   historyCollapsed: boolean
   /**
    * Look up where each episode's intro is, so the player can offer to skip it.

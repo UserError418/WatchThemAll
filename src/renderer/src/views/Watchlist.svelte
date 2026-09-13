@@ -1,17 +1,19 @@
 <script lang="ts">
   /**
-   * The Watchlist surface: what the user is watching, plus the history timeline.
+   * The Watchlist surface: what the user is part-way through.
    *
-   * Two sections rather than two tabs, because they answer the same question
-   * ("what have I been watching") at different granularities, and splitting
-   * them further would mean another click to see the thing you just watched.
+   * It used to carry the history timeline underneath, folded away behind a
+   * disclosure. That arrangement lost the argument twice over — the fold was
+   * closed by default so the timeline was invisible, and a list squeezed into
+   * the bottom of another tab could never grow into anything that answered a
+   * question. History is its own tab now; this one is only the active list.
    */
   import type { MediaSummary } from '@shared/types'
   import type { MalPreview } from '@shared/ipc'
   import MalImportDialog from '../components/MalImportDialog.svelte'
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
-  import { episodeCode, runtime, timeAgo } from '../lib/format'
+  import { episodeCode, runtime } from '../lib/format'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -21,18 +23,6 @@
 
   type Filter = 'all' | 'tv' | 'movie'
   let filter = $state<Filter>('all')
-  let historyQuery = $state('')
-
-  /**
-   * History folds away, and the watchlist takes the room.
-   *
-   * The two sections compete for one screen and they are not equally urgent:
-   * the watchlist is what you came to act on, history is what you came to
-   * remember. Collapsing history is the cheap way to give the active list the
-   * whole page, so the tiles get larger and the progress bar becomes readable
-   * at a glance instead of being a two-pixel line under a thumbnail.
-   */
-  const historyCollapsed = $derived(library.settings.historyCollapsed)
 
   interface Progress {
     /** 0–100, or null when the series total is not known yet. */
@@ -91,11 +81,6 @@
   const entries = $derived(
     filter === 'all' ? library.watchlist : library.watchlist.filter((w) => w.type === filter),
   )
-
-  const history = $derived.by(() => {
-    const q = historyQuery.trim().toLowerCase()
-    return q ? library.history.filter((h) => h.title.toLowerCase().includes(q)) : library.history
-  })
 
   /**
    * Watchlist entries are not `MediaSummary`, but the detail overlay only needs
@@ -213,7 +198,7 @@
         position.
       </p>
     {:else}
-      <div class="grid" class:roomy={historyCollapsed}>
+      <div class="grid">
         {#each entries as entry (entry.id)}
           {@const poster = posterUrl(entry.posterPath)}
           {@const progress = progressOf(entry)}
@@ -256,73 +241,6 @@
     {/if}
   </section>
 
-  <section>
-    <header class="section-head">
-      <button
-        class="disclosure"
-        onclick={() => library.setHistoryCollapsed(!historyCollapsed)}
-        aria-expanded={!historyCollapsed}
-        title={historyCollapsed ? 'Show history' : 'Hide history and give the watchlist the room'}
-      >
-        <span class="chevron" class:collapsed={historyCollapsed} aria-hidden="true">⌄</span>
-        <h2>History</h2>
-        {#if library.history.length > 0}
-          <span class="count">{library.history.length}</span>
-        {/if}
-      </button>
-
-      {#if !historyCollapsed}
-        <div class="history-tools">
-          {#if library.history.length > 0}
-            <input
-              bind:value={historyQuery}
-              type="search"
-              placeholder="Filter history…"
-              aria-label="Filter history"
-            />
-            <button class="ghost" onclick={() => library.clearHistory()}>Clear all</button>
-          {/if}
-        </div>
-      {/if}
-    </header>
-
-    {#if historyCollapsed}
-      <!-- Nothing rendered while collapsed: the point is the vertical space,
-           and a placeholder would give most of it straight back. -->
-    {:else if library.history.length === 0}
-      <p class="state">Nothing watched yet. Hitting play anywhere records it here.</p>
-    {:else if history.length === 0}
-      <p class="state">No history matches “{historyQuery.trim()}”.</p>
-    {:else}
-      <ul class="history">
-        {#each history as item (item.id)}
-          {@const thumb = posterUrl(item.posterPath, 'w154')}
-          <li>
-            <button class="history-main" onclick={() => onselect(asMedia(item))}>
-              {#if thumb}
-                <img src={thumb} alt="" loading="lazy" decoding="async" width="34" height="51" />
-              {:else}
-                <span class="history-thumb-empty" aria-hidden="true"></span>
-              {/if}
-              <span class="history-title">{item.title}</span>
-              <span class="history-meta">
-                {#if item.season != null && item.episode != null}
-                  {episodeCode(item.season, item.episode)} ·
-                {/if}
-                {timeAgo(item.watchedAt)}
-              </span>
-            </button>
-            <button
-              class="remove"
-              onclick={() => library.removeHistoryEntry(item.id)}
-              aria-label="Remove this history entry"
-              title="Remove">✕</button
-            >
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
 </div>
 
 {#if malPreview}
@@ -401,33 +319,6 @@
     color: var(--text-primary);
   }
 
-  .history-tools {
-    display: flex;
-    gap: var(--space-2);
-    align-items: center;
-  }
-
-  input {
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-md);
-    background: var(--bg-raised);
-    border: 1px solid var(--border-subtle);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    -webkit-user-select: text;
-    user-select: text;
-  }
-
-  .ghost {
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-md);
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-  }
-  .ghost:hover {
-    color: var(--danger);
-  }
-
   /**
    * `auto-fit`, not `auto-fill`, and that one word is the whole fix.
    *
@@ -452,21 +343,6 @@
   .grid > :global(*) {
     width: 100%;
     max-width: calc(var(--poster-width) * 1.9);
-  }
-
-  /**
-   * With history folded away the watchlist owns the page, so the tiles grow
-   * into it rather than the section just ending higher up. Bigger tiles are
-   * the actual payoff of collapsing; leaving the grid unchanged would make the
-   * toggle feel like it did nothing but move a heading.
-   */
-  .grid.roomy {
-    grid-template-columns: repeat(auto-fit, minmax(calc(var(--poster-width) * 1.45), 1fr));
-    gap: var(--space-6) var(--space-4);
-  }
-
-  .grid.roomy > :global(*) {
-    max-width: calc(var(--poster-width) * 2.4);
   }
 
   /** Watched-through fraction, drawn along the foot of the artwork. */
@@ -514,40 +390,6 @@
 
   .pct {
     color: var(--accent-hover);
-  }
-
-  /* The History heading is the toggle, so the whole row is the hit target. */
-  .disclosure {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    margin-left: calc(var(--space-2) * -1);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-  }
-
-  .disclosure:hover {
-    background: var(--bg-raised);
-  }
-
-  .chevron {
-    display: inline-block;
-    color: var(--text-tertiary);
-    transition: transform var(--dur-fast) var(--ease-out);
-  }
-
-  .chevron.collapsed {
-    transform: rotate(-90deg);
-  }
-
-  .count {
-    padding: 0 6px;
-    border-radius: var(--radius-full);
-    background: var(--bg-elevated);
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    font-variant-numeric: tabular-nums;
   }
 
   .tile {
@@ -627,60 +469,9 @@
   }
 
   .tile:hover .remove,
-  li:hover .remove,
-  .remove:focus-visible {
-    opacity: 1;
-  }
 
   .remove:hover {
     color: var(--danger);
-  }
-
-  .history {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .history li {
-    position: relative;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .history-main {
-    display: grid;
-    grid-template-columns: 34px 1fr auto;
-    align-items: center;
-    gap: var(--space-3);
-    width: 100%;
-    padding: var(--space-2) var(--space-6) var(--space-2) var(--space-2);
-    text-align: left;
-    border-radius: var(--radius-sm);
-  }
-
-  .history-main:hover {
-    background: var(--bg-raised);
-  }
-
-  .history-main img,
-  .history-thumb-empty {
-    width: 34px;
-    height: 51px;
-    border-radius: var(--radius-sm);
-    object-fit: cover;
-    background: var(--bg-elevated);
-  }
-
-  .history-title {
-    font-size: var(--text-sm);
-  }
-
-  .history-meta {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    white-space: nowrap;
   }
 
   .state {

@@ -141,6 +141,7 @@ export const EV = {
   navigate: 'evt:navigate',
   releaseFound: 'evt:release-found',
   episodeWatched: 'evt:episode-watched',
+  playbackSettled: 'evt:playback-settled',
   storeChanged: 'evt:store-changed',
   /**
    * Whether anything is currently playing.
@@ -583,6 +584,32 @@ export interface WtaApi {
         type: MediaType
         season: number | null
         episode: number | null
+      }) => void,
+    ): () => void
+    /**
+     * A play has ended, whatever it amounted to.
+     *
+     * The sibling of `episodeWatched`, and deliberately not merged with it:
+     * that one is a *verdict* and fires only when the threshold was met, while
+     * this one is a *measurement* and fires every time. The History tab needs
+     * the measurement — "you gave this eleven minutes and stopped" is exactly
+     * the fact a timeline is for, and it is the one thing an event that only
+     * reports successes can never carry.
+     *
+     * `seconds` and `duration` are null for a provider that reports no
+     * position, which is the normal case on Android. `playedMs` is always
+     * known, because it is measured here rather than asked of the page.
+     */
+    playbackSettled(
+      cb: (payload: {
+        tmdbId: number
+        type: MediaType
+        season: number | null
+        episode: number | null
+        playedMs: number
+        seconds: number | null
+        duration: number | null
+        watched: boolean
       }) => void,
     ): () => void
     storeChanged(cb: () => void): () => void
