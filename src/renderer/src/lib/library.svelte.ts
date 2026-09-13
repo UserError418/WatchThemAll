@@ -34,6 +34,25 @@ const newId = (): string => crypto.randomUUID()
 /** Episodes are keyed `"season:episode"` in `watchedEpisodes`. */
 export const episodeKey = (season: number, episode: number): string => `${season}:${episode}`
 
+/**
+ * A history list in the order a timeline needs, newest first.
+ *
+ * Applied on every read from the store, because the stored order is not the
+ * timeline order and was never going to be. `StoreCore.replaceAll` walks the
+ * records it already holds before appending the ones it does not, so a
+ * collection rewritten wholesale on every change settles into the order things
+ * were *first* written, permuted by every dedupe since. A real five-row history
+ * read 6 Sep, 6 Sep, 12 Sep, 12 Sep, 12 Sep in that order — which is no order
+ * at all, and is what "history stopped working" looked like from outside.
+ *
+ * Sorted here rather than in the view so every consumer agrees: `ContinueRow`
+ * and the taste weighting both read `library.history` and both treat position
+ * as recency.
+ */
+function newestFirst(entries: HistoryEntry[]): HistoryEntry[] {
+  return [...entries].sort((a, b) => b.watchedAt - a.watchedAt)
+}
+
 class Library {
   watchlist = $state<WatchlistEntry[]>([])
   trackers = $state<ReleaseTracker[]>([])
@@ -88,7 +107,7 @@ class Library {
     ])
     this.watchlist = store.watchlist
     this.trackers = store.trackers
-    this.history = store.history
+    this.history = newestFirst(store.history)
     this.settings = store.settings
     // `providers.list()` already returns catalog + custom merged; the separate
     // copy is what gets persisted, so the two must not be conflated.
@@ -180,7 +199,7 @@ class Library {
     const store = await window.wta.store.read()
     this.watchlist = store.watchlist
     this.trackers = store.trackers
-    this.history = store.history
+    this.history = newestFirst(store.history)
     this.settings = store.settings
     this.activeProviderIds = store.activeProviderIds
     this.knownProviderIds = store.knownProviderIds ?? []
@@ -419,7 +438,7 @@ class Library {
       watchedAt: Date.now(),
     }
 
-    this.history = [entry, ...withoutDuplicate].slice(0, Library.HISTORY_LIMIT)
+    this.history = newestFirst([entry, ...withoutDuplicate]).slice(0, Library.HISTORY_LIMIT)
 
     /**
      * Records the *position*, not that it was watched.
@@ -439,6 +458,93 @@ class Library {
     }
 
     void this.persist({ history: this.history, watchlist: this.watchlist })
+  }
+
+  /**
+   * Amend the entry this play created with what the play amounted to.
+   *
+   * `recordWatch` runs when the player opens and can only record *that* it
+   * opened; how long it ran is known exactly once, on the way out. So the two
+   * halves are written at different times against the same row, matched on the
+   * title and episode rather than on an id — the id never left the renderer,
+   * and main, which is what settles the play, has no way to learn it.
+   *
+   * The newest matching row wins, which is what `findIndex` over a
+   * newest-first list gives.
+   *
+   * `playedMs` accumulates rather than replacing: stepping away from an episode
+   * and back inside one session settles twice against the same row, and
+   * "eleven minutes, then nine more" is twenty minutes of watching by any
+   * reading a user would recognise.
+   */
+  notePlayback(settled: {
+    tmdbId: number
+    season: number | null
+    episode: number | null
+    playedMs: number
+    seconds: number | null
+    duration: number | null
+    watched: boolean
+  }): void {
+    const at = this.history.findIndex(
+      (h) =>
+        h.tmdbId === settled.tmdbId && h.season === settled.season && h.episode === settled.episode,
+    )
+    const existing = at === -1 ? this.openRow(settled) : this.history[at]
+    if (!existing) return
+
+    const amended: HistoryEntry = {
+      ...existing,
+      playedMs: (existing.playedMs ?? 0) + Math.max(0, Math.round(settled.playedMs)),
+      // A reading is only worth keeping when the provider gave one; null must
+      // not overwrite a position an earlier settle managed to read.
+      seconds: settled.seconds ?? existing.seconds ?? null,
+      duration: settled.duration ?? existing.duration ?? null,
+      completed: existing.completed === true || settled.watched,
+    }
+
+    this.history = newestFirst(
+      at === -1 ? [amended, ...this.history] : this.history.map((h, i) => (i === at ? amended : h)),
+    ).slice(0, Library.HISTORY_LIMIT)
+    void this.persist({ history: this.history })
+  }
+
+  /**
+   * A row for an episode that was never explicitly opened.
+   *
+   * `recordWatch` runs from the detail overlay's play button, so it sees only
+   * the episode the user *chose*. Stepping forward with the player's own next
+   * control, or letting it auto-advance at the credits, changes what is playing
+   * without going anywhere near that code — which meant an evening spent
+   * watching four episodes recorded exactly one. That is the shape of "history
+   * stopped tracking what I watched", and it is why this exists.
+   *
+   * The title and the artwork come from whatever the library already knows
+   * about the show: the row for the episode the user did open, failing that the
+   * watchlist. If neither knows it, there is nothing worth putting on a
+   * timeline and the settle is dropped.
+   */
+  private openRow(settled: { tmdbId: number; season: number | null; episode: number | null }):
+    | HistoryEntry
+    | undefined {
+    const sibling = this.history.find((h) => h.tmdbId === settled.tmdbId)
+    const tracked = this.watchlistEntry(settled.tmdbId)
+    const source = sibling ?? tracked
+    if (source === undefined) return undefined
+
+    return {
+      id: newId(),
+      tmdbId: settled.tmdbId,
+      type: source.type,
+      title: source.title,
+      posterPath: source.posterPath,
+      season: settled.season,
+      episode: settled.episode,
+      // The play is being settled now, so now is when it ended. Close enough to
+      // when it started for a timeline, and the only honest number available:
+      // nothing recorded the moment the player stepped over.
+      watchedAt: Date.now(),
+    }
   }
 
   removeHistoryEntry(id: string): void {
@@ -785,16 +891,6 @@ class Library {
    */
   setSkipIntro(on: boolean): void {
     this.settings = { ...this.settings, skipIntro: on }
-    void this.persist({ settings: this.settings })
-  }
-
-  /**
-   * Persisted rather than component-local, because the renderer is served from
-   * an ephemeral port and `localStorage` is keyed by origin — it would be a
-   * fresh, empty store on every launch.
-   */
-  setHistoryCollapsed(collapsed: boolean): void {
-    this.settings = { ...this.settings, historyCollapsed: collapsed }
     void this.persist({ settings: this.settings })
   }
 

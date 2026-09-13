@@ -293,6 +293,24 @@ function settleProgress(
     fallbackMs: WATCHED_FALLBACK_MS,
     ended: position?.ended ?? false,
   })
+  /**
+   * The measurement goes out whatever the verdict.
+   *
+   * History wants to record eleven minutes of something abandoned just as much
+   * as a finished episode; an event that only fired on success could not say
+   * so, which is why this is not folded into `episodeWatched` below.
+   */
+  send(EV.playbackSettled, {
+    tmdbId: context.tmdbId,
+    type: context.type,
+    season: context.season,
+    episode: context.episode,
+    playedMs,
+    seconds: position?.seconds ?? null,
+    duration: position?.duration ?? null,
+    watched,
+  })
+
   if (!watched) return
 
   send(EV.episodeWatched, {

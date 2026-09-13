@@ -16,12 +16,13 @@
   import Watchlist from './views/Watchlist.svelte'
   import Watched from './views/Watched.svelte'
   import Releases from './views/Releases.svelte'
+  import History from './views/History.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
   import DetailOverlay from './components/DetailOverlay.svelte'
   import PlayerFrame from './components/PlayerFrame.svelte'
   import ProviderPanel from './components/ProviderPanel.svelte'
 
-  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases'
+  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases' | 'history'
 
   /**
    * Search is not among these on purpose.
@@ -37,6 +38,7 @@
     { id: 'watchlist', label: 'Watchlist' },
     { id: 'watched', label: 'Watched' },
     { id: 'releases', label: 'Releases' },
+    { id: 'history', label: 'History' },
   ]
 
   let tab = $state<Tab>('browse')
@@ -149,6 +151,18 @@
 
         library.setPosition(tmdbId, season, episode)
         library.setWatched(tmdbId, season, episode, true)
+      }),
+      window.wta.on.playbackSettled((settled) => {
+        /**
+         * What the play amounted to, whatever it amounted to.
+         *
+         * Its sibling above is a verdict and fires only on success; this is the
+         * measurement and fires every time, which is what lets the History tab
+         * say "you gave this eleven minutes and stopped". Nothing is filtered
+         * here — an entry for a title outside the watchlist is still a thing
+         * that happened.
+         */
+        library.notePlayback(settled)
       }),
     ]
     return () => off.forEach((unsubscribe) => unsubscribe())
@@ -342,6 +356,8 @@
       <Watchlist onselect={(m) => (selected = m)} />
     {:else if tab === 'watched'}
       <Watched onselect={(m) => (selected = m)} />
+    {:else if tab === 'history'}
+      <History onselect={(m) => (selected = m)} />
     {:else}
       <Releases onselect={(m) => (selected = m)} />
     {/if}

@@ -88,6 +88,7 @@ const api: WtaApi = {
     navigate: (cb) => subscribe(EV.navigate, cb),
     releaseFound: (cb) => subscribe(EV.releaseFound, cb),
     episodeWatched: (cb) => subscribe(EV.episodeWatched, cb),
+    playbackSettled: (cb) => subscribe(EV.playbackSettled, cb),
     storeChanged: (cb) => subscribe(EV.storeChanged, cb),
     playbackActive: (cb) => subscribe(EV.playbackActive, cb),
     playerState: (cb) => subscribe(EV.playerState, cb),

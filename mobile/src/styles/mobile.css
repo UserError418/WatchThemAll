@@ -31,7 +31,7 @@
     The desktop nav puts the tabs beside the brand, which on a 390px screen
     leaves the search field about eighty pixels wide. Phones solve this with a
     bottom bar, and it is not only a space argument: the top of a 6.7" screen
-    is out of thumb reach, and these four tabs are the app's primary
+    is out of thumb reach, and these five tabs are the app's primary
     navigation.
   */
   --nav-height: 54px;
@@ -180,7 +180,7 @@ body {
 :root .tabs button {
   flex: 1 1 0;
   /* Column, so the count badge sits under its label rather than pushing the
-     label off-centre and making the four tabs different widths. */
+     label off-centre and making the five tabs different widths. */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -192,6 +192,14 @@ body {
   font-size: var(--text-xs);
   font-weight: var(--weight-emphasis);
   letter-spacing: var(--tracking-snug);
+  /*
+    Five tabs on a 360px screen is 72px each, and "Watchlist" is the longest
+    label. Wrapping it to two lines would make that one tab taller than the
+    rest and knock the row off its baseline, so the label is allowed to shrink
+    instead — the active-tab bar above it carries the state either way.
+  */
+  min-width: 0;
+  white-space: nowrap;
 }
 
 /*
@@ -533,4 +541,23 @@ body {
 #wta-player-chrome .ghost {
   min-height: 40px;
   padding: 10px 12px;
+}
+
+/* ── The History calendar ─────────────────────────────────────────────────
+ *
+ * Twenty-six weeks is 26 columns plus gaps — about 390px at the desktop size,
+ * which is the entire width of a phone. The strip already scrolls and is
+ * already anchored to the most recent week; what the phone needs on top is a
+ * square big enough to hit, because each one is a button and 12px is below
+ * every touch guideline there is.
+ *
+ * Both values are custom properties declared by `History.svelte`, so this is
+ * an ordinary cascade rather than a specificity fight with Svelte's scoping —
+ * the same reason the rest of this file is mostly token values.
+ */
+:root {
+  --heat-cell: 15px;
+  /* Bleed to the window edges so the strip reads as scrollable rather than as
+     a clipped block, which is the usual way this pattern goes wrong. */
+  --heat-bleed: var(--space-4);
 }
