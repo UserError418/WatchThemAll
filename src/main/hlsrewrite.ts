@@ -91,6 +91,51 @@ export function isPlaylist(body: string): boolean {
 }
 
 /**
+ * A fragmented-MP4 *initialisation* segment, which is not a video.
+ *
+ * It is served as `video/mp4`, it is the first media-shaped thing a player
+ * fetches, and it declares the film's real duration - so a receiver handed one
+ * reports the correct runtime and then shows nothing at all. Measured against a
+ * real Chromecast: `duration: 2706.287` for a 45-minute episode, position stuck
+ * at zero, and a PLAY that changes neither. It reads as a decoder problem and
+ * is not one; there is simply no picture in the file.
+ *
+ * `mvex` is the tell. It appears only in the `moov` of a fragmented stream,
+ * where it declares that the samples arrive later in separate fragments - so
+ * `mvex` present and `mdat` absent means the header without any of the media.
+ * Box names are ASCII and survive a UTF-8 decode of the head of the file
+ * unchanged, which is what lets this be a string test over the same sniffed
+ * body every other check here uses.
+ */
+export function isFragmentInitSegment(body: string): boolean {
+  return (
+    body.includes('ftyp') && body.includes('moov') && body.includes('mvex') && !body.includes('mdat')
+  )
+}
+
+/**
+ * Whether an MP4-ish body is a whole film rather than one piece of one.
+ *
+ * Casting a piece is a plausible-looking disaster: the television plays six
+ * seconds and stops, which reads as a stream that died. Two shapes are pieces,
+ * and both are served as `video/mp4` exactly like the real thing.
+ *
+ * - An *initialisation* segment: the header with no media. `isFragmentInitSegment`.
+ * - A *media fragment*: `styp`/`moof` and samples, but no `moov` of its own.
+ *   `moof` is the tell, and it never appears in a self-contained file.
+ *
+ * Stated as a rejection rather than a recognition on purpose. The body is only
+ * the first couple of megabytes, and an MP4 that was never prepared for
+ * streaming keeps its `moov` at the *end* — so requiring `moov` to be present
+ * would throw away perfectly good films, while requiring `moof` to be absent
+ * throws away only fragments.
+ */
+export function isWholeVideoFile(body: string): boolean {
+  if (isFragmentInitSegment(body)) return false
+  return !body.includes('moof')
+}
+
+/**
  * Resolve a playlist reference against the playlist's own URL.
  *
  * Returns null for anything that will not resolve, which the caller leaves
