@@ -472,15 +472,22 @@
           fact on this bar — the picture in front of the user is not where the
           film is any more — so it says the device's name rather than an icon
           that could mean either thing.
+
+          The word is in its own span because on a phone it has to go. A series
+          adds an Episodes button, and Back + ↻ + Episodes + Cast + source is
+          five pixels wider than a 412px viewport — measured, with the source
+          button hanging off the right edge. The symbol stays, the panel still
+          names the device, and nothing is clipped.
         -->
         <button
           class="ghost cast"
           class:active={panel === 'cast'}
           class:casting={castStatus?.connected === true}
-          title="Play on a TV"
+          title={castStatus?.connected ? `Playing on ${castStatus.deviceName}` : 'Play on a TV'}
           onclick={openCast}
         >
-          {castStatus?.connected ? `▣ ${castStatus.deviceName}` : '▣ Cast'}
+          <span class="glyph" aria-hidden="true">▣</span>
+          <span class="label">{castStatus?.connected ? castStatus.deviceName : 'Cast'}</span>
         </button>
       {/if}
 
@@ -964,6 +971,49 @@
     background: rgba(91, 157, 250, 0.22);
     border-color: rgba(91, 157, 250, 0.55);
     color: #cfe0ff;
+  }
+
+  .ghost.cast {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A television can be called anything at all, and some of them are called
+     "Wohnzimmer Chromecast Ultra". Bounded here rather than trusted. */
+  .ghost.cast .label {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /*
+    On a phone the word does not fit, and this is measured rather than guessed:
+    with a series on screen the bar runs 417px wide inside a 412px viewport, so
+    the source button — the one people reach for when a provider fails — hangs
+    off the edge. The symbol carries the button on its own; the panel and the
+    tooltip still name the device.
+  */
+  @media (max-width: 470px) {
+    .ghost.cast .label {
+      display: none;
+    }
+
+    /* Without the word, padding alone leaves a 35px target — under the 48dp
+       Material minimum, and this is a button pressed with a thumb while the
+       film is already playing. The width comes back out of the gaps rather
+       than out of the source button, which must not be squeezed: it is the one
+       people reach for when a provider has just failed them. */
+    .ghost.cast {
+      gap: 0;
+      min-width: 44px;
+      justify-content: center;
+    }
+
+    .bar {
+      gap: 8px;
+    }
   }
 
   .cast-panel {
