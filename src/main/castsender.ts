@@ -187,6 +187,10 @@ export class CastSession {
       throw new Error('the TV started its media player but did not say where to reach it')
     }
 
+    // A relaunch means the media session behind the old id is gone; keeping it
+    // would let a later `control()` address a session the receiver forgot.
+    if (this.transportId !== app.transportId) this.mediaSessionId = null
+
     this.transportId = app.transportId
     // The CONNECT that is easy to miss. Without it, LOAD below is dropped in
     // silence and the television sits on its idle screen.
@@ -197,6 +201,24 @@ export class CastSession {
   /* ── Playback ─────────────────────────────────────────────────────────── */
 
   async load(media: CastMedia): Promise<void> {
+    if (!this.socket) throw new Error('not connected to a TV')
+
+    /*
+     * Relaunch before every load, rather than trusting the transport id from
+     * `connect()`.
+     *
+     * The Default Media Receiver shuts itself down after a spell with nothing
+     * playing, and it takes its transport id with it. The socket survives —
+     * the platform receiver is still there and still answering heartbeats — so
+     * nothing here notices, and the next LOAD is addressed to an application
+     * that no longer exists and is dropped without a reply. The user sees a
+     * cast that worked once and then never again, from the same app, the same
+     * provider and the same television.
+     *
+     * LAUNCH is idempotent: for an app that is already running it returns the
+     * running session, so this costs one round trip and nothing else.
+     */
+    await this.launch()
     if (!this.transportId) throw new Error('not connected to a TV')
 
     const answer = await this.request(

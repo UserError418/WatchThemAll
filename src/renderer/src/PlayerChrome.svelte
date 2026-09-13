@@ -24,6 +24,7 @@
 } from '@shared/ipc'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
+  import { clock } from './lib/format'
 
   const BAR_HEIGHT = 56
   const EPISODE_PANEL_HEIGHT = 226
@@ -125,6 +126,64 @@
   /** The cast panel's rendered height, bound from the DOM. See `panelHeight`. */
   let castPanelHeight = $state(0)
 
+  /*
+   * Scrubbing, and why the slider does not simply show `castStatus.seconds`.
+   *
+   * Two moments would fight with the once-a-second poll. While a thumb is being
+   * dragged, every tick would yank it back to where the television still is;
+   * and just after a seek is committed, the television keeps reporting the old
+   * position for a beat, so the thumb would snap back and then jump forward —
+   * which reads as the seek having been ignored, and invites a second one.
+   *
+   * So a locally-held value wins for as long as it is fresh, and the poll takes
+   * over again once the television has caught up.
+   */
+  const SCRUB_HOLD_MS = 2500
+  let scrubHeld = $state(0)
+  let scrubHeldUntil = $state(0)
+  /** Re-evaluated by the same tick that polls status, so the hold can expire. */
+  let now = $state(Date.now())
+
+  const scrubSeconds = $derived(
+    now < scrubHeldUntil ? scrubHeld : (castStatus?.seconds ?? 0),
+  )
+
+  function onScrubInput(value: number): void {
+    scrubHeld = value
+    // Dragging is a stream of `input` events; the hold is refreshed by each so
+    // it only starts expiring once the thumb is let go.
+    scrubHeldUntil = Date.now() + SCRUB_HOLD_MS
+    now = Date.now()
+  }
+
+  async function commitScrub(value: number): Promise<void> {
+    onScrubInput(value)
+    await send('seek', value)
+  }
+
+  /** Jump relative to where the television actually is, clamped to the film. */
+  async function nudge(delta: number): Promise<void> {
+    const duration = castStatus?.duration ?? 0
+    const target = Math.max(0, Math.min(scrubSeconds + delta, duration > 0 ? duration : Infinity))
+    await commitScrub(target)
+  }
+
+  /**
+   * One path for every transport command, so a failure is never silent.
+   *
+   * The television is across the room; a button that did nothing and said
+   * nothing is indistinguishable from one that worked and a picture nobody is
+   * looking at.
+   */
+  async function send(action: 'play' | 'pause' | 'stop' | 'seek', seconds = 0): Promise<void> {
+    try {
+      await api.cast.control(action, seconds)
+      castStatus = await api.cast.status()
+    } catch (error) {
+      castError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   $effect(() => {
     void api?.cast.available().then((yes) => (castAvailable = yes))
   })
@@ -142,7 +201,10 @@
     if (!castAvailable) return
     if (panel !== 'cast' && !castStatus?.connected) return
 
-    const tick = (): void => void api?.cast.status().then((next) => (castStatus = next))
+    const tick = (): void => {
+      now = Date.now()
+      void api?.cast.status().then((next) => (castStatus = next))
+    }
     tick()
     const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
@@ -630,12 +692,42 @@
               <span class="tag bad">stream ended</span>
             {/if}
           </div>
-          <div class="cast-controls">
-            <button class="source" onclick={() => void api.cast.status().then(() => {})}>
-              {castStatus.playing ? 'Playing' : 'Paused'}
-            </button>
-            <button class="source" onclick={() => void stopCasting()}>Stop casting</button>
+          <!--
+            Transport for the television.
+            
+            The picture is on the other side of the room, so this is the only
+            way to reach it — the provider's own controls drive the copy still
+            running in this window, not the one on the TV.
+          -->
+          <div class="scrub">
+            <span class="time">{clock(scrubSeconds)}</span>
+            <input
+              type="range"
+              min="0"
+              max={Math.max(castStatus.duration, 1)}
+              step="1"
+              value={scrubSeconds}
+              disabled={castStatus.duration <= 0}
+              aria-label="Position on the TV"
+              oninput={(event) => onScrubInput(event.currentTarget.valueAsNumber)}
+              onchange={(event) => void commitScrub(event.currentTarget.valueAsNumber)}
+            />
+            <span class="time">{clock(castStatus.duration)}</span>
           </div>
+
+          <div class="cast-controls">
+            <button class="tv" title="Back 30 seconds" onclick={() => void nudge(-30)}>-30s</button>
+            <button
+              class="tv wide"
+              title={castStatus.playing ? 'Pause on the TV' : 'Play on the TV'}
+              onclick={() => void send(castStatus?.playing ? 'pause' : 'play')}
+            >
+              {castStatus.playing ? '❚❚ Pause' : '▶ Play'}
+            </button>
+            <button class="tv" title="Forward 30 seconds" onclick={() => void nudge(30)}>+30s</button>
+          </div>
+
+          <button class="source stop" onclick={() => void stopCasting()}>Stop casting</button>
         {:else if castDevices.length === 0}
           <p class="hint">Looking for a TV on your Wi-Fi…</p>
         {:else}
@@ -1120,6 +1212,68 @@
 
   .cast-controls {
     display: flex;
+    gap: 6px;
+    padding: 4px 6px 6px;
+  }
+
+  /* The scrubber. Wide thumb and a tall hit area, because this is reached for
+     while looking at a television rather than at the slider. */
+  .scrub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 2px;
+  }
+
+  .scrub .time {
+    color: #9a9aa6;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    min-width: 34px;
+  }
+
+  .scrub .time:last-child {
+    text-align: right;
+  }
+
+  .scrub input[type='range'] {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: 0;
+    accent-color: #6ea8ff;
+    cursor: pointer;
+  }
+
+  .scrub input[type='range']:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  .tv {
+    flex: 1;
+    min-height: 32px;
+    padding: 0 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8e8ef;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .tv.wide {
+    flex: 1.6;
+  }
+
+  .tv:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .stop {
+    width: calc(100% - 12px);
+    margin: 0 6px 4px;
   }
 
   .hint.bad {
