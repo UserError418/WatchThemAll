@@ -23,15 +23,32 @@ mobile/android/app/src/main/assets/capacitor.config.json
 mobile/android/app/src/main/assets/capacitor.plugins.json
 
 # Personal deploy target: host, account and key path. Per-machine, never shared.
-scripts/deploy.env
 
 # Build-time OAuth client for sync. See .env.example.
 .env
 dist-release/
 
-# Personal deploy and release tooling: these drive an SSH install onto a
-# specific machine and publish a GitHub release from it. Kept out of the
-# public repository at the owner's request; the working copies live on the
-# machine that runs them.
-scripts/deploy-desktop.sh
-scripts/ship.sh
+# ── Not published ─────────────────────────────────────────────────────────
+#
+# These exist, they are maintained, and they are deliberately not in the
+# public repository. They stay on the machines that use them.
+#
+# The whole of scripts/ — the build, deploy, release, provisioning and
+# verification tooling. Some of it drives an SSH install onto a named machine
+# and publishes releases; the rest is a development harness that only makes
+# sense next to the hardware it drives. Note the consequence: `npm run apk`
+# points at scripts/build-apk.sh, so a fresh clone cannot build the APK
+# without these files. That is the intended trade.
+scripts/
+
+# The three long-form design documents. The reasoning in them is the
+# project's, not the reader's.
+docs/ARCHITECTURE.md
+docs/CYCLE-2.md
+docs/SYNC.md
+
+# Internal development logs, plans and backlogs. These are working notes for
+# whoever is building the thing, not documentation for whoever is using it —
+# they date fast, describe code that may not exist yet, and read as somebody's
+# private notebook. Anything of that kind goes here and stays local.
+docs/internal/

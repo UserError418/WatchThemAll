@@ -69,14 +69,16 @@ main process, which is what lets the app window run with `webSecurity: true`
 behind a CSP permitting only local files and `image.tmdb.org`. Player windows
 are the exception by necessity and are locked down in every other respect.
 
-Design decisions and their reasoning: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-**Read its "Hard-won constraints" section before touching the IPC boundary,
-season/episode positions, or provider selection** — each entry there is a bug
-that already happened once.
+Design decisions and their reasoning: `docs/ARCHITECTURE.md` — present in a
+working copy, gitignored, and **not published**, so it is a plain path rather
+than a link. **Read its "Hard-won constraints" section before touching the IPC
+boundary, season/episode positions, or provider selection** — each entry there
+is a bug that already happened once. `docs/CYCLE-2.md` and `docs/SYNC.md` are
+the same: local, maintained, unpublished.
 
 ## Testing
 
-Vitest. 457 tests across twenty-eight suites, concentrated on the code where
+Vitest. 539 tests across thirty-two suites, concentrated on the code where
 being wrong is silent rather than loud:
 
 - `migrate.test.ts` — schema migration and position repair. It runs on **every

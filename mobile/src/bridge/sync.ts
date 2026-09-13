@@ -21,8 +21,8 @@
  * directory is the boundary, which is the same boundary the library file itself
  * sits behind — so the token is no less protected than the data it protects.
  *
- * `mobile/BACKLOG.md` carries this as the one real gap against the desktop,
- * which stores the same token in the OS credential store.
+ * `mobile/README.md` carries this under "Known limitations" as the one real gap
+ * against the desktop, which stores the same token in the OS credential store.
  */
 
 import { Preferences } from '@capacitor/preferences'
@@ -38,9 +38,19 @@ import {
 import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
+import { dualStackFetch } from './net'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
 const TOKEN_KEY = 'sync.credentials'
+
+/**
+ * Every request in this file goes through `dualStackFetch` rather than `fetch`.
+ *
+ * Sync is the one feature here that talks to a host outside the app's control
+ * *and* has no cached answer to fall back on, so a single failed DNS lookup is
+ * the difference between working and an error message. See `./net` for why a
+ * second network stack exists and why only Google's hosts may use it.
+ */
 
 async function readCredentials(): Promise<StoredCredentials | null> {
   const { value } = await Preferences.get({ key: TOKEN_KEY })
@@ -92,7 +102,7 @@ export function createMobileSync(options: MobileSyncOptions) {
 
     if (access !== null && !isExpired(access)) return access.accessToken
 
-    const fresh = await refreshAccessToken(client, credentials.refreshToken)
+    const fresh = await refreshAccessToken(client, credentials.refreshToken, dualStackFetch)
     access = fresh
     // A refresh response usually omits the refresh token; keeping the old one
     // unless a new one actually arrives is what stops the app signing itself
@@ -108,7 +118,10 @@ export function createMobileSync(options: MobileSyncOptions) {
   }
 
   const currentRunner = (): SyncRunner => {
-    runner ??= new SyncRunner(options.host, createDriveBackend({ accessToken }))
+    runner ??= new SyncRunner(
+      options.host,
+      createDriveBackend({ accessToken, fetchImpl: dualStackFetch }),
+    )
     return runner
   }
 
@@ -160,7 +173,7 @@ export function createMobileSync(options: MobileSyncOptions) {
 
       pairing = new AbortController()
       try {
-        const challenge = await requestDeviceCode(client)
+        const challenge = await requestDeviceCode(client, dualStackFetch)
         update({
           state: 'pairing',
           error: null,
@@ -182,13 +195,16 @@ export function createMobileSync(options: MobileSyncOptions) {
          */
         void Browser
 
-        const tokens = await awaitAuthorization(client, challenge, { signal: pairing.signal })
+        const tokens = await awaitAuthorization(client, challenge, {
+          fetchImpl: dualStackFetch,
+          signal: pairing.signal,
+        })
         if (tokens.refreshToken === undefined) {
           throw new Error('Google returned no refresh token; sync would stop working within the hour.')
         }
 
         access = tokens
-        const accountEmail = await fetchAccountEmail(tokens.accessToken)
+        const accountEmail = await fetchAccountEmail(tokens.accessToken, dualStackFetch)
         credentials = {
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken,

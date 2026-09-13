@@ -6,8 +6,9 @@
  * rather than two ports of it. The only thing either platform supplies is where
  * to keep a refresh token, which is the one genuinely native concern.
  *
- * The design and the reasoning behind picking Google's device flow are in
- * `docs/SYNC.md`. This file is the contract that design produces.
+ * The reasoning behind picking Google's device flow lives in the project's
+ * sync design notes, which are not published. This file is the contract that
+ * design produces, and it is the part that has to be readable on its own.
  */
 
 import type { StoreDocument } from '../store/document'
