@@ -11,9 +11,10 @@
  * forgetting to register one. This does.
  */
 
-import { BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+import { BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { CH, EV } from '@shared/ipc'
+import { isOpenableExternally } from './externalurl'
 import type {
   DiscoverRequest,
   GenreRowRequest,
@@ -198,6 +199,25 @@ export function registerIpc(deps: IpcDeps): void {
     }
   })
   ipcMain.handle(CH.dataDir, () => store.dir)
+
+  /**
+   * Open a web address outside the app.
+   *
+   * `shell.openExternal` hands the string to the desktop environment, which
+   * resolves far more than http — so the guard is not optional, and it is
+   * shared with the phone rather than written twice.
+   */
+  ipcMain.handle(CH.openExternal, async (_e, url: string): Promise<boolean> => {
+    if (typeof url !== 'string' || !isOpenableExternally(url)) return false
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch {
+      // No browser, or the desktop environment refused. The caller keeps the
+      // address on screen either way.
+      return false
+    }
+  })
 
   /**
    * Sync.

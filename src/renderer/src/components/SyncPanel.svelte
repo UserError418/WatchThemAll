@@ -53,13 +53,52 @@
   const verificationHost = $derived(
     status.challenge?.verificationUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') ?? '',
   )
+
+  /**
+   * What the two shortcuts last did, so the buttons can say so.
+   *
+   * Both of them can fail for reasons nothing here can see — no browser, a
+   * denied clipboard permission, a user who dismissed the chooser — and a
+   * button that silently does nothing is worse than no button, because it
+   * leaves the user waiting for something that is not coming.
+   */
+  let opened = $state<'idle' | 'failed'>('idle')
+  let copied = $state<'idle' | 'done' | 'failed'>('idle')
+
+  async function openVerification(): Promise<void> {
+    const url = status.challenge?.verificationUrl
+    if (url === undefined) return
+    opened = (await window.wta.openExternal(url)) ? 'idle' : 'failed'
+  }
+
+  /**
+   * Put the code on the clipboard.
+   *
+   * Worth a button specifically because of the phone. Pairing sends the user to
+   * a browser, and on a phone that browser is usually *this same device* — so
+   * the code has to survive a trip out of the app and back, and retyping eight
+   * characters from memory is exactly where people give up.
+   */
+  async function copyCode(): Promise<void> {
+    const code = status.challenge?.userCode
+    if (code === undefined) return
+    try {
+      await navigator.clipboard.writeText(code)
+      copied = 'done'
+      setTimeout(() => (copied = 'idle'), 2000)
+    } catch {
+      // Denied, or no clipboard in this context. The code stays on screen and
+      // is `user-select: all`, so selecting it by hand still works.
+      copied = 'failed'
+    }
+  }
 </script>
 
 <section class="sync">
   <h3>Sync across your devices</h3>
 
   {#if status.state === 'pairing' && status.challenge}
-    <p class="lead">On any other device, open</p>
+    <p class="lead">On this or any other device, open</p>
     <p class="url">{verificationHost}</p>
     <p class="lead">and enter this code:</p>
     <p class="code">{status.challenge.userCode}</p>
@@ -70,6 +109,20 @@
         Expires in {expiresIn}. Waiting…
       {/if}
     </p>
+    <!--
+      The address and the code stay on screen above these, always. They are the
+      flow that works everywhere; the buttons are a shortcut for the device the
+      user is already holding, and a shortcut that fails must leave the long way
+      round intact.
+    -->
+    <div class="actions">
+      <button onclick={copyCode}>
+        {copied === 'done' ? 'Copied' : copied === 'failed' ? 'Select it above' : 'Copy code'}
+      </button>
+      <button onclick={openVerification}>
+        {opened === 'failed' ? 'Open it yourself' : 'Open page'}
+      </button>
+    </div>
     <div class="actions">
       <button onclick={() => window.wta.sync.cancel()}>Cancel</button>
     </div>

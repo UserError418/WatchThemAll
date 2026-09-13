@@ -65,9 +65,12 @@ import {
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
 import { checkAll } from '@main/releases'
+import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
 import { isWatchedEnough, resumeAction, resumeKey } from '@main/resume'
 import { App as CapacitorApp } from '@capacitor/app'
+import { Browser } from '@capacitor/browser'
+import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
 import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
@@ -717,6 +720,23 @@ export async function createBridge(): Promise<WtaApi> {
     void store.flush().catch(() => {})
   })
 
+  /**
+   * Tapping an episode notification.
+   *
+   * The desktop does exactly this and nothing more — focus the window, show the
+   * Releases tab — and matching it is the whole ambition here. A notification is
+   * an interruption the user chose to act on, so the right response is to put
+   * them where the thing they were told about is listed, not to guess at a
+   * deeper destination and be wrong.
+   *
+   * Registered on every launch rather than only on a warm resume: a notification
+   * is most often tapped when the app is *not* running, and the plugin holds the
+   * launching intent until a listener exists to receive it.
+   */
+  void LocalNotifications.addListener('localNotificationActionPerformed', () => {
+    navigate.emit('releases')
+  })
+
   void CapacitorApp.addListener('resume', sweepIfStale)
   // Also on launch: the app is "resumed" only on a *return*, and a cold start
   // after a week away is exactly when there is most to catch up on.
@@ -973,6 +993,30 @@ export async function createBridge(): Promise<WtaApi> {
         storeChanged.emit()
         return summary
       },
+    },
+
+    /**
+     * Open a web address outside the app.
+     *
+     * A Custom Tab rather than a plain intent, which matters for the one caller
+     * there is: it shares the system browser's cookies, so a user signing this
+     * app into their Google account is usually already signed in there, and the
+     * page lands ready to accept the code rather than on a login form.
+     *
+     * `Browser.open` resolves once Android has accepted the intent, which is
+     * not the same as a tab having appeared. The false this can return means
+     * the app refused to hand the URL over, not that displaying it failed.
+     */
+    openExternal: async (url: string): Promise<boolean> => {
+      if (!isOpenableExternally(url)) return false
+      try {
+        await Browser.open({ url })
+        return true
+      } catch {
+        // No browser and no Custom Tab provider at all. Rare, and survivable:
+        // the caller keeps the address on screen for the user to type.
+        return false
+      }
     },
 
     data: {

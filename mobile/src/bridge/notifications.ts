@@ -26,13 +26,31 @@
  * rebuilt from scratch each time, so the error self-heals the next time the app
  * is opened.
  *
- * ## Inexact on purpose
+ * ## Inexact on purpose, and the flag that actually says so
  *
- * Exact alarms need `SCHEDULE_EXACT_ALARM`, which on Android 14 is not granted
- * by default and sends the user to a system settings page to grant. An episode
- * notification that arrives within the hour is worth exactly as much as one
- * that arrives on the second, so `allowWhileIdle` and the exact flag are both
- * left off and Android is free to batch it.
+ * An episode notification that arrives within the hour is worth exactly as much
+ * as one that arrives on the second, so exact alarms are not wanted here. That
+ * was always the intent; for three versions it was expressed with the wrong
+ * flag.
+ *
+ * `allowWhileIdle: false` says "do not wake the device out of Doze". It says
+ * nothing about exactness. The flag that does is **`isExactNotification`, and
+ * it defaults to `true`** — so every `schedule()` call asked for an exact
+ * alarm, and `SCHEDULE_EXACT_ALARM` reaches the merged manifest from the
+ * plugin's own `AndroidManifest.xml` whether this app asks for it or not.
+ *
+ * On Android 12 and up that combination does something much worse than fail.
+ * The plugin sees the permission declared and not granted, and rather than
+ * degrading it launches `ACTION_REQUEST_SCHEDULE_EXACT_ALARM` — throwing the
+ * user out of the app and into the system's "Alarms & reminders" page — and
+ * leaves the `schedule()` promise unsettled until they come back. Measured on
+ * an Android 16 emulator: the settings page opened, the promise never resolved,
+ * and **no notification was ever posted**. Every release sweep did this.
+ *
+ * So `isExactNotification: false` is on every notification below, and it is not
+ * a tuning preference: it is what stops the release sweep from ejecting the
+ * user into system settings. `allowWhileIdle: false` stays for what it really
+ * means.
  */
 
 import { LocalNotifications } from '@capacitor/local-notifications'
@@ -139,6 +157,9 @@ export async function notifyFound(notices: ReleaseNotice[]): Promise<void> {
         body: `S${String(n.season).padStart(2, '0')}E${String(n.episode).padStart(2, '0')}${
           n.episodeName ? ` · ${n.episodeName}` : ''
         } is out`,
+        // Not exact — see the note at the top of this file. Without it the
+        // plugin sends the user to a settings page instead of notifying them.
+        isExactNotification: false,
         // No `schedule`, so it fires immediately.
       })),
     })
@@ -176,6 +197,7 @@ export async function syncScheduledReleases(trackers: ReleaseTracker[]): Promise
         body: `S${String(next.season).padStart(2, '0')}E${String(next.episode).padStart(2, '0')}${
           next.name ? ` · ${next.name}` : ''
         } airs today`,
+        isExactNotification: false,
         schedule: { at, allowWhileIdle: false },
       }
     })
