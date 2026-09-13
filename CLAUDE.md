@@ -245,6 +245,33 @@ Anything new that must sit over the video goes in the chrome host.
 Data lives in `/root/.config/watchthemall/data/watchthemall.json`. Back it up
 before any test that resets it.
 
+## Casting to a TV (Android)
+
+The phone can put a provider's stream on a Chromecast. It is not "send the
+video" — the app never holds one — so it captures what the provider's player
+fetched off `shouldInterceptRequest`, decides which capture is a stream **by
+fetching it rather than by matching `.m3u8`**, rewrites the playlist so every
+URL in it points back at a small HTTP server on the phone, and casts that. The
+server replays the provider's `Referer`; a Chromecast sends none and the Cast
+API cannot attach one, because the receiver does the fetching.
+
+`src/main/hlsrewrite.ts` holds every part of that which can be a pure function,
+deliberately: the proxy has to be Java and nothing there is covered by the four
+gates. `docs/internal/casting.md` (local, unpublished) has the diagram, the
+verification table and the known limits.
+
+Two things to know before changing any of it:
+
+- **A proxied playlist that has not been rewritten still names the provider's
+  hosts**, so the receiver fetches segments directly, without headers, and the
+  stream dies several seconds in — long after the manifest loaded cleanly.
+- **No proxy route takes a URL.** Ids are registered up front. The query-string
+  design would make the phone an open relay for the network while a cast runs.
+
+```bash
+npx vite-node scripts/cast-proxy-check.ts -- --extract /tmp/e.json  # mpv is the judge
+```
+
 ## legacy/
 
 The original app is preserved verbatim and still runs:

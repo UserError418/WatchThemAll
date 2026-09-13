@@ -32,6 +32,33 @@ const api: WtaChromeApi = {
    * its bounds, so an overlay sized to the whole window would make the video
    * unclickable. The document measures itself and main follows.
    */
+  /**
+   * Casting, which the desktop does not do — see `src/main/ipc.ts`.
+   *
+   * `available` resolves false, so `PlayerChrome` never renders the button and
+   * none of the others is ever reached. They exist because the chrome contract
+   * is shared with the phone, and one renderer means one interface.
+   */
+  cast: {
+    available: () => Promise.resolve(false),
+    startDiscovery: () => Promise.resolve(),
+    stopDiscovery: () => Promise.resolve(),
+    devices: () => Promise.resolve([]),
+    connect: () => Promise.resolve({ ok: false, error: 'Casting is available in the Android app only.' }),
+    disconnect: () => Promise.resolve(),
+    beam: () => Promise.resolve({ ok: false, error: 'Casting is available in the Android app only.' }),
+    status: () =>
+      Promise.resolve({
+        available: false,
+        connected: false,
+        deviceName: '',
+        playing: false,
+        seconds: 0,
+        duration: 0,
+        proxyRunning: false,
+      }),
+  },
+
   setOverlayHeight: (height: number): void => {
     ipcRenderer.send(EV.chromeOverlayHeight, Math.max(0, Math.round(height)))
   },

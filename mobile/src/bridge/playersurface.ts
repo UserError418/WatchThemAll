@@ -214,6 +214,15 @@ export interface PlayerSurface {
   show(candidate: PlayCandidate): void
   /** Reload the current URL without changing provider. */
   reload(): void
+  /**
+   * Stop playing here, without forgetting what was playing.
+   *
+   * Used when a cast starts. Otherwise the phone keeps streaming the same film
+   * it is simultaneously serving to the television — twice the data, and audio
+   * from two rooms. `restore` brings the same URL back.
+   */
+  blank(): void
+  restore(): void
   setBounds(bounds: SurfaceBounds): void
   /** Tear it down. Safe to call when nothing is showing. */
   close(): void
@@ -275,6 +284,14 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       // Re-assigning the same `src` is a no-op in Chromium, so blank it first.
       frame.src = 'about:blank'
       frame.src = current
+    },
+
+    blank() {
+      if (frame) frame.src = 'about:blank'
+    },
+
+    restore() {
+      if (frame && current) frame.src = current
     },
 
     setBounds({ x, y, width, height }) {
