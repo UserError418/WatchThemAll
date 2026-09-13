@@ -3,8 +3,8 @@
  * without importing through `src/main`.
  *
  * This file stays as a re-export because the migration is referenced by name in
- * the architecture notes and in `docs/ARCHITECTURE.md`, and a dangling path in
- * documentation is worse than one line of indirection.
+ * the architecture notes, and a dangling path in documentation is worse than
+ * one line of indirection.
  */
 
 export { DEFAULT_SETTINGS, SCHEMA_VERSION, migrate } from '@shared/store/migrate'

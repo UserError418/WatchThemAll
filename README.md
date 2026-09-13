@@ -120,8 +120,8 @@ npm run build:linux    # or :win / :mac
 npm run apk            # the Android build (needs JDK 21 + Android SDK)
 ```
 
-`scripts/provision-android.sh` installs the Android toolchain and explains why
-the system JDK probably won't do.
+The Android build needs JDK 21 and the Android SDK. The provisioning script
+that installs both is not published — see "What is not in this repository".
 
 ## Contributing
 
@@ -129,10 +129,24 @@ Issues and pull requests are welcome. Please don't open issues or PRs that add
 new streaming sources; the provider list is not crowd-sourced.
 
 Before opening a PR, `npm run lint`, `npm run typecheck` and `npm test` should
-all pass. There's a walkthrough of the architecture and the decisions behind it
-in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the provider catalogue is
-documented in [`docs/PROVIDERS.md`](docs/PROVIDERS.md), and the cross-device
-sync design is in [`docs/SYNC.md`](docs/SYNC.md).
+all pass. The provider catalogue is documented in
+[`docs/PROVIDERS.md`](docs/PROVIDERS.md); what the app sends and stores is in
+[`docs/PRIVACY.md`](docs/PRIVACY.md).
+
+## What is not in this repository
+
+Two things are maintained but deliberately unpublished, and the source refers
+to them in passing:
+
+- **`scripts/`** — the build, deploy, release and provisioning tooling, plus
+  the development harness that drives a running app over the DevTools
+  protocol. Some of it installs onto a named machine over SSH. The practical
+  consequence is that **`npm run apk` will not work in a clone**, because it
+  points at `scripts/build-apk.sh`. Every other script in `package.json` —
+  `dev`, `build`, `lint`, `typecheck`, `test` — is self-contained and works.
+- **The long-form design documents.** Comments in the source occasionally cite
+  them by name. Treat those as a pointer to reasoning that is not public
+  rather than to a file you are expected to find.
 
 ## Licence
 

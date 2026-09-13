@@ -5,7 +5,7 @@
  * whatever device is already signed in, and that is the whole ceremony. It is
  * the same OAuth 2.0 device flow that signs a TV into YouTube — not a lookalike
  * — and it is here because it is the only mechanism that meets all three of the
- * constraints in `docs/SYNC.md` at once: no server of ours, no per-app user
+ * constraints the sync design sets at once: no server of ours, no per-app user
  * cap, and no redirect.
  *
  * That last one carries more weight than it looks. Having no redirect means:
@@ -341,7 +341,7 @@ export async function awaitAuthorization(
  *
  * Refresh tokens do not expire on their own once the consent screen is in
  * **Production**. In "Testing" they die after seven days and sync would quietly
- * stop working every week — which is why `docs/SYNC.md` insists on Production
+ * stop working every week — which is why the sync design insists on Production
  * and why that is not a detail to leave to whoever sets up the project.
  */
 export async function refreshAccessToken(
