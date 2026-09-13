@@ -63,6 +63,30 @@ export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 export const TOKEN_SKEW_MS = 60_000
 
 export type FetchLike = typeof fetch
+export type Sleep = (ms: number) => Promise<void>
+
+/**
+ * How long to wait before each retry of a request that never reached Google.
+ *
+ * Two retries, both quick, because the thing being waited out is a moment of
+ * bad signal rather than an outage — and because the user is looking at a
+ * button they just pressed. Roughly two seconds of patience in total, which is
+ * under the time it takes to decide the app has hung.
+ */
+const NETWORK_RETRY_BACKOFF_MS = [400, 1_500]
+
+/**
+ * Give up pairing after this many polls in a row that never reached Google.
+ *
+ * Not one: a phone that loses signal for a few seconds mid-pairing should not
+ * throw away a code the user is in the middle of typing on another device. Not
+ * unlimited either, or a phone in flight mode sits on "pairing" until the code
+ * expires half an hour later. At the default five-second interval this is about
+ * half a minute of silence.
+ */
+const MAX_CONSECUTIVE_NETWORK_FAILURES = 6
+
+const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export class DeviceFlowError extends Error {
   constructor(
@@ -78,16 +102,77 @@ export class DeviceFlowError extends Error {
 /** The user cancelled at Google's end, or the code went unused for too long. */
 export class DeviceFlowAbandoned extends DeviceFlowError {}
 
+/**
+ * The request never got an answer, as distinct from one Google refused.
+ *
+ * These want opposite handling, which is why they are different classes. An
+ * OAuth error is final and the user has to do something about it; this one
+ * usually clears itself on the next attempt, and `awaitAuthorization` relies on
+ * telling them apart to keep polling through a tunnel.
+ */
+export class NetworkUnreachable extends DeviceFlowError {}
+
+/**
+ * Say what went wrong in words the user can act on.
+ *
+ * The platform's own text is kept, in brackets. It is the only thing that
+ * distinguishes a captive portal from a dead resolver when someone reports this
+ * from a phone, and it differs by platform — a browser says `Failed to fetch`,
+ * while Capacitor's native HTTP hands back Android's
+ * `Unable to resolve host "...": No address associated with hostname`. Neither
+ * tells the user anything on its own, which is exactly the complaint that
+ * produced this function.
+ */
+function unreachable(url: string, cause: unknown): NetworkUnreachable {
+  const host = new URL(url).host
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return new NetworkUnreachable(
+    `Could not reach ${host}. The connection failed before Google answered, so this is ` +
+      `a network problem rather than a sign-in one — check the connection and try again. ` +
+      `(${detail})`,
+    'network',
+  )
+}
+
+/**
+ * POST a form, retrying a request that never reached Google.
+ *
+ * `fetch` *rejecting* — as opposed to answering with a status — means the
+ * request did not arrive: DNS, TLS, or no route to the host. On a desktop that
+ * is rare enough to report as-is. On a phone it is ordinary, and reporting it
+ * as-is is what put `Unable to resolve host "oauth2.googleapis.com": No address
+ * associated with hostname` under the Connect button on a weak mobile
+ * connection. That reads like a broken app and was a hiccup the next attempt
+ * would have survived.
+ *
+ * Only the transport is retried. Anything Google answers — including a 4xx — is
+ * an answer, and is returned unchanged: retrying an `invalid_client` would only
+ * fail three times more slowly.
+ */
 async function postForm(
   fetchImpl: FetchLike,
   url: string,
   fields: Record<string, string>,
+  sleep: Sleep = realSleep,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(fields).toString(),
-  })
+  let response: Response | null = null
+  let lastFailure: unknown = null
+
+  for (let attempt = 0; attempt <= NETWORK_RETRY_BACKOFF_MS.length; attempt += 1) {
+    if (attempt > 0) await sleep(NETWORK_RETRY_BACKOFF_MS[attempt - 1] as number)
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(fields).toString(),
+      })
+      break
+    } catch (error) {
+      lastFailure = error
+    }
+  }
+
+  if (response === null) throw unreachable(url, lastFailure)
 
   // A non-JSON body here means something upstream of Google answered — a
   // captive portal, a proxy. Saying so beats "unexpected token < in JSON".
@@ -105,11 +190,14 @@ export async function requestDeviceCode(
   client: OAuthClient,
   fetchImpl: FetchLike = fetch,
   now = Date.now(),
+  sleep: Sleep = realSleep,
 ): Promise<DeviceCodeChallenge> {
-  const { status, body } = await postForm(fetchImpl, DEVICE_CODE_URL, {
-    client_id: client.clientId,
-    scope: DRIVE_SCOPE,
-  })
+  const { status, body } = await postForm(
+    fetchImpl,
+    DEVICE_CODE_URL,
+    { client_id: client.clientId, scope: DRIVE_SCOPE },
+    sleep,
+  )
 
   if (status !== 200) {
     throw new DeviceFlowError(
@@ -140,13 +228,19 @@ export async function pollOnce(
   deviceCode: string,
   fetchImpl: FetchLike = fetch,
   now = Date.now(),
+  sleep: Sleep = realSleep,
 ): Promise<{ tokens: OAuthTokens } | { retryAfterExtraSeconds: number }> {
-  const { status, body } = await postForm(fetchImpl, TOKEN_URL, {
-    client_id: client.clientId,
-    client_secret: client.clientSecret,
-    device_code: deviceCode,
-    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-  })
+  const { status, body } = await postForm(
+    fetchImpl,
+    TOKEN_URL,
+    {
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      device_code: deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    },
+    sleep,
+  )
 
   if (status === 200) {
     return {
@@ -207,6 +301,7 @@ export async function awaitAuthorization(
   } = options
 
   let intervalSeconds = challenge.intervalSeconds
+  let unreachedPolls = 0
 
   for (;;) {
     if (signal?.aborted) throw new DeviceFlowAbandoned('Sign-in was cancelled.')
@@ -217,7 +312,25 @@ export async function awaitAuthorization(
     await sleep(intervalSeconds * 1000)
     if (signal?.aborted) throw new DeviceFlowAbandoned('Sign-in was cancelled.')
 
-    const result = await pollOnce(client, challenge.deviceCode, fetchImpl, now())
+    let result: Awaited<ReturnType<typeof pollOnce>>
+    try {
+      result = await pollOnce(client, challenge.deviceCode, fetchImpl, now(), sleep)
+    } catch (error) {
+      /**
+       * A poll that never reached Google is not a failed sign-in.
+       *
+       * The code on screen is still valid and the user is still typing it
+       * somewhere else, so a phone that drops into a lift should come back to a
+       * pairing still in progress. Only a sustained silence ends it — see
+       * `MAX_CONSECUTIVE_NETWORK_FAILURES`.
+       */
+      if (!(error instanceof NetworkUnreachable)) throw error
+      unreachedPolls += 1
+      if (unreachedPolls >= MAX_CONSECUTIVE_NETWORK_FAILURES) throw error
+      continue
+    }
+
+    unreachedPolls = 0
     if ('tokens' in result) return result.tokens
     intervalSeconds += result.retryAfterExtraSeconds
   }
@@ -236,13 +349,19 @@ export async function refreshAccessToken(
   refreshToken: string,
   fetchImpl: FetchLike = fetch,
   now = Date.now(),
+  sleep: Sleep = realSleep,
 ): Promise<OAuthTokens> {
-  const { status, body } = await postForm(fetchImpl, TOKEN_URL, {
-    client_id: client.clientId,
-    client_secret: client.clientSecret,
-    refresh_token: refreshToken,
-    grant_type: 'refresh_token',
-  })
+  const { status, body } = await postForm(
+    fetchImpl,
+    TOKEN_URL,
+    {
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    },
+    sleep,
+  )
 
   if (status !== 200) {
     const code = typeof body.error === 'string' ? body.error : null
