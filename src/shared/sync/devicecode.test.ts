@@ -14,6 +14,7 @@ import {
   DRIVE_SCOPE,
   DeviceFlowAbandoned,
   DeviceFlowError,
+  NetworkUnreachable,
   awaitAuthorization,
   isExpired,
   pollOnce,
@@ -267,5 +268,129 @@ describe('expiry', () => {
     const tokens = { accessToken: 'a', expiresAt: 100_000 }
     expect(isExpired(tokens, 38_999)).toBe(false)
     expect(isExpired(tokens, 40_001)).toBe(true)
+  })
+})
+
+
+/**
+ * A `fetch` that fails to connect a given number of times, then answers.
+ *
+ * `fetch` rejecting is how every platform reports "the request never left" —
+ * `TypeError: Failed to fetch` in a browser, Android's
+ * `UnknownHostException` text through Capacitor's native HTTP. The class of the
+ * rejection carries no information, so the tests use a plain `Error` with the
+ * Android wording, which is the one a user actually saw.
+ */
+function flakyFetch(
+  failures: number,
+  answer: { status: number; body: unknown } = { status: 200, body: {} },
+): { fetchImpl: FetchLike; attempts: () => number } {
+  let seen = 0
+  const fetchImpl = (async () => {
+    seen += 1
+    if (seen <= failures) {
+      throw new Error(
+        'Unable to resolve host "oauth2.googleapis.com": No address associated with hostname',
+      )
+    }
+    return {
+      status: answer.status,
+      ok: answer.status >= 200 && answer.status < 300,
+      json: async () => answer.body,
+    } as Response
+  }) as FetchLike
+  return { fetchImpl, attempts: () => seen }
+}
+
+const noSleep = async (): Promise<void> => {}
+
+describe('a request that never reaches Google', () => {
+  const CHALLENGE_BODY = {
+    device_code: 'dc',
+    user_code: 'WDJB-MJHT',
+    verification_url: 'https://www.google.com/device',
+    expires_in: 1800,
+    interval: 5,
+  }
+
+  it('retries the transport rather than reporting the platform error', async () => {
+    // The complaint this exists for: one bad moment on mobile data put a raw
+    // `UnknownHostException` message under the Connect button.
+    const { fetchImpl, attempts } = flakyFetch(2, { status: 200, body: CHALLENGE_BODY })
+    const challenge = await requestDeviceCode(CLIENT, fetchImpl, 0, noSleep)
+
+    expect(challenge.userCode).toBe('WDJB-MJHT')
+    expect(attempts()).toBe(3)
+  })
+
+  it('gives up after the retries, with a message about the network', async () => {
+    const { fetchImpl, attempts } = flakyFetch(99)
+    const failure = requestDeviceCode(CLIENT, fetchImpl, 0, noSleep)
+
+    await expect(failure).rejects.toBeInstanceOf(NetworkUnreachable)
+    // Named so the caller can tell "never arrived" from "Google said no", and
+    // worded so the user is told which of the two it was.
+    await expect(failure).rejects.toThrow(/Could not reach oauth2\.googleapis\.com/)
+    // The platform text is kept, because it is what distinguishes a captive
+    // portal from a dead resolver when this is reported from a phone.
+    await expect(failure).rejects.toThrow(/No address associated with hostname/)
+    expect(attempts()).toBe(3)
+  })
+
+  it('does not retry an answer, however unwelcome', async () => {
+    // Retrying an `invalid_client` only fails three times more slowly.
+    const { fetchImpl, calls } = scriptedFetch([{ status: 401, body: { error: 'invalid_client' } }])
+    await expect(requestDeviceCode(CLIENT, fetchImpl, 0, noSleep)).rejects.toBeInstanceOf(
+      DeviceFlowError,
+    )
+    expect(calls).toHaveLength(1)
+  })
+
+  it('keeps a pairing alive through a tunnel', async () => {
+    // The code is on screen and the user is typing it on another device; a few
+    // seconds without signal must not throw that away.
+    let poll = 0
+    const fetchImpl = (async () => {
+      poll += 1
+      if (poll <= 3) throw new Error('Failed to fetch')
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }),
+      } as Response
+    }) as FetchLike
+
+    const tokens = await awaitAuthorization(
+      CLIENT,
+      {
+        userCode: 'WDJB-MJHT',
+        verificationUrl: 'https://www.google.com/device',
+        deviceCode: 'dc',
+        expiresAt: 1_800_000,
+        intervalSeconds: 5,
+      },
+      { fetchImpl, sleep: noSleep, now: () => 0 },
+    )
+
+    expect(tokens.accessToken).toBe('at')
+  })
+
+  it('stops pairing once the silence is sustained', async () => {
+    // Otherwise a phone in flight mode sits on "pairing" for half an hour.
+    const { fetchImpl } = flakyFetch(Number.MAX_SAFE_INTEGER)
+
+    await expect(
+      awaitAuthorization(
+        CLIENT,
+        {
+          userCode: 'WDJB-MJHT',
+          verificationUrl: 'https://www.google.com/device',
+          deviceCode: 'dc',
+          expiresAt: 1_800_000,
+          intervalSeconds: 5,
+        },
+        { fetchImpl, sleep: noSleep, now: () => 0 },
+      ),
+    ).rejects.toBeInstanceOf(NetworkUnreachable)
   })
 })

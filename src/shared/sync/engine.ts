@@ -15,8 +15,8 @@
  *
  * If B overwrites A's push from a stale base, B's file is missing A's newest
  * records — and A's next sync pulls that file, merges its own complete copy
- * back in, and pushes the union. The data is late, never gone. `docs/SYNC.md`
- * states the one exception: a device with no local copy to heal from.
+ * back in, and pushes the union. The data is late, never gone. There is one
+ * exception: a device with no local copy to heal from.
  *
  * ## Why the local document is written before the push
  *

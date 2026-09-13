@@ -22,7 +22,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
+    // `mobile/` is included because the bridge is real code with real bugs —
+    // it is only outside `src/` because a second Vite config builds it.
+    include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'mobile/src/**/*.test.ts'],
     coverage: { provider: 'v8', reporter: ['text', 'html'], include: ['src/**/*.ts'] },
   },
 })

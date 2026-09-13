@@ -131,6 +131,16 @@ export async function createBridge(): Promise<WtaApi> {
     season: number | null
     episode: number | null
   }>()
+  const playbackSettled = new Signal<{
+    tmdbId: number
+    type: MediaType
+    season: number | null
+    episode: number | null
+    playedMs: number
+    seconds: number | null
+    duration: number | null
+    watched: boolean
+  }>()
   const playbackActive = new Signal<boolean>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
@@ -541,14 +551,33 @@ export async function createBridge(): Promise<WtaApi> {
 
     rememberPosition(req)
 
+    const playedMs = Date.now() - progress.episodeOpenedAt
     const watched = isWatchedEnough({
       seconds: reading?.seconds ?? null,
       duration: reading?.duration ?? null,
-      playedMs: Date.now() - progress.episodeOpenedAt,
+      playedMs,
       runtimeMinutes: req.runtimeMinutes,
       fallbackMs: WATCHED_FALLBACK_MS,
       ended: reading?.ended ?? false,
     })
+
+    /**
+     * The measurement goes out whatever the verdict — see `playbackSettled` in
+     * the IPC contract. It matters more here than on the desktop: most
+     * providers report no position on Android, so for many plays this event is
+     * the *only* record that anything happened at all.
+     */
+    playbackSettled.emit({
+      tmdbId: context.tmdbId,
+      type: context.type,
+      season: context.season,
+      episode: context.episode,
+      playedMs,
+      seconds: reading?.seconds ?? null,
+      duration: reading?.duration ?? null,
+      watched,
+    })
+
     if (!watched) return
 
     episodeWatched.emit({
@@ -1129,6 +1158,7 @@ export async function createBridge(): Promise<WtaApi> {
       navigate: (cb) => navigate.subscribe(cb),
       releaseFound: (cb) => releaseFound.subscribe(cb),
       episodeWatched: (cb) => episodeWatched.subscribe(cb),
+      playbackSettled: (cb) => playbackSettled.subscribe(cb),
       storeChanged: (cb) => storeChanged.subscribe(cb),
       playbackActive: (cb) => playbackActive.subscribe(cb),
       playerState: (cb) => playerState.subscribe(cb),
