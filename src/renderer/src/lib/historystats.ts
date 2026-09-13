@@ -52,6 +52,19 @@ export interface HistorySummary {
   totalMs: number
   /** Time played since midnight seven days ago. */
   weekMs: number
+  /** Plays recorded, all entries. */
+  plays: number
+  /** Plays since midnight seven days ago. */
+  weekPlays: number
+  /**
+   * Plays that carry a measured duration.
+   *
+   * Zero is an ordinary state, not an error: nothing written before 1.5.3 has
+   * one, so a library that predates this version has a full history and no
+   * times at all. The screen needs to know, because "—" as the headline figure
+   * reads as broken where "5 plays recorded" reads as true.
+   */
+  measured: number
   /** Episodes of television opened. */
   episodes: number
   /** Films opened. */
@@ -71,13 +84,19 @@ export function summarise(history: HistoryEntry[], now = Date.now()): HistorySum
 
   let totalMs = 0
   let weekMs = 0
+  let weekPlays = 0
+  let measured = 0
   let episodes = 0
   let films = 0
 
   for (const entry of history) {
     const ms = playedMs(entry)
     totalMs += ms
-    if (entry.watchedAt >= weekStart) weekMs += ms
+    if (ms > 0) measured += 1
+    if (entry.watchedAt >= weekStart) {
+      weekMs += ms
+      weekPlays += 1
+    }
     if (entry.type === 'movie') films += 1
     else episodes += 1
     titles.add(entry.tmdbId)
@@ -94,6 +113,9 @@ export function summarise(history: HistoryEntry[], now = Date.now()): HistorySum
   return {
     totalMs,
     weekMs,
+    plays: history.length,
+    weekPlays,
+    measured,
     episodes,
     films,
     titles: titles.size,

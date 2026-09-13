@@ -76,6 +76,8 @@
   })
 
   const summary = $derived(summarise(library.history, now))
+  /** Whether any play in the whole history carries a measured duration. */
+  const timed = $derived(summary.measured > 0)
   const grid = $derived(heatmap(library.history, now, 26))
 
   const visible = $derived.by(() => {
@@ -166,12 +168,20 @@
       "eleven hours this month" is the one that lands.
     -->
     <section class="stats" aria-label="Totals">
+      <!--
+        Counts rather than times when nothing has been measured yet.
+
+        A library that predates 1.5.3 has a full history and no durations in
+        it, so the headline figure would be an em dash — which reads as broken
+        where "5 plays recorded" reads as true. The note below says why, once,
+        and disappears the moment the first play is timed.
+      -->
       <div class="stat wide">
-        <span class="figure">{duration(summary.totalMs)}</span>
-        <span class="label">watched, all time</span>
+        <span class="figure">{timed ? duration(summary.totalMs) : summary.plays}</span>
+        <span class="label">{timed ? 'watched, all time' : 'plays recorded'}</span>
       </div>
       <div class="stat">
-        <span class="figure">{duration(summary.weekMs)}</span>
+        <span class="figure">{timed ? duration(summary.weekMs) : summary.weekPlays}</span>
         <span class="label">last 7 days</span>
       </div>
       <div class="stat">
@@ -191,6 +201,14 @@
         <span class="label">day streak</span>
       </div>
     </section>
+
+    {#if !timed}
+      <p class="note">
+        How long each play runs is recorded from this version onwards. Everything
+        already in this timeline is kept, and counted — it just has no stopwatch
+        against it.
+      </p>
+    {/if}
 
     <!--
       The calendar.
@@ -420,6 +438,14 @@
   .ghost.small {
     padding: var(--space-1) var(--space-3);
     font-size: var(--text-xs);
+  }
+
+  .note {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    max-width: 70ch;
+    line-height: var(--leading-snug);
   }
 
   .state {
