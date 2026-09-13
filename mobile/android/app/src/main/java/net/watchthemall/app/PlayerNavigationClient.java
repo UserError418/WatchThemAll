@@ -2,6 +2,7 @@ package net.watchthemall.app;
 
 import android.net.Uri;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 
 import com.getcapacitor.Bridge;
@@ -66,6 +67,42 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
 
         // A third party trying to take the whole window. Refuse and stay put.
         return true;
+    }
+
+    /**
+     * Watch what the provider's player fetches, and change nothing about it.
+     *
+     * This is the only place on Android where the app can see inside the
+     * player's cross-origin frame. It fires for every subresource of every
+     * frame and hands over both the URL and the request headers, which together
+     * are exactly what casting needs: the manifest to point the Chromecast at,
+     * and the `Referer`/`Origin` the provider requires and the Chromecast
+     * cannot send. See `MediaCapture` and `src/main/hlsrewrite.ts`.
+     *
+     * **Returning null is load-bearing.** It tells the WebView to handle the
+     * request itself, exactly as if this method did not exist. Returning a
+     * response would make the app the transport for every request the embed
+     * makes, and it would then own redirects, cookies, ranges and compression —
+     * a large surface, all of it invisible to this project's gates, in exchange
+     * for nothing this feature needs.
+     *
+     * Called on the WebView's network threads, so it must not block: capturing
+     * does no I/O, and the decision about what any of it *means* is deferred to
+     * TypeScript at cast time.
+     */
+    @Override
+    public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        try {
+            MediaCapture.record(request, appHost());
+        } catch (Exception ignored) {
+            // Capture is a side feature; nothing here may break playback.
+        }
+        return super.shouldInterceptRequest(view, request);
+    }
+
+    private String appHost() {
+        String serverUrl = bridge.getServerUrl();
+        return serverUrl != null ? Uri.parse(serverUrl).getHost() : "localhost";
     }
 
     private boolean isAppHost(Uri url) {
