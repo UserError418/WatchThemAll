@@ -6,13 +6,11 @@
  * The desktop learns where a video is by reading `currentTime` off the
  * provider's own `<video>` — a privilege of the Electron embedder, which can
  * run script in any frame whatever its origin. Nothing on Android can do that,
- * and `mobile/README.md` said for three versions that resume-to-position was
- * therefore impossible there.
+ * which makes reading the position look impossible there.
  *
- * That was true of the approach, not of the problem. Several providers *post
- * their position out* to whatever is framing them, and nobody had looked.
- * Measured on an Android 16 emulator, listening on the app's own window while
- * an episode played:
+ * It is not. Several providers *post their position out* to whatever is framing
+ * them. Measured on an Android 16 emulator, listening on the app's own window
+ * while an episode played:
  *
  * ```
  * VidFast   {"type":"PLAYER_EVENT","data":{"event":"timeupdate","currentTime":2.06,
