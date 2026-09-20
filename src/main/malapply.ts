@@ -32,6 +32,8 @@ export interface ResolvedTitle {
   title: string
   posterPath: string | null
   genreIds: number[]
+  /** TMDB `vote_average`; 0 when the match came from somewhere without one. */
+  rating: number
 }
 
 export type Resolver = (title: string, type: MediaType) => Promise<ResolvedTitle | null>
@@ -122,6 +124,7 @@ export async function applyMalImport(
         type,
         title: entry.title,
         posterPath: null,
+        rating: 0,
         imdbId: null,
         genreIds: [],
         addedAt: Date.now(),
@@ -140,6 +143,7 @@ export async function applyMalImport(
         type,
         title: match.title,
         posterPath: match.posterPath,
+        rating: match.rating ?? 0,
         imdbId: match.imdbId,
         genreIds: match.genreIds,
         addedAt: Date.now(),
@@ -157,6 +161,7 @@ export async function applyMalImport(
         type,
         title: match.title,
         posterPath: match.posterPath,
+        rating: match.rating ?? 0,
         imdbId: match.imdbId,
         /**
          * Resume where MAL says they got to.

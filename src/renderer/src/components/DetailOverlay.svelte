@@ -20,6 +20,8 @@
   import TrailerEmbed from './TrailerEmbed.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
   import { resumeTarget } from '@shared/progress'
+  import Score from './Score.svelte'
+  import { seasonScore } from '@shared/score'
 
   interface Props {
     media: MediaSummary
@@ -143,6 +145,7 @@
       library.attachImdbId(tmdbId, result.imdbId)
       // Lets the watchlist draw a real progress bar without a request per tile.
       if (type === 'tv') library.setEpisodeCount(tmdbId, result.episodeCount)
+      library.setRating(tmdbId, result.rating)
 
       if (type === 'tv' && result.seasonCount > 0) {
         // Resume where the user left off rather than always at season one.
@@ -449,7 +452,7 @@
               <span>{detail.seasonCount} season{detail.seasonCount === 1 ? '' : 's'}</span>
             {/if}
             {#if detail?.runtime}<span>{runtime(detail.runtime)}</span>{/if}
-            {#if subject.rating > 0}<span class="score">★ {subject.rating.toFixed(1)}</span>{/if}
+            <Score rating={detail?.rating ?? subject.rating} size="md" />
           </p>
           {#if detail?.genres.length}
             <p class="genres">{detail.genres.join(' · ')}</p>
@@ -588,6 +591,10 @@
                 {/each}
               </select>
             </label>
+            <!-- Averaged from the episodes: TMDB has no season score in the
+                 payload this app fetches, and asking for one would be a request
+                 per season purely to draw a number. -->
+            <Score rating={seasonScore(season?.episodes ?? [])} size="md" />
             <div class="bulk">
               <button onclick={() => toggleSeasonWatched(true)}>Mark season watched</button>
               <button onclick={() => toggleSeasonWatched(false)}>Clear season</button>
@@ -775,11 +782,6 @@
     margin: 0 0 var(--space-2);
     font-size: var(--text-sm);
     color: var(--text-secondary);
-  }
-
-  .score {
-    color: var(--warning);
-    font-weight: 600;
   }
 
   .actions {

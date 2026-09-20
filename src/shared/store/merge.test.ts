@@ -69,6 +69,7 @@ function entry(over: Partial<Synced<WatchlistEntry>> = {}): Synced<WatchlistEntr
     episodeMarks: {},
     genreIds: [],
     episodeCount: null,
+    rating: 0,
     addedAt: 1_000,
     providerId: null,
     updatedAt: 1_000,

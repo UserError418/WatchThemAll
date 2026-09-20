@@ -17,6 +17,7 @@
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import RateButtons from '../components/RateButtons.svelte'
+  import Score from '../components/Score.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -130,6 +131,7 @@
             {#if entry.source === 'mal'}
               <span class="badge-source" title="Imported from MyAnimeList">MAL</span>
             {/if}
+            <span class="badge-score"><Score rating={entry.rating} onArtwork /></span>
           </button>
 
           <p class="name" title={entry.title}>{entry.title}</p>
@@ -154,6 +156,13 @@
 </div>
 
 <style>
+  /* Opposite corner from the MAL badge so the two never overlap. */
+  .badge-score {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+  }
+
   .watched {
     padding: var(--space-7) var(--page-inset) var(--space-8);
   }

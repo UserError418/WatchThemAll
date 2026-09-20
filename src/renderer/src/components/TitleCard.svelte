@@ -25,6 +25,7 @@
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import { canHover } from '../lib/pointer'
   import TrailerEmbed from './TrailerEmbed.svelte'
+  import Score from './Score.svelte'
 
   interface Props {
     media: MediaSummary
@@ -225,7 +226,7 @@
         </div>
 
         <div class="meta">
-          {#if media.rating > 0}<span class="score">★ {media.rating.toFixed(1)}</span>{/if}
+          <Score rating={media.rating} />
           {#if label}<span>{label}</span>{/if}
           <span class="kind">{media.type === 'tv' ? 'Series' : 'Film'}</span>
         </div>
@@ -449,11 +450,6 @@
     margin-top: var(--space-3);
     color: var(--text-secondary);
     font-size: var(--text-xs);
-  }
-
-  .score {
-    color: var(--success);
-    font-weight: 700;
   }
 
   .kind {

@@ -23,6 +23,7 @@ function watchlist(tmdbId: number, genreIds: number[]): Synced<WatchlistEntry> {
     episodeMarks: {},
     genreIds,
     episodeCount: null,
+    rating: 0,
     addedAt: 0,
     providerId: null,
   })
@@ -38,6 +39,7 @@ function watched(tmdbId: number, genreIds: number[]): Synced<WatchedEntry> {
     imdbId: null,
     genreIds,
     addedAt: 0,
+    rating: 0,
     source: 'user',
     malId: null,
   })

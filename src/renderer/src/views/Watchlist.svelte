@@ -12,6 +12,7 @@
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import { episodeCode, runtime } from '../lib/format'
+  import Score from '../components/Score.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -154,6 +155,7 @@
                 {/if}
 
                 <span class="resume">▶ {progress.label}</span>
+                <span class="badge-score"><Score rating={entry.rating} onArtwork /></span>
               </div>
               <span class="title">{entry.title}</span>
               <span class="sub">
@@ -178,6 +180,13 @@
 </div>
 
 <style>
+  /* Top-right, clear of the resume chip and above the progress bar. */
+  .badge-score {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+  }
+
   .view {
     padding: var(--space-5) var(--space-6) var(--space-8);
     display: flex;

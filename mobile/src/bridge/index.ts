@@ -1188,6 +1188,7 @@ export async function createBridge(): Promise<WtaApi> {
                 title: best.title,
                 posterPath: best.posterPath ?? null,
                 genreIds: best.genreIds ?? [],
+                rating: best.rating ?? 0,
               }
             }
           }

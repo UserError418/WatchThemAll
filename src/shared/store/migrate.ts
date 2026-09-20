@@ -195,6 +195,9 @@ function fromTyped(
     // Null means "not known yet", which renders as a position without a
     // percentage rather than as 0%.
     episodeCount: entry.episodeCount ?? null,
+    // 0 means "no score", which the score component draws as nothing at all
+    // rather than as a damning 0.0. Filled in when the title is next opened.
+    rating: typeof entry.rating === 'number' ? entry.rating : 0,
     lastSeason: entry.type === 'movie' ? null : clampPosition(entry.lastSeason),
     lastEpisode: entry.type === 'movie' ? null : clampPosition(entry.lastEpisode),
     }
@@ -230,6 +233,7 @@ function fromLegacy(raw: Record<string, unknown>, now: number): StoreDocument {
           episodeMarks: {},
           genreIds: [],
           episodeCount: null,
+          rating: 0,
           addedAt: now,
           providerId: typeof b.schemaId === 'string' && b.schemaId ? b.schemaId : null,
           updatedAt: now,

@@ -442,6 +442,7 @@ export function registerIpc(deps: IpcDeps): void {
               title: best.title,
               posterPath: best.posterPath,
               genreIds: best.genreIds,
+              rating: best.rating,
             }
           }
         }

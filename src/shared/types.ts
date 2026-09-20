@@ -266,6 +266,16 @@ export interface WatchlistEntry {
    * so it arrives on first open and stays current from then on.
    */
   episodeCount: number | null
+  /**
+   * TMDB `vote_average` at the time the entry was made, 0 when unknown.
+   *
+   * Copied in for the same reason as `genreIds` and `episodeCount`: every view
+   * that lists saved titles wants to draw a score, and the alternative is one
+   * detail request per saved title every time the view opens. Refreshed
+   * whenever the detail overlay loads the title, so it arrives on first open
+   * and stays roughly current from then on.
+   */
+  rating: number
   addedAt: number
   providerId: string | null
 }
@@ -338,6 +348,8 @@ export interface WatchedEntry {
   imdbId: string | null
   /** TMDB genre ids, for the taste profile. Empty until resolved. */
   genreIds: number[]
+  /** TMDB `vote_average`, 0 when unknown. See `WatchlistEntry.rating`. */
+  rating: number
   addedAt: number
   /** Where this came from, so an import can be undone or re-run sensibly. */
   source: 'user' | 'mal'

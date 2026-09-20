@@ -43,6 +43,7 @@ const resolveAll = vi.fn(
     title,
     posterPath: '/p.jpg',
     genreIds: [16],
+    rating: 8.1,
   }),
 )
 
@@ -133,6 +134,7 @@ describe('applyMalImport', () => {
         title: 'ok',
         posterPath: null,
         genreIds: [],
+        rating: 0,
       })
 
     const { store, summary } = await applyMalImport(

@@ -32,6 +32,7 @@ function doc(deviceId: string, titles: string[] = []): StoreDocument {
       episodeMarks: {},
       genreIds: [],
       episodeCount: null,
+      rating: 0,
       addedAt: 1,
       providerId: null,
       updatedAt: 1,

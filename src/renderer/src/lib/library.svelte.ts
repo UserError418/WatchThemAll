@@ -250,6 +250,7 @@ class Library {
       tmdbId: media.tmdbId,
       type: media.type,
       title: media.title,
+      rating: media.rating ?? 0,
       posterPath: media.posterPath,
       // `?? null` because the field is optional on a summary: absent means
       // "not known yet", which the entry stores as null.
@@ -775,6 +776,7 @@ class Library {
       tmdbId: media.tmdbId,
       type: media.type,
       title: media.title,
+      rating: media.rating ?? 0,
       posterPath: media.posterPath,
       imdbId: media.imdbId ?? null,
       genreIds: media.genreIds,
@@ -806,6 +808,7 @@ class Library {
         tmdbId: entry.tmdbId,
         type: entry.type,
         title: entry.title,
+        rating: entry.rating,
         posterPath: entry.posterPath,
         imdbId: entry.imdbId,
         genreIds: entry.genreIds,
@@ -878,6 +881,51 @@ class Library {
     if (!entry || count <= 0 || entry.episodeCount === count) return
     entry.episodeCount = count
     void this.persist({ watchlist: this.watchlist })
+  }
+
+  /**
+   * Refresh the stored score for a saved title.
+   *
+   * Same bargain as `setEpisodeCount`: the views that list saved titles want to
+   * draw a score, and fetching one per title per render was explicitly rejected
+   * as a design. So the score is copied in when the detail overlay loads the
+   * title, which is the one moment it is known for free, and both the watchlist
+   * and the watched list are updated — a title is often in both, and a score
+   * that is right in one place and stale in the other is worse than either.
+   */
+  setRating(tmdbId: number, rating: number): void {
+    if (tmdbId === 0 || !(rating > 0)) return
+
+    const entry = this.watchlistEntry(tmdbId)
+    const seen = this.watched.find((w) => w.tmdbId === tmdbId)
+    const stale = (entry && entry.rating !== rating) || (seen && seen.rating !== rating)
+    if (!stale) return
+
+    if (entry) entry.rating = rating
+    if (seen) seen.rating = rating
+    void this.persist({ watchlist: this.watchlist, watched: this.watched })
+  }
+
+  /**
+   * The stored score for a title, from wherever it is saved.
+   *
+   * Release trackers carry no score of their own and adding one would be a
+   * third place for the same number to go stale. A tracked series is
+   * essentially always in the watchlist, so reading it from there costs a
+   * lookup and keeps one source of truth.
+   *
+   * Called `scoreFor` and not `ratingFor` because this app has two things
+   * called a rating and they are not the same: TMDB's *score* out of ten, and
+   * the user's own like/dislike, which `ratingFor` returns. Naming both the
+   * same thing is how one gets drawn where the other was meant.
+   */
+  scoreFor(tmdbId: number): number {
+    if (tmdbId === 0) return 0
+    return (
+      this.watchlistEntry(tmdbId)?.rating ||
+      this.watched.find((w) => w.tmdbId === tmdbId)?.rating ||
+      0
+    )
   }
 
   setDefaultProvider(id: string | null): void {

@@ -15,6 +15,7 @@
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import { airDate, countdown, episodeCode, timeAgo } from '../lib/format'
+  import Score from '../components/Score.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -142,7 +143,10 @@
             </div>
 
             <div class="info">
-              <span class="title">{tracker.title}</span>
+              <span class="title-line">
+                <span class="title">{tracker.title}</span>
+                <Score rating={library.scoreFor(tracker.tmdbId)} />
+              </span>
               {#if next}
                 <span class="next">
                   {episodeCode(next.season, next.episode)}
@@ -180,6 +184,13 @@
 </div>
 
 <style>
+  .title-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2, 8px);
+    min-width: 0;
+  }
+
   .view {
     padding: var(--space-5) var(--space-6) var(--space-8);
   }
