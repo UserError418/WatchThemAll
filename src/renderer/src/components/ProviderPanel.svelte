@@ -19,7 +19,6 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { panelIn, panelOut } from '../lib/motion'
   import { canHover } from '../lib/pointer'
-  import SyncPanel from './SyncPanel.svelte'
 
   interface Props {
     onclose: () => void
@@ -334,54 +333,9 @@
     <button class="add" onclick={() => (adding = true)}>+ Add a custom provider</button>
   {/if}
 
-  <footer>
-    <SyncPanel />
-    <label class="notify">
-      <input
-        type="checkbox"
-        checked={library.settings.notificationsEnabled}
-        onchange={(e) => library.setNotificationsEnabled(e.currentTarget.checked)}
-      />
-      Notify me about new episodes
-    </label>
-    <label class="notify">
-      <input
-        type="checkbox"
-        checked={library.settings.skipIntro}
-        onchange={(e) => library.setSkipIntro(e.currentTarget.checked)}
-      />
-      Offer to skip intros
-    </label>
-    <!--
-      Spelled out rather than hidden behind the label, because this is the
-      only switch in the app that changes who learns what you are watching.
-      Everything else here is either local or already visible to TMDB.
-    -->
-    <p class="privacy-note">
-      Asks two community databases — <strong>IntroDB</strong> and <strong>SkipDB</strong>, plus
-      <strong>AniSkip</strong> for anime — where the intro is, by IMDB id and episode number. They learn
-      what you are watching. Nothing else is sent, and turning this off stops it at once.
-    </p>
-    <div class="io">
-      <button onclick={() => window.wta.data.export()}>Export data</button>
-      <button
-        onclick={async () => {
-          await window.wta.data.import(null)
-          await library.reload()
-        }}>Import data</button
-      >
-    </div>
-  </footer>
 </aside>
 
 <style>
-  .privacy-note {
-    color: var(--text-tertiary, var(--text-secondary));
-    font-size: var(--text-xs);
-    line-height: 1.5;
-    margin: calc(var(--space-1) * -1) 0 0;
-  }
-
   .panel {
     position: fixed;
     top: var(--nav-height);
@@ -660,33 +614,4 @@
     color: var(--danger);
   }
 
-  footer {
-    padding: var(--space-3) var(--space-4) var(--space-4);
-    border-top: 1px solid var(--border-subtle);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .notify {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-  }
-
-  .io {
-    display: flex;
-    gap: var(--space-2);
-  }
-
-  .io button {
-    flex: 1;
-    padding: var(--space-2);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-  }
-  .io button:hover {
-    background: var(--bg-hover);
-  }
 </style>

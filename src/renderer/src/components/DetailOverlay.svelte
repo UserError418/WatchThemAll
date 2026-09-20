@@ -19,6 +19,9 @@
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
+  import { resumeTarget } from '@shared/progress'
+  import Score from './Score.svelte'
+  import { seasonScore } from '@shared/score'
 
   interface Props {
     media: MediaSummary
@@ -69,7 +72,18 @@
 
   const inWatchlist = $derived(library.isInWatchlist(subject.tmdbId))
   const tracked = $derived(library.isTracked(subject.tmdbId))
-  const seen = $derived(library.hasSeen(subject.tmdbId))
+  /**
+   * Whether the thing the button is about has been watched.
+   *
+   * For a film that is the film. For a series it is *the selected season* —
+   * which is the whole point of the change: "I have watched this" about a
+   * nine-season show, said while looking at season one, used to file all nine.
+   */
+  const seen = $derived(
+    subject.type === 'movie'
+      ? library.hasSeen(subject.tmdbId)
+      : library.hasSeenSeason(subject.tmdbId, selectedSeason),
+  )
   const entry = $derived(library.watchlistEntry(subject.tmdbId))
   const backdrop = $derived(backdropUrl(detail?.backdropPath ?? subject.backdropPath))
   const poster = $derived(posterUrl(detail?.posterPath ?? subject.posterPath, 'w342'))
@@ -142,6 +156,7 @@
       library.attachImdbId(tmdbId, result.imdbId)
       // Lets the watchlist draw a real progress bar without a request per tile.
       if (type === 'tv') library.setEpisodeCount(tmdbId, result.episodeCount)
+      library.setRating(tmdbId, result.rating)
 
       if (type === 'tv' && result.seasonCount > 0) {
         // Resume where the user left off rather than always at season one.
@@ -202,7 +217,7 @@
   $effect(() => {
     const loaded = season
     if (!loaded || subject.type !== 'tv') return
-    if (!library.hasSeen(subject.tmdbId)) return
+    if (!library.hasSeenSeason(subject.tmdbId, loaded.season)) return
 
     const key = `${subject.tmdbId}:${loaded.season}`
     if (reconciled[key]) return
@@ -274,7 +289,25 @@
     library.recordWatch(playable, episode?.season ?? null, episode?.episode ?? null)
   }
 
-  /** Resume from the stored position, or the first episode if there is none. */
+  /**
+   * Where this series picks up.
+   *
+   * Derived rather than read straight off the entry: `lastSeason`/`lastEpisode`
+   * are the last episode *started*, which is very often one that was then
+   * finished — and a finished episode is not a place to resume. See
+   * `shared/progress.ts` for the rule and for the write race it sidesteps.
+   */
+  const resumeAt = $derived(
+    resumeTarget({
+      episodes: season?.episodes ?? [],
+      lastSeason: entry?.lastSeason ?? 1,
+      lastEpisode: entry?.lastEpisode ?? 1,
+      seasonCount: detail?.seasonCount ?? 1,
+      isWatched: (s, e) => library.isWatched(subject.tmdbId, s, e),
+    }),
+  )
+
+  /** Resume from the derived position, or the first episode if there is none. */
   function resume(): void {
     if (playable.type === 'movie') {
       void play(null)
@@ -287,9 +320,39 @@
     }
     const target =
       season?.episodes.find(
-        (e) => e.season === entry?.lastSeason && e.episode === entry?.lastEpisode,
+        (e) => e.season === resumeAt.season && e.episode === resumeAt.episode,
       ) ?? season?.episodes[0]
     void play(target ?? null)
+  }
+
+  /** What pressing "+ Watched" will actually file, in words. */
+  const watchedScopeLabel = $derived(
+    subject.type === 'movie' ? 'Watched' : `Season ${selectedSeason} watched`,
+  )
+
+  /**
+   * Mark what is on screen as watched, or take it back.
+   *
+   * For a series this files the selected season and ticks off its episodes, so
+   * the Watched tab and the episode browser agree — they disagreeing is the
+   * original fault here, and it is why a MyAnimeList import of completed shows
+   * showed every episode unwatched.
+   */
+  function toggleSeen(): void {
+    const media = detail ?? subject
+    if (subject.type === 'movie') {
+      if (seen) library.removeFromWatched(subject.tmdbId)
+      else library.addToWatched(media)
+      return
+    }
+
+    if (seen) {
+      library.removeFromWatched(subject.tmdbId, selectedSeason)
+      return
+    }
+
+    library.addToWatched(media, 'user', selectedSeason)
+    if (season) toggleSeasonWatched(true)
   }
 
   function toggleSeasonWatched(watched: boolean): void {
@@ -430,7 +493,7 @@
               <span>{detail.seasonCount} season{detail.seasonCount === 1 ? '' : 's'}</span>
             {/if}
             {#if detail?.runtime}<span>{runtime(detail.runtime)}</span>{/if}
-            {#if subject.rating > 0}<span class="score">★ {subject.rating.toFixed(1)}</span>{/if}
+            <Score rating={detail?.rating ?? subject.rating} size="md" />
           </p>
           {#if detail?.genres.length}
             <p class="genres">{detail.genres.join(' · ')}</p>
@@ -438,7 +501,7 @@
 
           <div class="actions">
             <button class="primary" onclick={resume} disabled={!detail}>
-              ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(entry.lastSeason ?? 1, entry.lastEpisode ?? 1)}` : 'Play'}
+              ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
             </button>
             <SourcePicker
               selected={chosenProvider}
@@ -476,17 +539,19 @@
             <button
               class="secondary"
               class:on={seen}
-              onclick={() =>
-                seen
-                  ? library.removeFromWatched(subject.tmdbId)
-                  : library.addToWatched(detail ?? subject)}
-              title={seen ? 'In your watched list' : 'Mark as already watched'}
+              onclick={() => toggleSeen()}
+              title={seen ? 'In your watched list' : watchedScopeLabel}
             >
-              {seen ? '✓ Watched' : '+ Watched'}
+              {seen ? '✓ Watched' : `+ ${watchedScopeLabel}`}
             </button>
 
             {#if seen}
-              <RateButtons media={detail ?? subject} />
+              <!-- Scoped to match the button beside it: an opinion about season
+                   three is a different thing from an opinion about the show. -->
+              <RateButtons
+                media={detail ?? subject}
+                season={subject.type === 'movie' ? null : selectedSeason}
+              />
             {/if}
           </div>
 
@@ -569,6 +634,10 @@
                 {/each}
               </select>
             </label>
+            <!-- Averaged from the episodes: TMDB has no season score in the
+                 payload this app fetches, and asking for one would be a request
+                 per season purely to draw a number. -->
+            <Score rating={seasonScore(season?.episodes ?? [])} size="md" />
             <div class="bulk">
               <button onclick={() => toggleSeasonWatched(true)}>Mark season watched</button>
               <button onclick={() => toggleSeasonWatched(false)}>Clear season</button>
@@ -586,8 +655,8 @@
                   next={episode.episode === nextUnaired}
                   progress={library.episodeProgress(subject.tmdbId, episode.season, episode.episode)}
                   watched={library.isWatched(subject.tmdbId, episode.season, episode.episode)}
-                  current={entry?.lastSeason === episode.season &&
-                    entry?.lastEpisode === episode.episode}
+                  current={resumeAt.season === episode.season &&
+                    resumeAt.episode === episode.episode}
                   onplay={(e) => play(e)}
                   ontoggleWatched={(e, watched) => {
                     if (!library.isInWatchlist(subject.tmdbId)) library.addToWatchlist(detail ?? subject)
@@ -756,11 +825,6 @@
     margin: 0 0 var(--space-2);
     font-size: var(--text-sm);
     color: var(--text-secondary);
-  }
-
-  .score {
-    color: var(--warning);
-    font-weight: 600;
   }
 
   .actions {

@@ -214,6 +214,33 @@ export async function discoverByGenres(
   return toPaged(res, type)
 }
 
+/**
+ * What TMDB thinks is like this title.
+ *
+ * The content-based half of the tailored row. `/recommendations` is computed
+ * from what people actually watch together as well as from metadata, so it
+ * answers a question genre filtering cannot: two series can share every genre
+ * tag and have nothing else in common, and `/discover` cannot tell them apart.
+ *
+ * Failures are swallowed into an empty page on purpose. This is called once per
+ * seed title and the results are pooled — one title TMDB has nothing for, or
+ * one request that times out, should thin the row rather than empty it.
+ */
+export async function recommendations(
+  tmdbId: number,
+  type: MediaType,
+  page = 1,
+): Promise<Paged<MediaSummary>> {
+  try {
+    const res = await get<TmdbPage>(`/${type}/${tmdbId}/recommendations`, {
+      page: Math.max(1, page),
+    })
+    return toPaged(res, type)
+  } catch {
+    return { items: [], page, totalPages: 0 }
+  }
+}
+
 export async function search(query: string, page = 1): Promise<Paged<MediaSummary>> {
   if (!query.trim()) return { items: [], page: 1, totalPages: 0 }
   const res = await get<TmdbPage>('/search/multi', { query, page, include_adult: 'false' })

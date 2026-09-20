@@ -25,6 +25,7 @@ import { isProbeRun, probeAndQuit } from './probecli'
 import type { PlayCandidate } from './providers'
 import type { VideoPosition } from './playerview'
 import { checkAll, describeNotice, startReleaseTimer, type ReleaseNotice } from './releases'
+import { backfillScores } from './scorebackfill'
 import { buildPlayUrl } from './providers'
 import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
@@ -764,6 +765,39 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
     void createMainWindow()
 
     stopReleaseTimer = startReleaseTimer(store, announce)
+
+    /**
+     * Top up scores for titles saved before the app stored one.
+     *
+     * Deliberately unawaited and deliberately slow — see `scorebackfill.ts`.
+     * Nothing on screen is waiting for it; the lists it improves simply start
+     * showing scores as the writes land, and a run that is cut short resumes on
+     * the next launch.
+     */
+    void backfillScores({
+      pending: () => {
+        const document = store.read()
+        const missing = [
+          ...document.watchlist.filter((w) => !(w.rating > 0)),
+          ...document.watched.filter((w) => !(w.rating > 0)),
+        ]
+        // A title in both lists is one lookup, not two.
+        const seen = new Set<number>()
+        return missing.filter((entry) => {
+          if (seen.has(entry.tmdbId)) return false
+          seen.add(entry.tmdbId)
+          return true
+        })
+      },
+      score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type)).rating,
+      save: (tmdbId, score) => {
+        for (const name of ['watchlist', 'watched'] as const) {
+          const collection = store.collection(name)
+          const entry = store.read()[name].find((e) => e.tmdbId === tmdbId)
+          if (entry) collection.put({ ...entry, rating: score })
+        }
+      },
+    })
 
     /**
      * Load the managed provider list, then look for a newer one.

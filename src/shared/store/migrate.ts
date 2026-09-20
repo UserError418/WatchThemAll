@@ -160,6 +160,19 @@ function fromTyped(
   }
 
   /**
+   * Version 5: scope watched entries and ratings to a season.
+   *
+   * Everything written before seasons existed meant "the whole series", which
+   * is exactly what `null` means here — so this is a normalisation rather than
+   * a reinterpretation, and nothing a user did changes meaning. Spreading a
+   * document does not fill in fields added to an element type afterwards, so
+   * without this the field is simply absent and every reader has to defend
+   * against it.
+   */
+  doc.watched = doc.watched.map((entry) => ({ ...entry, season: entry.season ?? null }))
+  doc.ratings = doc.ratings.map((rating) => ({ ...rating, season: rating.season ?? null }))
+
+  /**
    * Repair watchlist entries written before later fields existed.
    *
    * Spreading fills in absent top-level keys but not fields added to an element
@@ -195,6 +208,9 @@ function fromTyped(
     // Null means "not known yet", which renders as a position without a
     // percentage rather than as 0%.
     episodeCount: entry.episodeCount ?? null,
+    // 0 means "no score", which the score component draws as nothing at all
+    // rather than as a damning 0.0. Filled in when the title is next opened.
+    rating: typeof entry.rating === 'number' ? entry.rating : 0,
     lastSeason: entry.type === 'movie' ? null : clampPosition(entry.lastSeason),
     lastEpisode: entry.type === 'movie' ? null : clampPosition(entry.lastEpisode),
     }
@@ -230,6 +246,7 @@ function fromLegacy(raw: Record<string, unknown>, now: number): StoreDocument {
           episodeMarks: {},
           genreIds: [],
           episodeCount: null,
+          rating: 0,
           addedAt: now,
           providerId: typeof b.schemaId === 'string' && b.schemaId ? b.schemaId : null,
           updatedAt: now,

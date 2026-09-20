@@ -19,16 +19,23 @@
     media: MediaSummary
     /** Compact enough to sit on a card; the default suits a row. */
     size?: 'sm' | 'md'
+    /**
+     * Which season this opinion is about, or null for the whole title.
+     *
+     * A show can be worth watching while one season of it is not, so the two
+     * are stored separately and this control has to say which it is setting.
+     */
+    season?: number | null
   }
 
-  const { media, size = 'md' }: Props = $props()
+  const { media, size = 'md', season = null }: Props = $props()
 
-  const rating = $derived(library.ratingFor(media.tmdbId))
+  const rating = $derived(library.ratingFor(media.tmdbId, season))
 
   function rate(value: 'like' | 'dislike', event: MouseEvent): void {
     // These sit inside cards that open a detail overlay on click.
     event.stopPropagation()
-    library.rate(media, value)
+    library.rate(media, value, season)
   }
 </script>
 

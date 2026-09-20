@@ -266,6 +266,16 @@ export interface WatchlistEntry {
    * so it arrives on first open and stays current from then on.
    */
   episodeCount: number | null
+  /**
+   * TMDB `vote_average` at the time the entry was made, 0 when unknown.
+   *
+   * Copied in for the same reason as `genreIds` and `episodeCount`: every view
+   * that lists saved titles wants to draw a score, and the alternative is one
+   * detail request per saved title every time the view opens. Refreshed
+   * whenever the detail overlay loads the title, so it arrives on first open
+   * and stays roughly current from then on.
+   */
+  rating: number
   addedAt: number
   providerId: string | null
 }
@@ -333,11 +343,28 @@ export interface WatchedEntry {
   /** 0 when the title came from an import that has not been resolved yet. */
   tmdbId: number
   type: MediaType
+  /**
+   * Which season this entry is about, or null for the whole title.
+   *
+   * Null is right for a film, and it is also what every entry made before
+   * seasons were scoped carries — those mean "the whole series", which is what
+   * they meant when they were written. A series watched season by season
+   * produces one entry per season instead, so finishing season 1 of a
+   * nine-season show says exactly that rather than claiming all nine.
+   *
+   * Scoping this was a direct consequence of how it behaved before: the Watched
+   * tab held whole titles, the episode browser held episodes, and the bridge
+   * between them keyed on the title — so marking anything watched ticked off
+   * every episode of every season the user then opened.
+   */
+  season: number | null
   title: string
   posterPath: string | null
   imdbId: string | null
   /** TMDB genre ids, for the taste profile. Empty until resolved. */
   genreIds: number[]
+  /** TMDB `vote_average`, 0 when unknown. See `WatchlistEntry.rating`. */
+  rating: number
   addedAt: number
   /** Where this came from, so an import can be undone or re-run sensibly. */
   source: 'user' | 'mal'
@@ -356,10 +383,22 @@ export interface WatchedEntry {
 export type Rating = 'like' | 'dislike'
 
 export interface TitleRating {
-  /** `tv:tt0903747` or `movie:tt0137523`, matching `outcomes.titleKey`. */
+  /**
+   * `tv:tt0903747` or `movie:tt0137523`, matching `outcomes.titleKey` — and
+   * `tv:tt0903747:s3` for an opinion about one season.
+   *
+   * The suffix rather than a change to the existing format is deliberate: a
+   * whole-title rating keeps exactly the key it has always had, so nothing
+   * already stored has to be rewritten or re-identified, and season ratings
+   * simply occupy a key space that was previously empty. `ratings` is merged by
+   * this key, so it has to carry the season — a `season` field alone would make
+   * every season of a series collide on one record.
+   */
   key: string
   tmdbId: number
   type: MediaType
+  /** The season this applies to, or null for the whole title. */
+  season: number | null
   rating: Rating
   /** TMDB genre ids at the time of rating, so the profile needs no lookups. */
   genreIds: number[]

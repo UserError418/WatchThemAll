@@ -85,7 +85,8 @@ import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
-import { excludedTmdbIds, genreWeights, hasEnoughSignal } from '@main/taste'
+import { buildTailoredRow } from '@main/tailored'
+import { backfillScores } from '@main/scorebackfill'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
@@ -103,16 +104,6 @@ import { MobileStore } from './store'
 import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
 import type { SyncStatus } from '@shared/sync/types'
-
-/** Interleave two lists, longest tail last. Mirrors the desktop tailored row. */
-function interleave<T>(a: T[], b: T[]): T[] {
-  const out: T[] = []
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if (a[i]) out.push(a[i]!)
-    if (b[i]) out.push(b[i]!)
-  }
-  return out
-}
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
 const SYNC_AFTER_WRITE_MS = 8_000
@@ -993,6 +984,37 @@ export async function createBridge(): Promise<WtaApi> {
     },
   })
 
+  /**
+   * Top up scores for titles saved before the app stored one.
+   *
+   * The desktop does the same at startup; the phone needs its own call because
+   * the two have no shared process, only a shared module. Unawaited and slow on
+   * purpose — see `scorebackfill.ts`. Nothing on screen waits for it, and a run
+   * cut short by the app being backgrounded resumes next launch.
+   */
+  void backfillScores({
+    pending: () => {
+      const document = store.read()
+      const seen = new Set<number>()
+      return [
+        ...document.watchlist.filter((w) => !(w.rating > 0)),
+        ...document.watched.filter((w) => !(w.rating > 0)),
+      ].filter((entry) => {
+        if (seen.has(entry.tmdbId)) return false
+        seen.add(entry.tmdbId)
+        return true
+      })
+    },
+    score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type))?.rating ?? 0,
+    save: (tmdbId, score) => {
+      for (const name of ['watchlist', 'watched'] as const) {
+        const collection = store.collection(name)
+        const entry = store.read()[name].find((e) => e.tmdbId === tmdbId)
+        if (entry) collection.put({ ...entry, rating: score })
+      }
+    },
+  })
+
   return {
     store: {
       read: async () => store.read(),
@@ -1012,22 +1034,11 @@ export async function createBridge(): Promise<WtaApi> {
        * the surface that draws it assemble the genre ids means the next surface
        * wanting the same thing reimplements the taste model.
        */
-      tailored: async (req: TailoredRequest): Promise<TailoredRow> => {
-        const data = store.read()
-        if (!hasEnoughSignal(data)) return { items: [], genreIds: [], ready: false }
-
-        const weights = genreWeights(data)
-        if (weights.length === 0) return { items: [], genreIds: [], ready: false }
-
-        const genreIds = weights.slice(0, 3).map((g) => g.genreId)
-        const excluded = new Set(excludedTmdbIds(data))
-        const [tv, movie] = await Promise.all([
-          tmdb.discoverByGenres('tv', genreIds, req.page),
-          tmdb.discoverByGenres('movie', genreIds, req.page),
-        ])
-        const items = interleave(tv.items, movie.items).filter((m) => !excluded.has(m.tmdbId))
-        return { items, genreIds, ready: true }
-      },
+      tailored: (req: TailoredRequest): Promise<TailoredRow> =>
+        buildTailoredRow(store.read(), req.page, {
+          recommendations: tmdb.recommendations,
+          discoverByGenres: tmdb.discoverByGenres,
+        }),
 
       search: (query: string, page: number) => tmdb.search(query, page),
       detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),
@@ -1188,6 +1199,7 @@ export async function createBridge(): Promise<WtaApi> {
                 title: best.title,
                 posterPath: best.posterPath ?? null,
                 genreIds: best.genreIds ?? [],
+                rating: best.rating ?? 0,
               }
             }
           }

@@ -250,6 +250,7 @@ class Library {
       tmdbId: media.tmdbId,
       type: media.type,
       title: media.title,
+      rating: media.rating ?? 0,
       posterPath: media.posterPath,
       // `?? null` because the field is optional on a summary: absent means
       // "not known yet", which the entry stores as null.
@@ -309,6 +310,26 @@ class Library {
 
     const entry = this.watchlistEntry(tmdbId)
     if (!entry) return
+
+    /*
+     * Never move the position backwards.
+     *
+     * Leaving an episode settles it in the main process, and leaving is also
+     * what happens when the user picks the *next* one — so "E1 finished" and
+     * "E2 started" are two writes to this field with no guaranteed order
+     * between them. Without this guard the settling of E1 lands last often
+     * enough to rewind the position onto an episode already watched to the
+     * end, which is what the user sees as a Resume button that will not move
+     * on. `resumeTarget` decides where to actually go; this only stops the
+     * stored position losing ground.
+     */
+    const behind =
+      entry.lastSeason !== null &&
+      entry.lastEpisode !== null &&
+      (season < entry.lastSeason ||
+        (season === entry.lastSeason && episode < entry.lastEpisode))
+    if (behind) return
+
     entry.lastSeason = season
     entry.lastEpisode = episode
     void this.persist({ watchlist: this.watchlist })
@@ -738,6 +759,30 @@ class Library {
   }
 
   /**
+   * Whether *this season* has been watched.
+   *
+   * The distinction `hasSeen` cannot make, and the reason the old behaviour was
+   * too blunt: the episode browser ticked off every episode of every season the
+   * user opened, because the only question it could ask was about the title. A
+   * legacy entry with no season still answers yes for every season, which is
+   * what it has always meant.
+   */
+  hasSeenSeason(tmdbId: number, season: number): boolean {
+    if (tmdbId === 0) return false
+    return this.watched.some(
+      (w) => w.tmdbId === tmdbId && (w.season === null || w.season === season),
+    )
+  }
+
+  /** Every season of this title that is in the watched list, ascending. */
+  seasonsSeen(tmdbId: number): number[] {
+    return this.watched
+      .filter((w) => w.tmdbId === tmdbId && w.season !== null)
+      .map((w) => w.season as number)
+      .sort((a, b) => a - b)
+  }
+
+  /**
    * Mark a title as seen.
    *
    * Idempotent by TMDB id, and it deliberately does *not* remove the title from
@@ -746,15 +791,23 @@ class Library {
    * someone's watchlist entry as a side effect of a different action is the kind
    * of helpfulness that loses data.
    */
-  addToWatched(media: MediaSummary | MediaDetail, source: 'user' | 'mal' = 'user'): WatchedEntry {
-    const existing = this.watched.find((w) => w.tmdbId === media.tmdbId && media.tmdbId !== 0)
+  addToWatched(
+    media: MediaSummary | MediaDetail,
+    source: 'user' | 'mal' = 'user',
+    season: number | null = null,
+  ): WatchedEntry {
+    const existing = this.watched.find(
+      (w) => w.tmdbId === media.tmdbId && media.tmdbId !== 0 && (w.season ?? null) === season,
+    )
     if (existing) return existing
 
     const entry: WatchedEntry = {
       id: newId(),
       tmdbId: media.tmdbId,
       type: media.type,
+      season,
       title: media.title,
+      rating: media.rating ?? 0,
       posterPath: media.posterPath,
       imdbId: media.imdbId ?? null,
       genreIds: media.genreIds,
@@ -785,7 +838,10 @@ class Library {
         id: newId(),
         tmdbId: entry.tmdbId,
         type: entry.type,
+        // A film. Series reach Watched one season at a time.
+        season: null,
         title: entry.title,
+        rating: entry.rating,
         posterPath: entry.posterPath,
         imdbId: entry.imdbId,
         genreIds: entry.genreIds,
@@ -798,15 +854,34 @@ class Library {
     void this.persist({ watched: this.watched })
   }
 
-  removeFromWatched(tmdbId: number): void {
-    this.watched = this.watched.filter((w) => w.tmdbId !== tmdbId)
+  /**
+   * Remove a title from Watched, or just one of its seasons.
+   *
+   * Passing no season removes every entry for the title, which is what the
+   * Watched tab's remove button means for a film and what "I have not seen this
+   * after all" means for a series. Passing one removes that season only.
+   */
+  removeFromWatched(tmdbId: number, season: number | null | undefined = undefined): void {
+    this.watched = this.watched.filter((w) => {
+      if (w.tmdbId !== tmdbId) return true
+      return season === undefined ? false : (w.season ?? null) !== season
+    })
     void this.persist({ watched: this.watched })
   }
 
   /* ── Ratings ─────────────────────────────────────────────────────────── */
 
-  ratingFor(tmdbId: number): Rating | null {
-    return this.ratings.find((r) => r.tmdbId === tmdbId)?.rating ?? null
+  /**
+   * The user's opinion of a title, or of one of its seasons.
+   *
+   * `season` null asks about the series as a whole, which is a different
+   * question from "what did you think of season 3" and is stored separately —
+   * a show can be worth watching while one season of it is not.
+   */
+  ratingFor(tmdbId: number, season: number | null = null): Rating | null {
+    return (
+      this.ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)?.rating ?? null
+    )
   }
 
   /**
@@ -816,18 +891,25 @@ class Library {
    * states and retracts an opinion. Without that there is no way back from a
    * mis-tap except a separate 'clear' affordance nobody would look for.
    */
-  rate(media: MediaSummary | MediaDetail, rating: Rating): void {
-    const current = this.ratingFor(media.tmdbId)
-    const rest = this.ratings.filter((r) => r.tmdbId !== media.tmdbId)
+  rate(media: MediaSummary | MediaDetail, rating: Rating, season: number | null = null): void {
+    const current = this.ratingFor(media.tmdbId, season)
+    const rest = this.ratings.filter(
+      (r) => !(r.tmdbId === media.tmdbId && (r.season ?? null) === season),
+    )
+
+    const base = `${media.type}:${media.imdbId || media.tmdbId}`
 
     this.ratings =
       current === rating
         ? rest
         : [
             {
-              key: `${media.type}:${media.imdbId || media.tmdbId}`,
+              // The season suffix keeps a whole-title rating on exactly the key
+              // it has always had, so nothing already stored is re-identified.
+              key: season === null ? base : `${base}:s${season}`,
               tmdbId: media.tmdbId,
               type: media.type,
+              season,
               rating,
               // Copied in rather than looked up later: the taste profile reads
               // every rating, and re-fetching genres per title is what made the
@@ -843,7 +925,9 @@ class Library {
 
   /** How many rated titles still have no opinion, for the Watched tab's prompt. */
   get unratedWatched(): WatchedEntry[] {
-    return this.watched.filter((w) => this.ratingFor(w.tmdbId) === null)
+    // Asked at the entry's own scope: a season nobody has rated is still
+    // unrated even when the series as a whole has an opinion on it.
+    return this.watched.filter((w) => this.ratingFor(w.tmdbId, w.season ?? null) === null)
   }
 
   /**
@@ -858,6 +942,51 @@ class Library {
     if (!entry || count <= 0 || entry.episodeCount === count) return
     entry.episodeCount = count
     void this.persist({ watchlist: this.watchlist })
+  }
+
+  /**
+   * Refresh the stored score for a saved title.
+   *
+   * Same bargain as `setEpisodeCount`: the views that list saved titles want to
+   * draw a score, and fetching one per title per render was explicitly rejected
+   * as a design. So the score is copied in when the detail overlay loads the
+   * title, which is the one moment it is known for free, and both the watchlist
+   * and the watched list are updated — a title is often in both, and a score
+   * that is right in one place and stale in the other is worse than either.
+   */
+  setRating(tmdbId: number, rating: number): void {
+    if (tmdbId === 0 || !(rating > 0)) return
+
+    const entry = this.watchlistEntry(tmdbId)
+    const seen = this.watched.find((w) => w.tmdbId === tmdbId)
+    const stale = (entry && entry.rating !== rating) || (seen && seen.rating !== rating)
+    if (!stale) return
+
+    if (entry) entry.rating = rating
+    if (seen) seen.rating = rating
+    void this.persist({ watchlist: this.watchlist, watched: this.watched })
+  }
+
+  /**
+   * The stored score for a title, from wherever it is saved.
+   *
+   * Release trackers carry no score of their own and adding one would be a
+   * third place for the same number to go stale. A tracked series is
+   * essentially always in the watchlist, so reading it from there costs a
+   * lookup and keeps one source of truth.
+   *
+   * Called `scoreFor` and not `ratingFor` because this app has two things
+   * called a rating and they are not the same: TMDB's *score* out of ten, and
+   * the user's own like/dislike, which `ratingFor` returns. Naming both the
+   * same thing is how one gets drawn where the other was meant.
+   */
+  scoreFor(tmdbId: number): number {
+    if (tmdbId === 0) return 0
+    return (
+      this.watchlistEntry(tmdbId)?.rating ||
+      this.watched.find((w) => w.tmdbId === tmdbId)?.rating ||
+      0
+    )
   }
 
   setDefaultProvider(id: string | null): void {

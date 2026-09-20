@@ -36,7 +36,7 @@ import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { excludedTmdbIds, genreWeights, hasEnoughSignal } from './taste'
+import { buildTailoredRow } from './tailored'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -121,21 +121,6 @@ export interface IpcDeps {
 }
 
 /**
- * Alternate two lists, longest tail last.
- *
- * Not concat: a mixed row that is all series followed by all films reads as two
- * rows that failed to separate.
- */
-function interleave<T>(a: T[], b: T[]): T[] {
-  const out: T[] = []
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if (a[i]) out.push(a[i]!)
-    if (b[i]) out.push(b[i]!)
-  }
-  return out
-}
-
-/**
  * The entries from the most recent preview, awaiting a decision.
  *
  * Kept here rather than round-tripped through the renderer: the alternative is
@@ -162,38 +147,12 @@ export function registerIpc(deps: IpcDeps): void {
    * ids to send back would put the recommendation in the surface that draws it,
    * where the next surface wanting the same thing has to reimplement it.
    */
-  ipcMain.handle(CH.tmdbTailored, async (_e, req: TailoredRequest) => {
-    const data = store.read()
-    if (!hasEnoughSignal(data)) return { items: [], genreIds: [], ready: false }
-
-    const weights = genreWeights(data)
-    if (weights.length === 0) return { items: [], genreIds: [], ready: false }
-
-    /**
-     * Up to three genres, combined with OR rather than AND.
-     *
-     * AND would demand a title be simultaneously every genre the user likes,
-     * which for anything but the blandest taste profile returns almost nothing.
-     * Three rather than all of them because past the third the weights are long
-     * tails and including them makes the row indistinguishable from "popular".
-     */
-    const genreIds = weights.slice(0, 3).map((g) => g.genreId)
-    const excluded = new Set(excludedTmdbIds(data))
-
-    /**
-     * Both media types, interleaved.
-     *
-     * A taste profile built from a mixed library and then answered with series
-     * only reads as a bug to anyone whose likes are mostly films.
-     */
-    const [tv, movie] = await Promise.all([
-      tmdb.discoverByGenres('tv', genreIds, req.page),
-      tmdb.discoverByGenres('movie', genreIds, req.page),
-    ])
-
-    const items = interleave(tv.items, movie.items).filter((m) => !excluded.has(m.tmdbId))
-    return { items, genreIds, ready: true }
-  })
+  ipcMain.handle(CH.tmdbTailored, (_e, req: TailoredRequest) =>
+    buildTailoredRow(store.read(), req.page, {
+      recommendations: tmdb.recommendations,
+      discoverByGenres: tmdb.discoverByGenres,
+    }),
+  )
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))
   ipcMain.handle(CH.tmdbDetail, (_e, id: number, type: MediaType) => tmdb.detail(id, type))
@@ -442,6 +401,7 @@ export function registerIpc(deps: IpcDeps): void {
               title: best.title,
               posterPath: best.posterPath,
               genreIds: best.genreIds,
+              rating: best.rating,
             }
           }
         }

@@ -228,6 +228,9 @@ export function importIntoStore(
         lastEpisode: type === 'movie' ? null : num(raw.lastEpisode, 1),
         watchedEpisodes: [],
         episodeMarks: {},
+        // Foreign exports carry no score either; 0 reads as "not known" and is
+        // filled in the first time the title is opened.
+        rating: num(raw.stars, 0),
         // Foreign exports carry no genre data; the taste profile simply does
         // not count imported entries until they are opened once.
         genreIds: [],

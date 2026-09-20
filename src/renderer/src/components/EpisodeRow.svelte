@@ -9,6 +9,7 @@
   import type { Episode } from '@shared/types'
   import { airDate, countdown, episodeCode, hasAired, runtime } from '../lib/format'
   import { stillUrl } from '../lib/images'
+  import Score from './Score.svelte'
 
   interface Props {
     episode: Episode
@@ -90,6 +91,7 @@
       <span class="code">{episodeCode(episode.season, episode.episode)}</span>
       <span class="name">{episode.name || 'TBA'}</span>
       {#if episode.runtime}<span class="meta">{runtime(episode.runtime)}</span>{/if}
+      <Score rating={episode.rating} />
     </div>
     {#if episode.overview}
       <p class="overview">{episode.overview}</p>

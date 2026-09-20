@@ -9,11 +9,10 @@
    * question. History is its own tab now; this one is only the active list.
    */
   import type { MediaSummary } from '@shared/types'
-  import type { MalPreview } from '@shared/ipc'
-  import MalImportDialog from '../components/MalImportDialog.svelte'
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import { episodeCode, runtime } from '../lib/format'
+  import Score from '../components/Score.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -113,52 +112,6 @@
    * than being re-implemented here — there is exactly one copy of the merge
    * logic and this is not it.
    */
-  let transferNote = $state<string | null>(null)
-
-  async function exportData(): Promise<void> {
-    transferNote = null
-    const result = (await window.wta.data.export()) as { ok?: boolean; cancelled?: boolean; error?: string }
-    if (result?.cancelled) return
-    transferNote = result?.ok ? 'Catalogue exported.' : (result?.error ?? 'Export failed.')
-  }
-
-  async function importData(): Promise<void> {
-    transferNote = null
-    const result = (await window.wta.data.import(null)) as {
-      ok?: boolean
-      cancelled?: boolean
-      error?: string
-    }
-    if (result?.cancelled) return
-    if (!result?.ok) {
-      transferNote = result?.error ?? 'Import failed.'
-      return
-    }
-    // The main process merged into the stored document; the in-memory copy is
-    // now stale and would silently show the pre-import catalogue.
-    await library.reload()
-    transferNote = 'Catalogue imported.'
-  }
-
-  /**
-   * A separate button from the catalogue import, deliberately.
-   *
-   * The two do genuinely different things: one merges a WatchThemAll export and
-   * is over in a click, the other opens a review dialog for a few hundred anime
-   * and asks where each status group should land. Folding them into one control
-   * that behaves differently depending on the file extension would mean the
-   * user cannot tell which they are about to get until it happens.
-   */
-  async function importMal(): Promise<void> {
-    transferNote = null
-    try {
-      malPreview = await window.wta.mal.preview()
-    } catch (err) {
-      transferNote = err instanceof Error ? err.message : 'Could not read that file.'
-    }
-  }
-
-  let malPreview = $state<MalPreview | null>(null)
 </script>
 
 <div class="view">
@@ -166,20 +119,6 @@
     <header class="section-head">
       <h2>Watchlist</h2>
       <div class="head-actions">
-        <!--
-          Import/export lives here as well as in the Providers panel. This is
-          the catalogue, so this is where someone looks for it — the menu bar is
-          hidden by default and the command palette has to be known about first.
-        -->
-        <div class="transfer">
-          <button onclick={exportData} title="Save your catalogue to a file">↑ Export</button>
-          <button onclick={importData} title="Merge a catalogue file into this one">
-            ↓ Import
-          </button>
-          <button onclick={importMal} title="Import a MyAnimeList XML export">
-            ↓ MyAnimeList
-          </button>
-        </div>
         <div class="filters">
           {#each [['all', 'All'], ['tv', 'Series'], ['movie', 'Films']] as const as [id, label] (id)}
             <button class:active={filter === id} onclick={() => (filter = id)}>{label}</button>
@@ -187,10 +126,6 @@
         </div>
       </div>
     </header>
-
-    {#if transferNote}
-      <p class="transfer-note" role="status">{transferNote}</p>
-    {/if}
 
     {#if entries.length === 0}
       <p class="state">
@@ -220,6 +155,7 @@
                 {/if}
 
                 <span class="resume">▶ {progress.label}</span>
+                <span class="badge-score"><Score rating={entry.rating} onArtwork /></span>
               </div>
               <span class="title">{entry.title}</span>
               <span class="sub">
@@ -243,11 +179,14 @@
 
 </div>
 
-{#if malPreview}
-  <MalImportDialog preview={malPreview} onclose={() => (malPreview = null)} />
-{/if}
-
 <style>
+  /* Top-right, clear of the resume chip and above the progress bar. */
+  .badge-score {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+  }
+
   .view {
     padding: var(--space-5) var(--space-6) var(--space-8);
     display: flex;
@@ -273,32 +212,6 @@
     display: flex;
     align-items: center;
     gap: var(--space-4);
-  }
-
-  .transfer {
-    display: flex;
-    gap: var(--space-2);
-  }
-
-  .transfer button {
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-    font-weight: 600;
-  }
-
-  .transfer button:hover {
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .transfer-note {
-    margin: 0 0 var(--space-3);
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
   }
 
   .filters {

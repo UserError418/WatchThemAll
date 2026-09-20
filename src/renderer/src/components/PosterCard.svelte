@@ -15,6 +15,7 @@
   import { library } from '../lib/library.svelte'
   import { posterSrcset, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
+  import Score from './Score.svelte'
 
   interface Props {
     media: MediaSummary
@@ -72,9 +73,7 @@
         <div class="placeholder" aria-hidden="true">{media.title.slice(0, 1)}</div>
       {/if}
 
-      {#if media.rating > 0}
-        <span class="rating">{media.rating.toFixed(1)}</span>
-      {/if}
+      <span class="rating"><Score rating={media.rating} onArtwork /></span>
 
       <div class="overlay">
         <span class="play" aria-hidden="true">▶</span>

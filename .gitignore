@@ -56,3 +56,10 @@ docs/SYNC.md
 # they date fast, describe code that may not exist yet, and read as somebody's
 # private notebook. Anything of that kind goes here and stays local.
 docs/internal/
+
+# Agent instructions. Standing rule from the owner (2026-09-20): internal
+# documentation, plans and agent instruction files are never published. This
+# file describes how the machine and the agents work on it, not how to use or
+# build the app, and it is of no use to anyone cloning the repository.
+CLAUDE.md
+

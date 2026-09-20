@@ -43,6 +43,7 @@ const resolveAll = vi.fn(
     title,
     posterPath: '/p.jpg',
     genreIds: [16],
+    rating: 8.1,
   }),
 )
 
@@ -133,6 +134,7 @@ describe('applyMalImport', () => {
         title: 'ok',
         posterPath: null,
         genreIds: [],
+        rating: 0,
       })
 
     const { store, summary } = await applyMalImport(
@@ -169,7 +171,8 @@ describe('applyMalImport', () => {
     const id = fakeId('Cowboy Bebop')
     const before: StoreShape = {
       ...emptyStore(),
-      ratings: [stamp({ key: `tv:${id}`, tmdbId: id, type: 'tv', rating: 'like', genreIds: [], at: 1 })],
+      ratings: [stamp({ key: `tv:${id}`, tmdbId: id, type: 'tv', season: null,
+ rating: 'like', genreIds: [], at: 1 })],
     }
 
     const { store } = await applyMalImport(

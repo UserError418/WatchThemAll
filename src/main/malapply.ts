@@ -32,6 +32,8 @@ export interface ResolvedTitle {
   title: string
   posterPath: string | null
   genreIds: number[]
+  /** TMDB `vote_average`; 0 when the match came from somewhere without one. */
+  rating: number
 }
 
 export type Resolver = (title: string, type: MediaType) => Promise<ResolvedTitle | null>
@@ -120,8 +122,12 @@ export async function applyMalImport(
         id: newId(),
         tmdbId: 0,
         type,
+        // A MyAnimeList export says "watched", not "watched season 2", so an
+        // import means the whole title — the same thing it has always meant.
+        season: null,
         title: entry.title,
         posterPath: null,
+        rating: 0,
         imdbId: null,
         genreIds: [],
         addedAt: Date.now(),
@@ -138,8 +144,10 @@ export async function applyMalImport(
         id: newId(),
         tmdbId: match.tmdbId,
         type,
+        season: null,
         title: match.title,
         posterPath: match.posterPath,
+        rating: match.rating ?? 0,
         imdbId: match.imdbId,
         genreIds: match.genreIds,
         addedAt: Date.now(),
@@ -157,6 +165,7 @@ export async function applyMalImport(
         type,
         title: match.title,
         posterPath: match.posterPath,
+        rating: match.rating ?? 0,
         imdbId: match.imdbId,
         /**
          * Resume where MAL says they got to.
@@ -212,6 +221,8 @@ export async function applyMalImport(
           key: `${type}:${match.imdbId || match.tmdbId}`,
           tmdbId: match.tmdbId,
           type,
+          // A MyAnimeList score is about the entry as a whole.
+          season: null,
           rating,
           genreIds: match.genreIds,
           at: Date.now(),
