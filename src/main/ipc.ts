@@ -240,6 +240,8 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.castControl, (_e, action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
     cast.control(action, seconds),
   )
+  ipcMain.handle(CH.castSetVolume, (_e, level: number) => cast.setVolume(level))
+  ipcMain.handle(CH.castSetMuted, (_e, muted: boolean) => cast.setMuted(muted))
   ipcMain.handle(CH.castBeam, () => {
     const now = deps.castNowPlaying()
     if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON }

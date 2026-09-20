@@ -72,6 +72,16 @@ export interface CastPlaybackStatus {
   playing: boolean
   seconds: number
   duration: number
+  /**
+   * The receiver's own volume, 0–1, and its mute.
+   *
+   * Receiver-level, not media-level, which is why it does not arrive with the
+   * position: it comes in `RECEIVER_STATUS` on a different namespace, from a
+   * different transport id. It is also the television's volume on a set that
+   * does HDMI-CEC, which is the reason the remote labels the slider.
+   */
+  volume: number
+  muted: boolean
 }
 
 /** A JSON payload from the receiver, with the fields this file reads. */
@@ -81,6 +91,7 @@ interface ReceiverPayload {
   status?: {
     applications?: Array<{ appId?: string; transportId?: string; sessionId?: string }>
     mediaSessionId?: number
+    volume?: { level?: number; muted?: boolean }
   }
   // MEDIA_STATUS puts an array here rather than an object.
   [key: string]: unknown
@@ -103,7 +114,14 @@ export class CastSession {
   private transportId: string | null = null
   private mediaSessionId: number | null = null
 
-  private lastStatus: CastPlaybackStatus = { connected: false, playing: false, seconds: 0, duration: 0 }
+  private lastStatus: CastPlaybackStatus = {
+    connected: false,
+    playing: false,
+    seconds: 0,
+    duration: 0,
+    volume: 0,
+    muted: false,
+  }
 
   /** requestId -> resolver, for the messages that expect an answer. */
   private waiting = new Map<number, (payload: ReceiverPayload) => void>()
@@ -177,10 +195,14 @@ export class CastSession {
    * without a second CONNECT addressed to it the receiver discards them.
    */
   private async launch(): Promise<void> {
-    const status = await this.request(NS_RECEIVER, RECEIVER_ID, {
+    const status: ReceiverPayload = await this.request(NS_RECEIVER, RECEIVER_ID, {
       type: 'LAUNCH',
       appId: DEFAULT_MEDIA_RECEIVER,
     }, 'the TV would not start its media player')
+
+    // The launch answer is the first receiver status of the session, and the
+    // only place the volume is known before anything has been played.
+    this.readReceiverStatus(status)
 
     const app = status.status?.applications?.find((entry) => entry.appId === DEFAULT_MEDIA_RECEIVER)
     if (!app?.transportId) {
@@ -308,7 +330,9 @@ export class CastSession {
    * handful of milliseconds a push would save.
    */
   async status(): Promise<CastPlaybackStatus> {
-    if (!this.transportId) return { connected: false, playing: false, seconds: 0, duration: 0 }
+    if (!this.transportId) {
+      return { connected: false, playing: false, seconds: 0, duration: 0, volume: 0, muted: false }
+    }
     try {
       const answer = await this.request(
         NS_MEDIA,
@@ -332,11 +356,58 @@ export class CastSession {
 
     if (typeof entry.mediaSessionId === 'number') this.mediaSessionId = entry.mediaSessionId
     this.lastStatus = {
+      ...this.lastStatus,
       connected: true,
       playing: entry.playerState === 'PLAYING',
       seconds: entry.currentTime ?? this.lastStatus.seconds,
       duration: entry.media?.duration ?? this.lastStatus.duration,
     }
+  }
+
+  /**
+   * Volume, out of any receiver-level status.
+   *
+   * Called for solicited answers *and* for the unsolicited broadcasts, which
+   * is what makes the slider follow the television's own remote rather than
+   * only the app's. A receiver announces `RECEIVER_STATUS` whenever its volume
+   * changes, whoever changed it.
+   */
+  private readReceiverStatus(payload: ReceiverPayload): void {
+    const volume = payload.status?.volume
+    if (!volume) return
+    this.lastStatus = {
+      ...this.lastStatus,
+      volume: typeof volume.level === 'number' ? clampLevel(volume.level) : this.lastStatus.volume,
+      muted: typeof volume.muted === 'boolean' ? volume.muted : this.lastStatus.muted,
+    }
+  }
+
+  /**
+   * Set the receiver's volume, or its mute.
+   *
+   * Addressed to `RECEIVER_ID` on the receiver namespace, **not** to the media
+   * transport that `control` uses. That distinction is the whole reason this
+   * is not another `control` verb: sent to the media session a `SET_VOLUME` is
+   * accepted onto the wire and ignored, which is the same silent nothing that
+   * a missing `requestId` produced in September and took hardware to find.
+   *
+   * No media session is needed, so this works from the moment a device is
+   * connected — before anything has been beamed to it.
+   */
+  async setVolume(level: number, muted?: boolean): Promise<void> {
+    if (!this.socket) throw new Error('not connected to a TV')
+
+    const volume: Record<string, unknown> = {}
+    if (Number.isFinite(level)) volume.level = clampLevel(level)
+    if (typeof muted === 'boolean') volume.muted = muted
+
+    const answer = await this.request(
+      NS_RECEIVER,
+      RECEIVER_ID,
+      { type: 'SET_VOLUME', volume },
+      'the TV did not accept the volume change',
+    )
+    this.readReceiverStatus(answer)
   }
 
   /* ── Teardown ─────────────────────────────────────────────────────────── */
@@ -379,7 +450,16 @@ export class CastSession {
     this.pending = Buffer.alloc(0)
     for (const resolve of this.waiting.values()) resolve({ type: 'DISCONNECTED' })
     this.waiting.clear()
-    this.lastStatus = { connected: false, playing: false, seconds: 0, duration: 0 }
+    // Volume is not reset: it belongs to the television, which still has it
+    // after our socket goes away. Zeroing it here would make the slider claim
+    // the set had been silenced by a dropped connection.
+    this.lastStatus = {
+      ...this.lastStatus,
+      connected: false,
+      playing: false,
+      seconds: 0,
+      duration: 0,
+    }
   }
 
   /* ── Wire ─────────────────────────────────────────────────────────────── */
@@ -472,6 +552,12 @@ export class CastSession {
         this.readMediaStatus(payload)
       }
 
+      // Unsolicited as well as solicited: a receiver broadcasts this whenever
+      // its volume moves, including from the television's own remote.
+      if (namespace === NS_RECEIVER && payload.type === 'RECEIVER_STATUS') {
+        this.readReceiverStatus(payload)
+      }
+
       if (typeof payload.requestId === 'number') {
         const resolve = this.waiting.get(payload.requestId)
         if (resolve) {
@@ -481,4 +567,10 @@ export class CastSession {
       }
     }
   }
+}
+
+/** 0–1, whatever a receiver or a slider hands over. */
+function clampLevel(level: number): number {
+  if (!Number.isFinite(level)) return 0
+  return Math.max(0, Math.min(1, level))
 }

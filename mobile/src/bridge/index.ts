@@ -997,6 +997,8 @@ export async function createBridge(): Promise<WtaApi> {
       status: () => castBridge.status(),
       beam: async () => beamToTv(),
       control: (action, seconds) => castBridge.control(action, seconds),
+      setVolume: (level) => castBridge.setVolume(level),
+      setMuted: (muted) => castBridge.setMuted(muted),
     },
   })
 
@@ -1203,6 +1205,8 @@ export async function createBridge(): Promise<WtaApi> {
       },
       status: () => castBridge.status(),
       control: (action, seconds) => castBridge.control(action, seconds),
+      setVolume: (level) => castBridge.setVolume(level),
+      setMuted: (muted) => castBridge.setMuted(muted),
       beam: async () => beamToTv(),
     },
 

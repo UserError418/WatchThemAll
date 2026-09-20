@@ -27,6 +27,7 @@ import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -493,6 +494,44 @@ public class CastPlugin extends Plugin {
     }
 
     /**
+     * The receiver's volume and mute.
+     *
+     * `CastSession`, not `RemoteMediaClient`: this is the *device's* volume,
+     * which on a television doing HDMI-CEC is the set's own. It therefore
+     * works with nothing playing, which is why it is not another `control`
+     * action — that one needs a media client and correctly refuses without
+     * one.
+     *
+     * Either field may be absent; the call sets only what it was given, so
+     * muting does not silently also reset the level.
+     */
+    @PluginMethod
+    public void setVolume(PluginCall call) {
+        Double level = call.getDouble("level");
+        Boolean muted = call.getBoolean("muted");
+
+        getActivity().runOnUiThread(() -> {
+            CastSession session = currentSession();
+            if (session == null) {
+                call.reject("not connected to a Chromecast");
+                return;
+            }
+            try {
+                if (level != null) {
+                    double clamped = Math.max(0.0, Math.min(1.0, level));
+                    session.setVolume(clamped);
+                }
+                if (muted != null) session.setMute(muted);
+                call.resolve();
+            } catch (IOException error) {
+                // The session went away between the null check and the call,
+                // which is ordinary on a flaky network rather than exceptional.
+                call.reject("the TV did not accept the volume change", error);
+            }
+        });
+    }
+
+    /**
      * Where the cast is right now.
      *
      * Polled rather than pushed for position, because `RemoteMediaClient`'s
@@ -514,6 +553,16 @@ public class CastPlugin extends Plugin {
                 session != null && session.getCastDevice() != null ? session.getCastDevice().getFriendlyName() : ""
             );
             result.put("proxyRunning", proxy.isRunning());
+
+            // Device volume, and it survives having nothing to play: a
+            // connected receiver has a volume before and after a stream.
+            if (session != null && session.isConnected()) {
+                result.put("volume", session.getVolume());
+                result.put("muted", session.isMute());
+            } else {
+                result.put("volume", 0);
+                result.put("muted", false);
+            }
 
             if (client != null) {
                 result.put("playing", client.isPlaying());

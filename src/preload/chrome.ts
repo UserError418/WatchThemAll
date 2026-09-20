@@ -51,6 +51,8 @@ const api: WtaChromeApi = {
     status: () => ipcRenderer.invoke(CH.castStatus),
     control: (action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
       ipcRenderer.invoke(CH.castControl, action, seconds),
+    setVolume: (level: number) => ipcRenderer.invoke(CH.castSetVolume, level),
+    setMuted: (muted: boolean) => ipcRenderer.invoke(CH.castSetMuted, muted),
   },
 
   setOverlayHeight: (height: number): void => {

@@ -70,6 +70,15 @@ export interface CastService {
   beam(now: NowPlaying): Promise<{ ok: boolean; error?: string }>
   status(): Promise<CastStatus>
   control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+  /**
+   * The receiver's volume, 0–1, and its mute.
+   *
+   * Apart from `control` because they address different things on the wire —
+   * transport is a media-session command, volume is a receiver command — and
+   * because volume works with nothing playing while transport does not.
+   */
+  setVolume(level: number): Promise<void>
+  setMuted(muted: boolean): Promise<void>
   /** Called when a session ends on its own, so the caller can put the picture back. */
   onSessionEnded(callback: () => void): void
 }
@@ -271,6 +280,8 @@ export function createCastService(): CastService {
           seconds: 0,
           duration: 0,
           proxyRunning: proxy.isRunning(),
+          volume: 0,
+          muted: false,
         }
       }
       const playback = await session.status()
@@ -282,7 +293,26 @@ export function createCastService(): CastService {
         seconds: playback.seconds,
         duration: playback.duration,
         proxyRunning: proxy.isRunning(),
+        volume: playback.volume,
+        muted: playback.muted,
       }
+    },
+
+    /**
+     * Volume, which unlike transport needs no media session.
+     *
+     * A connected receiver can be turned down before anything has been beamed
+     * to it, so these are deliberately not guarded on a running stream the way
+     * `control` is.
+     */
+    async setVolume(level: number): Promise<void> {
+      if (!session) return
+      await session.setVolume(level)
+    },
+
+    async setMuted(muted: boolean): Promise<void> {
+      if (!session) return
+      await session.setVolume(NaN, muted)
     },
 
     async control(action, seconds = 0): Promise<void> {

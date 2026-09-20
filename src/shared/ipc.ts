@@ -129,6 +129,8 @@ export const CH = {
   castBeam: 'cast:beam',
   castStatus: 'cast:status',
   castControl: 'cast:control',
+  castSetVolume: 'cast:set-volume',
+  castSetMuted: 'cast:set-muted',
 } as const
 
 /** Send channels: main → renderer, fire and forget. */
@@ -455,6 +457,20 @@ export interface CastStatus {
    * and idle because the proxy stopped, and those two need different words.
    */
   proxyRunning: boolean
+  /**
+   * The **receiver's** volume, 0–1, and whether it is muted.
+   *
+   * Not the app's and not the stream's. On many televisions this is the set's
+   * own volume over HDMI-CEC, so moving it changes what the next thing played
+   * on that television sounds like too. The remote says so, once.
+   *
+   * Zero and `false` are the honest defaults for a receiver that has not said:
+   * a slider has to sit somewhere, and the alternative of hiding it until the
+   * first status arrives makes the control flicker into existence a second
+   * after the remote does.
+   */
+  volume: number
+  muted: boolean
 }
 
 /** An offer to move to another source, raised when the current one stalls. */
@@ -621,6 +637,16 @@ export interface WtaApi {
     beam(): Promise<{ ok: boolean; error?: string; providerName?: string }>
     status(): Promise<CastStatus>
     control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+    /**
+     * Set the receiver's volume, 0–1, and its mute.
+     *
+     * Separate from `control` because they address different things: transport
+     * is a command to the *media session*, volume is a command to the
+     * *receiver*, and on the wire they go to different transport ids. Folding
+     * them into one verb would hide a distinction the sender has to get right.
+     */
+    setVolume(level: number): Promise<void>
+    setMuted(muted: boolean): Promise<void>
   }
   sync: {
     status(): Promise<SyncStatus>
@@ -773,6 +799,9 @@ export interface WtaChromeApi {
      * uncontrollable, with no way to pause or seek once a stream was running.
      */
     control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+    /** The receiver's own volume, 0–1, and its mute. See `WtaApi.cast`. */
+    setVolume(level: number): Promise<void>
+    setMuted(muted: boolean): Promise<void>
   }
 }
 

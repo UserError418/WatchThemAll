@@ -69,6 +69,14 @@ interface CastNative {
     startSeconds: number
   }): Promise<void>
   control(options: { action: string; seconds?: number }): Promise<void>
+  /**
+   * The receiver's volume and mute.
+   *
+   * One native call for both, with either field optional, because
+   * `CastSession` exposes them as two setters against the same session and a
+   * pair of plugin methods would be two bridges to keep in step for no gain.
+   */
+  setVolume(options: { level?: number; muted?: boolean }): Promise<void>
   status(): Promise<CastStatus>
   addListener(event: 'castDevices', cb: (payload: { devices: CastDevice[] }) => void): Promise<{ remove(): void }>
   addListener(
@@ -195,6 +203,9 @@ export interface CastBridge {
   beam(now: NowPlaying): Promise<{ ok: boolean; error?: string; providerName?: string }>
   status(): Promise<CastStatus>
   control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
+  /** The receiver's own volume, 0–1. See `CastStatus.volume`. */
+  setVolume(level: number): Promise<void>
+  setMuted(muted: boolean): Promise<void>
   /** Drop captured candidates — call on every provider, episode or title change. */
   forget(): Promise<void>
   onDevices(cb: (devices: CastDevice[]) => void): () => void
@@ -297,11 +308,35 @@ export function createCastBridge(): CastBridge {
           seconds: 0,
           duration: 0,
           proxyRunning: false,
+          volume: 0,
+          muted: false,
         }
       }
     },
 
     control: (action, seconds) => Cast.control({ action, seconds }),
+
+    /*
+     * Swallowed rather than thrown. A volume change is a nudge, not a
+     * transaction: a receiver that refuses one has nothing the user can do
+     * about it, and an exception here would surface as a red error over a
+     * remote that is otherwise working perfectly.
+     */
+    setVolume: async (level) => {
+      try {
+        await Cast.setVolume({ level })
+      } catch {
+        // The next status poll will show the volume did not move.
+      }
+    },
+
+    setMuted: async (muted) => {
+      try {
+        await Cast.setVolume({ muted })
+      } catch {
+        // As above.
+      }
+    },
 
     forget: () => Cast.clearCandidates(),
 
