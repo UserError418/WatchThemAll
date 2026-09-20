@@ -16,11 +16,14 @@ import {
   dayKey,
   dayLabel,
   duration,
+  byHour,
   groupByDay,
   heatmap,
+  peakHour,
   playedMs,
   streak,
   summarise,
+  topTitles,
 } from './historystats'
 
 /** Midday, so that nothing here is an hour away from changing date. */
@@ -252,5 +255,122 @@ describe('how far through it got', () => {
 
   it('never reports more than the whole', () => {
     expect(completion(entry(NOON, { seconds: 3000, duration: 2600 }))).toBe(1)
+  })
+})
+
+/* ── When in the day ──────────────────────────────────────────────────── */
+
+/** A local timestamp at `hour` on the day `offset` days from NOON's. */
+function hourOn(offset: number, hour: number): number {
+  return new Date(2026, 8, 13 + offset, hour, 30, 0).getTime()
+}
+
+describe('byHour', () => {
+  it('buckets plays by the hour they started, in local time', () => {
+    const buckets = byHour([
+      entry(hourOn(0, 21), { playedMs: 20 * MINUTE }),
+      entry(hourOn(-1, 21), { playedMs: 40 * MINUTE }),
+      entry(hourOn(-1, 9), { playedMs: 10 * MINUTE }),
+    ])
+    expect(buckets).toHaveLength(24)
+    expect(buckets[21]?.plays).toBe(2)
+    expect(buckets[21]?.ms).toBe(60 * MINUTE)
+    expect(buckets[9]?.plays).toBe(1)
+    expect(buckets[0]?.plays).toBe(0)
+  })
+
+  it('scales every bar against the busiest hour', () => {
+    const buckets = byHour([entry(hourOn(0, 21)), entry(hourOn(-1, 21)), entry(hourOn(-1, 9))])
+    expect(buckets[21]?.share).toBe(1)
+    expect(buckets[9]?.share).toBe(0.5)
+  })
+
+  /**
+   * The case this panel got wrong on real data. One player left open at
+   * breakfast, capped at six hours by `playedMs`, outweighed a hundred
+   * evenings and made 07:00 the peak of a panel captioned "most of it starts
+   * around" — against a single play ever started at that hour.
+   */
+  it('counts plays, so one forgotten player cannot become the peak', () => {
+    const buckets = byHour([
+      entry(hourOn(0, 7), { playedMs: 6 * 60 * MINUTE }),
+      entry(hourOn(0, 20), { playedMs: 22 * MINUTE }),
+      entry(hourOn(-1, 20), { playedMs: 24 * MINUTE }),
+    ])
+    expect(peakHour(buckets)?.hour).toBe(20)
+    expect(buckets[7]?.ms).toBe(6 * 60 * MINUTE)
+  })
+
+  it('has no shape to draw for an empty history', () => {
+    expect(byHour([]).every((bucket) => bucket.share === 0)).toBe(true)
+  })
+})
+
+describe('peakHour', () => {
+  it('finds the hour the most is started in', () => {
+    const buckets = byHour([entry(hourOn(0, 20)), entry(hourOn(-1, 20)), entry(hourOn(0, 8))])
+    expect(peakHour(buckets)?.hour).toBe(20)
+  })
+
+  it('reports nothing when nothing has been watched', () => {
+    expect(peakHour(byHour([]))).toBeNull()
+  })
+})
+
+/* ── What, most ───────────────────────────────────────────────────────── */
+
+describe('topTitles', () => {
+  it('folds every play of one title into a single row', () => {
+    const rows = topTitles([
+      entry(NOON, { tmdbId: 1, title: 'Bleach', playedMs: 20 * MINUTE }),
+      entry(NOON, { tmdbId: 1, title: 'Bleach', playedMs: 20 * MINUTE }),
+      entry(NOON, { tmdbId: 2, title: 'K-PAX', playedMs: 30 * MINUTE }),
+    ])
+    expect(rows.map((r) => r.title)).toEqual(['Bleach', 'K-PAX'])
+    expect(rows[0]?.plays).toBe(2)
+    expect(rows[0]?.ms).toBe(40 * MINUTE)
+    expect(rows[0]?.share).toBe(1)
+    expect(rows[1]?.share).toBe(0.75)
+  })
+
+  /**
+   * Every unresolved import carries tmdbId 0. Keyed on that alone they would
+   * collapse into one bar wearing whichever name happened to come first.
+   */
+  it('keeps unresolved titles apart, which all share tmdbId 0', () => {
+    const rows = topTitles([
+      entry(NOON, { tmdbId: 0, title: 'One', playedMs: MINUTE }),
+      entry(NOON, { tmdbId: 0, title: 'Two', playedMs: MINUTE }),
+    ])
+    expect(rows).toHaveLength(2)
+  })
+
+  it('ranks by play count when nothing carries a time', () => {
+    const rows = topTitles([
+      entry(NOON, { tmdbId: 1, title: 'Once' }),
+      entry(NOON, { tmdbId: 2, title: 'Twice' }),
+      entry(NOON, { tmdbId: 2, title: 'Twice' }),
+    ])
+    expect(rows.map((r) => r.title)).toEqual(['Twice', 'Once'])
+  })
+
+  it('honours the limit', () => {
+    const rows = topTitles(
+      Array.from({ length: 12 }, (_, i) => entry(NOON, { tmdbId: i + 1, title: `T${i}` })),
+      5,
+    )
+    expect(rows).toHaveLength(5)
+  })
+
+  it('takes artwork from whichever play carries it', () => {
+    const rows = topTitles([
+      entry(NOON, { tmdbId: 1, title: 'Bleach', posterPath: null }),
+      entry(NOON, { tmdbId: 1, title: 'Bleach', posterPath: '/b.jpg' }),
+    ])
+    expect(rows[0]?.posterPath).toBe('/b.jpg')
+  })
+
+  it('handles an empty history', () => {
+    expect(topTitles([])).toEqual([])
   })
 })

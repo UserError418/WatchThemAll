@@ -234,10 +234,19 @@
         <div class="run" aria-hidden="true">
           <div class="segments">
             {#each run as segment (segment.key)}
+              <!--
+                A mark on an episode that has not aired is not drawn as
+                watched. His library has several — an import numbered its
+                seasons the way MyAnimeList does and TMDB numbers them
+                differently, so a dozen episodes of one series carry marks
+                against dates still in the future. The strip reports what has
+                aired and whether it was seen; "seen, but it has not happened
+                yet" is not a state it can honestly draw.
+              -->
               <span
                 class="seg"
                 class:aired={segment.aired}
-                class:watched={segment.seen}
+                class:watched={segment.aired && segment.seen}
                 class:focus={segment.focus}
               ></span>
             {/each}
@@ -359,8 +368,14 @@
   {:else}
     <div class="board">
       <div class="timeline">
+        <div class="section-label">
+          <span class="section-name">Upcoming</span>
+          <span class="section-count">{upcomingCount}</span>
+        </div>
+
         <!-- ── Beyond the horizon ──────────────────────────────────────
-             Above everything, because it is further away than everything. -->
+             Above the dated days, because it is further away than all of
+             them, and under the heading it belongs to. -->
         {#if laterCount > 0}
           <button class="more" onclick={() => (showLater = !showLater)}>
             <span class="arrow" class:down={showLater}>▸</span>
@@ -375,11 +390,6 @@
         {/if}
 
         <!-- ── Upcoming, furthest first ───────────────────────────────── -->
-        <div class="section-label">
-          <span class="section-name">Upcoming</span>
-          <span class="section-count">{upcomingCount}</span>
-        </div>
-
         {#if timeline.upcoming.length === 0}
           <p class="state thin">Nothing scheduled. Check back, or press <em>Check now</em>.</p>
         {:else}
@@ -791,7 +801,13 @@
    */
   .episode {
     display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) auto;
+    /*
+      A fixed measure for the text rather than a fraction of the row. At
+      1920px a 1.15fr first column was 620px wide for 380px of title, and the
+      run strip started a couple of hundred pixels adrift of the words it
+      belongs to.
+    */
+    grid-template-columns: minmax(0, 460px) minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-4);
     width: 100%;
@@ -802,18 +818,6 @@
 
   .episode:hover {
     background: var(--bg-raised);
-  }
-
-  @media (max-width: 1000px) {
-    /* The run strip is the first thing to go: it is the only part of the row
-       that is texture rather than text. */
-    .episode {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .run {
-      display: none;
-    }
   }
 
   /* The part that opens the title. */
@@ -929,10 +933,16 @@
     height: 16px;
   }
 
+  /*
+    Capped, so a four-episode run is a row of pips and not four slabs. Without
+    the cap `flex: 1` stretched each segment to about fifty pixels and the
+    strip read as a broken progress bar rather than as a run of episodes.
+  */
   .seg {
     flex: 1;
     min-width: 3px;
-    height: 7px;
+    max-width: 34px;
+    height: 6px;
     border-radius: var(--radius-full);
     background: var(--border-subtle);
     transition:
@@ -940,12 +950,18 @@
       background var(--dur-fast) var(--ease-out);
   }
 
-  /* Aired and unwatched: outlined, because it is the one the user can act on. */
+  /*
+    Three states, and they have to be told apart at a glance from a metre
+    away. The first pass used two rgba-white borders one step apart, which on
+    a dark panel is no difference at all.
+  */
   .seg.aired {
-    background: var(--border-strong);
+    height: 10px;
+    background: var(--text-disabled);
   }
 
   .seg.watched {
+    height: 10px;
     background: var(--accent);
   }
 
@@ -966,6 +982,26 @@
 
   .run-behind {
     color: var(--accent);
+  }
+
+  /*
+    The run strip is the first thing to go on a narrow screen: it is the only
+    part of the row that is texture rather than text.
+
+    This block sits *after* the `.run` rules it overrides, not next to the
+    `.episode` grid it also changes. Same specificity means source order
+    decides, and declared earlier it lost to the `display: flex` below it —
+    which showed up as a twelve-segment strip squeezing the title down to
+    "LIAR G…" at 412px, with the media query apparently doing nothing.
+  */
+  @media (max-width: 1000px) {
+    .episode {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .run {
+      display: none;
+    }
   }
 
   .tail {
@@ -1270,10 +1306,17 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    /* Twenty-one series is a column taller than the viewport; the rail is
-       sticky, so the list scrolls inside it rather than dragging the page. */
-    max-height: 42vh;
-    overflow-y: auto;
+  }
+
+  /* Twenty-one series is a column taller than the viewport, and the rail is
+     sticky — so on a desktop the list scrolls inside it rather than dragging
+     the page. Only there: single-column, the rail is just more page, and a
+     scroller inside a scroller under a thumb is the worst of both. */
+  @media (min-width: 1080px) {
+    .tracked {
+      max-height: 42vh;
+      overflow-y: auto;
+    }
   }
 
   .track {

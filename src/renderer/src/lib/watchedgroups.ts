@@ -168,20 +168,95 @@ export function leaning(
   return group.likes > group.dislikes ? 'like' : 'dislike'
 }
 
-/** Totals for the header line, counted from what is on screen. */
-export function summarise(groups: readonly TitleGroup[]): {
+/** Totals for the header, counted from what is on screen. */
+export interface WatchedTotals {
   titles: number
   seasons: number
   likes: number
   dislikes: number
-} {
-  return groups.reduce(
+  unrated: number
+}
+
+export function summarise(groups: readonly TitleGroup[]): WatchedTotals {
+  return groups.reduce<WatchedTotals>(
     (acc, g) => ({
       titles: acc.titles + 1,
       seasons: acc.seasons + g.seasons.length,
       likes: acc.likes + g.likes,
       dislikes: acc.dislikes + g.dislikes,
+      unrated: acc.unrated + g.unrated,
     }),
-    { titles: 0, seasons: 0, likes: 0, dislikes: 0 },
+    { titles: 0, seasons: 0, likes: 0, dislikes: 0, unrated: 0 },
   )
+}
+
+/**
+ * The title with the most seasons behind it, for the header's last tile.
+ *
+ * A library of two hundred rows has no single fact in it worth a headline, so
+ * this is the nearest thing: the series the user has put the most of their
+ * life into. Ties go to the title, so the tile does not change on every
+ * render.
+ */
+export function deepest(groups: readonly TitleGroup[]): TitleGroup | null {
+  let best: TitleGroup | null = null
+  for (const group of groups) {
+    if (group.seasons.length < 2) continue
+    if (
+      best === null ||
+      group.seasons.length > best.seasons.length ||
+      (group.seasons.length === best.seasons.length && group.title.localeCompare(best.title) < 0)
+    ) {
+      best = group
+    }
+  }
+  return best
+}
+
+/* ── The season ribbon ──────────────────────────────────────────────────── */
+
+export interface RibbonSegment {
+  key: string
+  /** "Season 3", or "Whole series" for a 1.5.8 survivor with no season. */
+  label: string
+  rating: Rating | null
+}
+
+/**
+ * How many seasons a ribbon draws before it starts hiding the early ones.
+ *
+ * Twenty-four covers all but the outliers in a real library — the longest
+ * here is twenty — while staying narrow enough that each segment is still a
+ * target rather than a hairline.
+ */
+export const RIBBON_LIMIT = 24
+
+/**
+ * A title's seasons as a left-to-right strip, tinted by what was thought of
+ * each one.
+ *
+ * Runs **oldest first**, which is the opposite of the expanded list. That is
+ * deliberate: a list is read top-down as "what is here", newest first like
+ * every other list in the app, while a strip is read left-to-right as a run of
+ * time, and a run of time that starts at the end is a puzzle.
+ *
+ * When there are more seasons than fit, the *recent* ones are kept. An opinion
+ * about season 19 says more about whether the user is still enjoying it than
+ * an opinion about season 1.
+ */
+export function ribbon(
+  group: TitleGroup,
+  limit = RIBBON_LIMIT,
+): { segments: RibbonSegment[]; hidden: number } {
+  const all: RibbonSegment[] = [...group.seasons].reverse().map((row) => ({
+    key: row.entry.id,
+    label:
+      row.entry.season === null || row.entry.season === undefined
+        ? 'Whole series'
+        : `Season ${row.entry.season}`,
+    rating: row.rating,
+  }))
+
+  if (all.length <= limit) return { segments: all, hidden: 0 }
+  return { segments: all.slice(all.length - limit), hidden: all.length - limit }
 }
