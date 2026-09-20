@@ -17,12 +17,13 @@
   import Watched from './views/Watched.svelte'
   import Releases from './views/Releases.svelte'
   import History from './views/History.svelte'
+  import Settings from './views/Settings.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
   import DetailOverlay from './components/DetailOverlay.svelte'
   import PlayerFrame from './components/PlayerFrame.svelte'
   import ProviderPanel from './components/ProviderPanel.svelte'
 
-  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases' | 'history'
+  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases' | 'history' | 'settings'
 
   /**
    * Search is not among these on purpose.
@@ -39,6 +40,7 @@
     { id: 'watched', label: 'Watched' },
     { id: 'releases', label: 'Releases' },
     { id: 'history', label: 'History' },
+    { id: 'settings', label: 'Settings' },
   ]
 
   let tab = $state<Tab>('browse')
@@ -358,6 +360,8 @@
       <Watched onselect={(m) => (selected = m)} />
     {:else if tab === 'history'}
       <History onselect={(m) => (selected = m)} />
+    {:else if tab === 'settings'}
+      <Settings />
     {:else}
       <Releases onselect={(m) => (selected = m)} />
     {/if}
