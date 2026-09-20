@@ -162,6 +162,68 @@ export function activityOf(
   }
 }
 
+export interface EpisodeRef {
+  season: number
+  episode: number
+}
+
+/** Later of two positions, comparing season first. */
+function isAhead(a: EpisodeRef, b: EpisodeRef): boolean {
+  return a.season !== b.season ? a.season > b.season : a.episode > b.episode
+}
+
+/**
+ * The furthest episode marked watched, or null if none is.
+ *
+ * Exists because `lastSeason`/`lastEpisode` cannot be trusted to be current.
+ * Those two are written by the player when an episode is *opened*, so a title
+ * whose episodes were marked by hand — or imported — keeps whatever position
+ * it was last actually played at, which for most of an imported library is
+ * episode one or nothing.
+ *
+ * The real library this was built against has Silo stored at S01E01 with marks
+ * running through S04E01. Trusting the stored pair would have offered "Resume
+ * S01E01" on a series the user has nearly finished, which looks like the app
+ * having forgotten three seasons.
+ */
+export function furthestWatched(entry: RankableEntry): EpisodeRef | null {
+  let best: EpisodeRef | null = null
+
+  const consider = (key: string): void => {
+    const parts = key.split(':')
+    const season = Number(parts[0])
+    const episode = Number(parts[1])
+    // 1-based everywhere. A 0 is a specials bucket or a key that failed to
+    // parse long ago, and neither is a position to resume from.
+    if (!Number.isInteger(season) || !Number.isInteger(episode)) return
+    if (season < 1 || episode < 1) return
+    const ref: EpisodeRef = { season, episode }
+    if (!best || isAhead(ref, best)) best = ref
+  }
+
+  for (const [key, mark] of Object.entries(entry.episodeMarks ?? {})) {
+    if (mark?.watched) consider(key)
+  }
+  for (const key of entry.watchedEpisodes ?? []) consider(key)
+
+  return best
+}
+
+/**
+ * Where to look for the resume point: the further of what was played and what
+ * was marked.
+ *
+ * Never goes backwards from the stored position — a user who opened S05E01
+ * without finishing it is on season 5, even though nothing there is marked.
+ */
+export function resumeAnchor(
+  entry: RankableEntry & { lastSeason: number | null; lastEpisode: number | null },
+): EpisodeRef {
+  const stored: EpisodeRef = { season: entry.lastSeason ?? 1, episode: entry.lastEpisode ?? 1 }
+  const marked = furthestWatched(entry)
+  return marked && isAhead(marked, stored) ? marked : stored
+}
+
 /** Whether this title has been started at all. */
 function started(activity: Activity): boolean {
   return activity.watched > 0 || activity.minutes > 0 || (activity.fraction ?? 0) > 0

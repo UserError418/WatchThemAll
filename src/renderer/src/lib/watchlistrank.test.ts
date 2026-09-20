@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { HistoryEntry } from '@shared/types'
 import {
   activityOf,
+  furthestWatched,
+  resumeAnchor,
   bandOf,
   bandWatchlist,
   compareWithin,
@@ -282,5 +284,85 @@ describe('bandWatchlist', () => {
   it('carries every entry into exactly one band', () => {
     const groups = bandWatchlist(entries, [], () => null, NOW)
     expect(groups.flatMap((g) => g.items).length).toBe(entries.length)
+  })
+})
+
+describe('furthestWatched', () => {
+  it('reports the furthest episode marked', () => {
+    const entry = series({ episodeMarks: marks(NOW, '1:1', '2:5', '2:3') })
+    expect(furthestWatched(entry)).toEqual({ season: 2, episode: 5 })
+  })
+
+  /** Season dominates: S02E01 is further along than S01E24. */
+  it('compares the season before the episode', () => {
+    const entry = series({ episodeMarks: marks(NOW, '1:24', '2:1') })
+    expect(furthestWatched(entry)).toEqual({ season: 2, episode: 1 })
+  })
+
+  it('reads the legacy watchedEpisodes list too', () => {
+    expect(furthestWatched(series({ episodeMarks: {}, watchedEpisodes: ['3:2'] }))).toEqual({
+      season: 3,
+      episode: 2,
+    })
+  })
+
+  it('ignores an episode marked as not watched', () => {
+    const entry = series({
+      episodeMarks: { '1:1': { watched: true, at: NOW }, '9:9': { watched: false, at: NOW } },
+    })
+    expect(furthestWatched(entry)).toEqual({ season: 1, episode: 1 })
+  })
+
+  it('ignores specials and keys that never parsed', () => {
+    const entry = series({ watchedEpisodes: ['0:5', 'x:1', '1:2'] })
+    expect(furthestWatched(entry)).toEqual({ season: 1, episode: 2 })
+  })
+
+  it('reports nothing when nothing is marked', () => {
+    expect(furthestWatched(series())).toBeNull()
+  })
+})
+
+describe('resumeAnchor', () => {
+  /**
+   * The case from the real library. Silo is stored at S01E01 — the last
+   * episode ever opened in the app's player — with marks running through
+   * S04E01. Trusting the stored pair would offer "Resume S01E01" on a series
+   * the user has nearly finished.
+   */
+  it('prefers the marks when the stored position has gone stale', () => {
+    const entry = {
+      ...series({ episodeMarks: marks(NOW, '1:1', '2:1', '3:1', '4:1') }),
+      lastSeason: 1,
+      lastEpisode: 1,
+    }
+    expect(resumeAnchor(entry)).toEqual({ season: 4, episode: 1 })
+  })
+
+  /**
+   * And never backwards. Opening S05E01 without finishing it puts the user on
+   * season 5, even though nothing there is marked yet.
+   */
+  it('keeps a stored position that is ahead of every mark', () => {
+    const entry = {
+      ...series({ episodeMarks: marks(NOW, '1:1', '1:2') }),
+      lastSeason: 5,
+      lastEpisode: 1,
+    }
+    expect(resumeAnchor(entry)).toEqual({ season: 5, episode: 1 })
+  })
+
+  it('falls back to the first episode when nothing is known at all', () => {
+    const entry = { ...series(), lastSeason: null, lastEpisode: null }
+    expect(resumeAnchor(entry)).toEqual({ season: 1, episode: 1 })
+  })
+
+  it('uses the marks when there is no stored position', () => {
+    const entry = {
+      ...series({ episodeMarks: marks(NOW, '2:4') }),
+      lastSeason: null,
+      lastEpisode: null,
+    }
+    expect(resumeAnchor(entry)).toEqual({ season: 2, episode: 4 })
   })
 })

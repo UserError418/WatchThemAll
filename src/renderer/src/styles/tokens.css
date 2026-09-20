@@ -381,6 +381,17 @@
 
   --poster-width: 168px;
   --poster-ratio: 2 / 3;
+
+  /**
+   * The Watchlist's own poster width, larger than `--poster-width`.
+   *
+   * That tile is a dense grid of saved titles; this one is a dashboard of
+   * things in progress, where the artwork carries a progress bar, a position
+   * and — on hover — an episode still. 168px is too small to read any of that,
+   * and the brief asked for these specifically to be bigger. Clamped rather
+   * than fixed so a wide window gains larger cards instead of more columns.
+   */
+  --wl-card: clamp(190px, 15vw, 240px);
 }
 
 /**
