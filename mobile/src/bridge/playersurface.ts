@@ -65,7 +65,7 @@
 import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { StatusBar } from '@capacitor/status-bar'
 
-import { parsePlayerMessage, type PlayerReading } from '@main/playermessage'
+import { parsePlayerMessage, type PlayerContext, type PlayerReading } from '@main/playermessage'
 import type { PlayCandidate } from '@main/providers'
 
 /** Where the renderer's player chrome wants the video, in CSS pixels. */
@@ -185,10 +185,15 @@ function followFullscreen(): () => void {
 function listenForReadings(
   frame: HTMLIFrameElement,
   onReading: (reading: PlayerReading) => void,
+  expects: () => PlayerContext | null,
 ): () => void {
   const onMessage = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow) return
-    const reading = parsePlayerMessage(event.data)
+    // What is playing goes *in*, not just out. A provider that posts its whole
+    // progress library — both of the two that report anything do — leaves the
+    // parser choosing between titles, and the only thing on this side of the
+    // frame that knows which one is on screen is the caller.
+    const reading = parsePlayerMessage(event.data, expects())
     // Null is the ordinary case — providers post analytics, ad beacons and
     // their own internal chatter through the same channel.
     if (reading !== null) onReading(reading)
@@ -207,6 +212,14 @@ export interface PlayerSurfaceOptions {
    * as "we learned nothing", not as "start again from the beginning".
    */
   onReading?(reading: PlayerReading): void
+  /**
+   * What the app believes is playing, read at message time.
+   *
+   * An accessor rather than a value: the surface is created once and outlives
+   * every episode shown in it, so anything captured here would be the first
+   * one for the life of the app.
+   */
+  expects?(): PlayerContext | null
 }
 
 export interface PlayerSurface {
@@ -266,7 +279,11 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
-    if (options.onReading) stopListening = listenForReadings(frame, options.onReading)
+    if (options.onReading) {
+      const onReading = options.onReading.bind(options)
+      const expects = options.expects?.bind(options) ?? (() => null)
+      stopListening = listenForReadings(frame, onReading, expects)
+    }
     return frame
   }
 

@@ -435,13 +435,29 @@ body {
  * The component already clamps its synopsis to two lines, so nothing here has
  * to; without that clamp row height would be set by however much TMDB wrote.
  */
-:root .episode {
+/*
+  Scoped to `.episode-row`, which exists only on `EpisodeRow.svelte`, and not
+  to `.episode`, which was a lie about how many things wear that class.
+
+  `.episode` is also the Releases timeline's row and the Watchlist card's
+  episode caption. This sheet is global and these rules are `!important`, so
+  for two releases they silently re-proportioned both: the Releases row lost
+  its responsive grid to a three-column `!important` that pushed the Play
+  buttons off the right edge, and every poster on that timeline was stretched
+  from 68x102 to 104x45 — a letterboxed crop of a portrait cover, which is
+  exactly what it looked like on the phone.
+
+  A component that wants to be reachable from here says so by carrying a
+  marker class. Reaching in by a name the component happens to use is how this
+  happened.
+*/
+:root .episode-row {
   grid-template-columns: 104px minmax(0, 1fr) auto !important;
   gap: var(--space-3) !important;
   padding: var(--space-2) !important;
 }
 
-:root .episode .thumb {
+:root .episode-row .thumb {
   width: 104px !important;
 }
 
@@ -450,7 +466,7 @@ body {
   At this width the desktop single-line arrangement pushed the runtime off the
   end for any episode whose name is longer than about fifteen characters.
 */
-:root .episode .line {
+:root .episode-row .line {
   flex-wrap: wrap;
   row-gap: 2px;
 }

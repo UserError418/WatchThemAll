@@ -49,6 +49,24 @@
 
   /** Typing takes over the surface; clearing hands it back. */
   const searching = $derived(searchQuery.trim().length > 0)
+
+  /**
+   * Go to a tab — which means abandoning the search, if one is running.
+   *
+   * Every route into a tab goes through here, and that is the point. Search
+   * takes over `<main>` whenever the box has anything in it, so setting `tab`
+   * while a query is live changed the highlighted button and nothing else:
+   * the user pressed "Watched", watched a tab light up, and stayed on the
+   * search results with no indication that the way out was to empty a box
+   * they were no longer looking at.
+   *
+   * Pressing a tab *is* the intent to leave, on every surface — and on the
+   * phone it is the only one, since there is no Escape key down there.
+   */
+  function goTo(target: Tab): void {
+    tab = target
+    searchQuery = ''
+  }
   let selected = $state<MediaSummary | null>(null)
   /**
    * The inline player, or null when nothing is playing.
@@ -102,7 +120,7 @@
   $effect(() => {
     const off = [
       window.wta.on.navigate((target) => {
-        if (TABS.some((t) => t.id === target)) tab = target as Tab
+        if (TABS.some((t) => t.id === target)) goTo(target as Tab)
       }),
       window.wta.on.menuAction((action) => {
         if (action === 'focus-search') {
@@ -228,7 +246,7 @@
     if (typing || event.ctrlKey || event.metaKey || event.altKey) return
     const index = Number(event.key)
     if (index >= 1 && index <= TABS.length) {
-      tab = TABS[index - 1]!.id
+      goTo(TABS[index - 1]!.id)
       event.preventDefault()
     }
   }
@@ -245,7 +263,7 @@
 
       <div class="tabs">
         {#each TABS as t (t.id)}
-          <button class:active={tab === t.id} onclick={() => (tab = t.id)}>
+          <button class:active={tab === t.id} onclick={() => goTo(t.id)}>
             {t.label}
             {#if t.id === 'watchlist' && watchlistCount > 0}
               <span class="count">{watchlistCount}</span>
@@ -394,7 +412,7 @@
         searchInput?.focus()
         return
       }
-      tab = t
+      goTo(t)
     }}
     onopenProviders={() => (providersOpen = true)}
   />
