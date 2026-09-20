@@ -300,3 +300,138 @@ describe('parsePlayerMessage, over a provider progress store', () => {
     expect(parsePlayerMessage({ type: 'MEDIA_DATA', data: null })).toBeNull()
   })
 })
+
+/**
+ * Videasy's progress store, transcribed verbatim from the emulator on
+ * 2026-09-20 by listening on the app window while the frame it had just opened
+ * loaded. Note the two things about it that broke the first parser: `data` is
+ * a JSON *string*, and not one entry carries `last_updated`.
+ */
+const VIDEASY_STORE = {
+  type: 'MEDIA_DATA',
+  data: JSON.stringify({
+    'movie-550': {
+      poster: 'https://image.tmdb.org/t/p/w300/jSziioSwPVrOy9Yow3XhWIBDjq1.jpg',
+      background: 'https://image.tmdb.org/t/p/original/c6OLXfKAk5BKeR6broC8pYiCquX.jpg',
+      id: 550,
+      mediaType: 'movie',
+      title: 'Fight Club',
+      progress: { duration: 8348, watched: 6793.757424 },
+    },
+  }),
+}
+
+describe('a store posted as a JSON string', () => {
+  /**
+   * The bug this whole branch exists for. Videasy is the default source, so
+   * for most plays on the phone this message was the only position report
+   * there was — and every one of them was dropped by an object test against a
+   * string.
+   */
+  it('reads a store whose data is text rather than an object', () => {
+    expect(parsePlayerMessage(VIDEASY_STORE)).toEqual({
+      tmdbId: 550,
+      seconds: 6793.757424,
+      duration: 8348,
+      season: null,
+      episode: null,
+      ended: false,
+      playing: null,
+    })
+  })
+
+  it('reads it just the same when the whole message is text', () => {
+    expect(parsePlayerMessage(JSON.stringify(VIDEASY_STORE))).toEqual(
+      parsePlayerMessage(VIDEASY_STORE),
+    )
+  })
+
+  it('is not fooled by text that is not JSON', () => {
+    expect(parsePlayerMessage({ type: 'MEDIA_DATA', data: 'not json at all' })).toBeNull()
+    expect(parsePlayerMessage({ type: 'MEDIA_DATA', data: '{ broken' })).toBeNull()
+  })
+})
+
+describe('choosing an entry out of a store', () => {
+  const store = (library: Record<string, unknown>) => ({
+    type: 'MEDIA_DATA',
+    data: JSON.stringify(library),
+  })
+
+  /** A row of a per-episode store. The episode lives in the key, not here. */
+  const episode = (id: number, watched: number) => ({
+    id,
+    mediaType: 'tv',
+    progress: { duration: 1400, watched },
+  })
+
+  /**
+   * A store with no timestamps and several titles in it. Before the caller
+   * said what it wanted, the choice here was whichever entry came first, and
+   * the caller's own `tmdbId` check then correctly threw the wrong answer
+   * away — which is how a provider that reports its position every few seconds
+   * ended up never recording one.
+   */
+  it('takes the title the caller asked for', () => {
+    const payload = store({
+      'tv-1-1-1': episode(1, 100),
+      'tv-91768-2-22': episode(91768, 640),
+    })
+    expect(parsePlayerMessage(payload, { tmdbId: 91768, season: 2, episode: 22 })?.seconds).toBe(
+      640,
+    )
+  })
+
+  /** A sibling episode's position is the wrong answer, not a near-enough one. */
+  it('prefers the exact episode over another episode of the same series', () => {
+    const payload = store({
+      'tv-91768-2-21': episode(91768, 1300),
+      'tv-91768-2-22': episode(91768, 640),
+    })
+    const reading = parsePlayerMessage(payload, { tmdbId: 91768, season: 2, episode: 22 })
+    expect(reading?.seconds).toBe(640)
+    expect(reading?.episode).toBe(22)
+  })
+
+  it('reads the season and episode out of the key when the entry omits them', () => {
+    const payload = store({ 'tv-91768-2-22': episode(91768, 640) })
+    expect(parsePlayerMessage(payload)).toMatchObject({ season: 2, episode: 22, tmdbId: 91768 })
+  })
+
+  /**
+   * A store that keys by show rather than by episode. Its position is the
+   * show's latest across every episode, so it is taken only when there is no
+   * per-episode row to take instead.
+   */
+  it('falls back to an entry that names no episode', () => {
+    const payload = store({
+      'tv-91768': { id: 91768, mediaType: 'tv', progress: { duration: 1400, watched: 55 } },
+    })
+    expect(parsePlayerMessage(payload, { tmdbId: 91768, season: 2, episode: 22 })).toMatchObject({
+      seconds: 55,
+      season: null,
+    })
+  })
+
+  it('says nothing about a store that holds no entry for what is playing', () => {
+    const payload = store({ 'movie-550': { id: 550, progress: { duration: 8348, watched: 10 } } })
+    expect(parsePlayerMessage(payload, { tmdbId: 91768, season: 2, episode: 22 })?.tmdbId).toBe(550)
+  })
+
+  /**
+   * Without context the timestamp heuristic still decides, which is what
+   * VidFast's store needs and what every test above this block asserts.
+   */
+  it('still takes the freshest entry when the caller says nothing', () => {
+    const payload = store({
+      old: { id: 1, last_updated: 1, progress: { duration: 100, watched: 10 } },
+      new: { id: 2, last_updated: 2, progress: { duration: 100, watched: 20 } },
+    })
+    expect(parsePlayerMessage(payload)?.tmdbId).toBe(2)
+  })
+
+  it('ignores an entry with no position in it', () => {
+    const payload = store({ 'movie-550': { id: 550, title: 'Fight Club' } })
+    expect(parsePlayerMessage(payload)).toBeNull()
+  })
+})

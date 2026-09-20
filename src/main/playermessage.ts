@@ -27,6 +27,33 @@
  * and VidRock post nothing at all, which is the case this has to survive
  * quietly: a provider that says nothing is not a provider that failed.
  *
+ * Videasy posts its store as a **JSON string inside the envelope**, keyed by
+ * media rather than by id, and with no timestamps at all — measured on the
+ * emulator, 2026-09-20, against the frame the app had just opened:
+ *
+ * ```
+ * {"type":"MEDIA_DATA","data":"{\"movie-550\":{\"poster\":\"…\",
+ *   \"background\":\"…\",\"id\":550,\"mediaType\":\"movie\",
+ *   \"title\":\"Fight Club\",
+ *   \"progress\":{\"duration\":8348,\"watched\":6793.757424}}}"}
+ * ```
+ *
+ * Two things in that shape defeated the first version of this parser, and
+ * between them they are why the phone never learned a position from Videasy —
+ * which is most plays, since it is the default source:
+ *
+ * 1. **`data` is a string.** The object test ran against it, found a string,
+ *    and returned null. Every single one of these was discarded.
+ * 2. **There is no `last_updated`.** Selecting "the entry being written right
+ *    now" by newest timestamp cannot work on a store that carries none, so
+ *    with more than one title in it the choice was arbitrary — and the
+ *    caller's `tmdbId` check then correctly threw away the arbitrary answer.
+ *
+ * The fix for the second is to stop guessing: the caller knows what it asked
+ * to play, so it says so, and the entry for *that* title is the one read. The
+ * timestamp heuristic stays as the fallback for a store that has timestamps
+ * and no context to match against.
+ *
  * VidFast also posts its **whole progress store**, unprompted, on every load
  * and then every few seconds as it plays:
  *
@@ -111,6 +138,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * Unwrap a payload that arrived as JSON text rather than as a structured clone.
+ *
+ * Applied at two levels, because providers double-encode at two levels: some
+ * post the whole message as a string, and Videasy posts a structured envelope
+ * whose `data` is a string. Anything that is not text is passed through
+ * untouched.
+ *
+ * The `{` test comes first so this is not `JSON.parse` on every stray string a
+ * page posts at its parent, which on an ad-funded page is a great many.
+ */
+function asJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const text = value.trim()
+  if (!text.startsWith('{')) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
  * A finite, non-negative number, or null.
  *
  * Providers send seconds as both numbers and numeric strings — the same field
@@ -158,34 +207,40 @@ function tmdbId(value: unknown): number | null {
 const POSITION_EVENTS = new Set(['timeupdate', 'seeked', 'pause', 'play', 'playing', 'ended'])
 
 /**
+ * What the app asked the provider to play.
+ *
+ * Supplied so a whole-store payload can be read rather than guessed at: the
+ * caller is the only thing that knows which of the twenty titles in a
+ * provider's library is the one on screen. Optional, because a `PLAYER_EVENT`
+ * needs none of it and the tests for that path should not have to invent one.
+ */
+export interface PlayerContext {
+  tmdbId: number
+  season: number | null
+  episode: number | null
+}
+
+/**
  * Parse one `message` payload, or return null if it is not one of ours.
  *
  * Null is the common case and not an error: an app window receives messages
  * from embeds, from analytics scripts, and from anything else that guesses at
  * `window.parent`. The caller is expected to ignore nulls silently.
+ *
+ * `want` narrows a whole-store payload to the title being played. Without it
+ * the store is read by the timestamp heuristic, which is right for a provider
+ * that stamps its entries and arbitrary for one that does not.
  */
-export function parsePlayerMessage(raw: unknown): PlayerReading | null {
-  // Some providers post the JSON as a string rather than as a structured
-  // clone. Parsing anything that merely *looks* like an object would mean
-  // running JSON.parse on every stray string a page posts, so the cheap shape
-  // test comes first.
-  let value = raw
-  if (typeof value === 'string') {
-    const text = value.trim()
-    if (!text.startsWith('{')) return null
-    try {
-      value = JSON.parse(text)
-    } catch {
-      return null
-    }
-  }
-
-  const envelope = asRecord(value)
+export function parsePlayerMessage(
+  raw: unknown,
+  want: PlayerContext | null = null,
+): PlayerReading | null {
+  const envelope = asRecord(asJson(raw))
   if (envelope === null) return null
-  if (envelope.type === 'MEDIA_DATA') return parseMediaData(envelope.data)
+  if (envelope.type === 'MEDIA_DATA') return parseMediaData(envelope.data, want)
   if (envelope.type !== 'PLAYER_EVENT') return null
 
-  const data = asRecord(envelope.data)
+  const data = asRecord(asJson(envelope.data))
   if (data === null) return null
 
   const event = typeof data.event === 'string' ? data.event : null
@@ -215,51 +270,113 @@ export function parsePlayerMessage(raw: unknown): PlayerReading | null {
 }
 
 /**
- * Pick the one title out of a provider's whole progress store that it is
- * currently updating.
+ * Read a provider's whole progress store.
  *
- * The payload is a library, not a report: every show that provider has played
- * in this WebView, each with its own `last_updated`. The newest stamp is the
- * entry being written right now — except on a fresh load, where nothing has
- * been written yet and the newest stamp belongs to the previous session. That
- * is survivable only because the caller compares `tmdbId` against what it asked
- * for and drops anything else; do not remove that check.
+ * The payload is a library, not a report: every title that provider has played
+ * in this WebView. Two providers send one, and they agree on nothing —
+ * VidFast keys by id (`t95350`) and stamps each entry with `last_updated`;
+ * Videasy keys by media (`movie-550`) and stamps nothing.
  *
- * A whole-store payload is also why the position here is read from
- * `show_progress` rather than the entry's top-level `progress`: the top level
- * is the show's *latest* position across all episodes, so on a series where
- * episode four was watched last, a reading for episode one would carry episode
- * four's position.
+ * So which entry is the one on screen?
+ *
+ * 1. **The one the caller asked for**, when it said. Exact on episode where
+ *    the store names an episode, else the title. This is the only answer that
+ *    is *known* rather than inferred, and it is why `want` exists.
+ * 2. **The freshest `last_updated`**, when there is no context. Right for a
+ *    provider that stamps, and the documented hazard applies: on a fresh load
+ *    nothing has been written yet, so the newest stamp belongs to the previous
+ *    session. The caller compares `tmdbId` against what it asked for and drops
+ *    anything else; do not remove that check.
+ * 3. **The first entry**, when neither applies. A store with one entry in it
+ *    is the common case for this branch.
+ *
+ * A whole-store payload is also why the position is read from `show_progress`
+ * where one exists rather than from the entry's top-level `progress`: the top
+ * level is the show's *latest* position across all episodes, so on a series
+ * where episode four was watched last, a reading for episode one would carry
+ * episode four's position.
  */
-function parseMediaData(raw: unknown): PlayerReading | null {
-  const library = asRecord(raw)
+function parseMediaData(raw: unknown, want: PlayerContext | null): PlayerReading | null {
+  const library = asRecord(asJson(raw))
   if (library === null) return null
 
-  let newest: Record<string, unknown> | null = null
-  let newestAt = -1
-  for (const value of Object.values(library)) {
+  const entries: Array<{ key: string; entry: Record<string, unknown>; at: number }> = []
+  for (const [key, value] of Object.entries(library)) {
     const entry = asRecord(value)
     if (entry === null) continue
-    const at = typeof entry.last_updated === 'number' ? entry.last_updated : 0
-    if (at > newestAt) {
-      newest = entry
-      newestAt = at
-    }
+    entries.push({
+      key,
+      entry,
+      at: typeof entry.last_updated === 'number' ? entry.last_updated : 0,
+    })
   }
-  if (newest === null) return null
+  if (entries.length === 0) return null
 
-  const id = tmdbId(newest.id)
-  const season = ordinal(newest.last_season_watched)
-  const episode = ordinal(newest.last_episode_watched)
+  const readings = entries
+    .map((candidate) => ({ ...candidate, reading: readEntry(candidate.key, candidate.entry) }))
+    .filter((candidate): candidate is typeof candidate & { reading: PlayerReading } =>
+      candidate.reading !== null,
+    )
+  if (readings.length === 0) return null
+
+  if (want !== null) {
+    const mine = readings.filter((candidate) => candidate.reading.tmdbId === want.tmdbId)
+    // An episode match beats a title match: a store keyed per episode holds
+    // several rows for one series, and only one of them is being written.
+    const exact = mine.find(
+      (candidate) =>
+        candidate.reading.season === want.season && candidate.reading.episode === want.episode,
+    )
+    if (exact) return exact.reading
+    // Failing that, the entry that names no episode at all — a film, or a
+    // store that keys by show — rather than a sibling episode's position.
+    const unscoped = mine.find(
+      (candidate) => candidate.reading.season === null && candidate.reading.episode === null,
+    )
+    if (unscoped) return unscoped.reading
+    if (mine.length === 1) return mine[0]!.reading
+  }
+
+  let best = readings[0]!
+  for (const candidate of readings) if (candidate.at > best.at) best = candidate
+  return best.reading
+}
+
+/**
+ * How Videasy names a row: `movie-550`, and `tv-<id>` with the season and
+ * episode appended when it has them.
+ *
+ * Measured for the film form. The series form is read if it is there and
+ * nothing depends on it being there — an entry that does not match falls back
+ * to its own fields, which is how VidFast's `t95350` keys are handled.
+ */
+const MEDIA_KEY = /^(?:movie|tv)-(\d+)(?:-(\d+)-(\d+))?$/
+
+/** One row of a store, as a reading, or null when it holds no position. */
+function readEntry(key: string, entry: Record<string, unknown>): PlayerReading | null {
+  const fromKey = MEDIA_KEY.exec(key)
+
+  const id = tmdbId(entry.id) ?? (fromKey ? tmdbId(fromKey[1]) : null)
+  const season =
+    ordinal(entry.last_season_watched) ??
+    ordinal(entry.season) ??
+    (fromKey ? ordinal(fromKey[2]) : null)
+  const episode =
+    ordinal(entry.last_episode_watched) ??
+    ordinal(entry.episode) ??
+    (fromKey ? ordinal(fromKey[3]) : null)
 
   // A film has no `show_progress`; the entry's own `progress` is the whole
-  // story. A series has both, and only the per-episode one is trustworthy.
-  const shows = asRecord(newest.show_progress)
-  const episodeEntry =
-    shows !== null && season !== null && episode !== null
-      ? asRecord(shows[`s${season}e${episode}`])
-      : null
-  const progress = asRecord(episodeEntry?.progress ?? (shows === null ? newest.progress : null))
+  // story. A series that keeps one has both, and only the per-episode one is
+  // trustworthy — so a store with `show_progress` and no way to index it is
+  // read as holding nothing rather than as holding the wrong episode.
+  const shows = asRecord(entry.show_progress)
+  const progress =
+    shows === null
+      ? asRecord(entry.progress)
+      : season !== null && episode !== null
+        ? asRecord(asRecord(shows[`s${season}e${episode}`])?.progress)
+        : null
   if (progress === null) return null
 
   const at = seconds(progress.watched)

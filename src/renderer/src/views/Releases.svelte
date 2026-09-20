@@ -262,8 +262,8 @@
         <span class="run"></span>
       {/if}
 
-      <span class="tail">
-        {#if past}
+      {#if past}
+        <span class="tail">
           {#if watched}
             <span class="seen-tag">✓ watched</span>
           {:else}
@@ -294,8 +294,8 @@
               )} watched">✓</button
             >
           {/if}
-        {/if}
-      </span>
+        </span>
+      {/if}
     </div>
   </li>
 {/snippet}
@@ -712,17 +712,6 @@
     padding-top: var(--space-4);
   }
 
-  @media (max-width: 760px) {
-    /* Below this the date column costs more than it earns. */
-    .day {
-      grid-template-columns: 1fr;
-    }
-
-    .marker {
-      padding-top: var(--space-2);
-    }
-  }
-
   .dot {
     width: 11px;
     height: 11px;
@@ -982,126 +971,6 @@
 
   .run-behind {
     color: var(--accent);
-  }
-
-  /*
-    The run strip is the first thing to go on a narrow screen: it is the only
-    part of the row that is texture rather than text.
-
-    This block sits *after* the `.run` rules it overrides, not next to the
-    `.episode` grid it also changes. Same specificity means source order
-    decides, and declared earlier it lost to the `display: flex` below it —
-    which showed up as a twelve-segment strip squeezing the title down to
-    "LIAR G…" at 412px, with the media query apparently doing nothing.
-  */
-  @media (max-width: 1000px) {
-    .episode {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .run {
-      display: none;
-    }
-  }
-
-  .tail {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--space-1);
-    flex: none;
-    min-width: 0;
-  }
-
-  .seen-tag {
-    font-size: var(--text-xs);
-    color: var(--success);
-    flex: none;
-    white-space: nowrap;
-  }
-
-  .act {
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
-    font-size: var(--text-xs);
-    background: var(--accent);
-    color: var(--text-on-accent);
-    white-space: nowrap;
-  }
-
-  .act.ghost {
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-  }
-
-  .act.ghost:hover {
-    color: var(--text-primary);
-  }
-
-  /*
-   * The now rule. Full-bleed across the spine so the split between what is
-   * coming and what has gone is a single unmissable line — and it is what the
-   * page scrolls itself to on arrival.
-   */
-  .rule {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin: var(--space-4) 0 var(--space-4) calc(var(--space-5) * -1);
-    color: var(--accent);
-    font-size: var(--text-2xs);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .rule::before {
-    content: '';
-    width: 12px;
-    height: 2px;
-    background: var(--accent);
-    flex: none;
-  }
-
-  .rule::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: linear-gradient(to right, var(--accent), transparent);
-    opacity: 0.4;
-  }
-
-  /*
-   * The disclosure for what is beyond the horizon. Deliberately quiet: it
-   * exists so nothing is lost, not to compete with the fortnight either side
-   * of now that the page is actually about. Above the upcoming days, because
-   * everything behind it is further away than everything in them.
-   */
-  .more {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    align-self: flex-start;
-    padding: var(--space-1) 0;
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-  }
-
-  .more:hover {
-    color: var(--text-secondary);
-  }
-
-  .day.faint {
-    opacity: 0.7;
-  }
-
-  .arrow {
-    display: inline-block;
-    transition: transform var(--dur-fast) var(--ease-out);
-  }
-
-  .arrow.down {
-    transform: rotate(90deg);
   }
 
   /* ── The rail ──────────────────────────────────────────────────────── */
@@ -1430,5 +1299,62 @@
     font-size: var(--text-xs);
     color: var(--text-tertiary);
     margin: 0;
+  }
+
+  /* ── Narrow screens ──────────────────────────────────────────────────
+   *
+   * Every responsive override lives down here, below every rule it
+   * overrides, and that placement is the point rather than tidiness.
+   *
+   * A media query has no extra specificity. `@media { .run { display: none } }`
+   * written beside the `.episode` grid it also changes — which is where it
+   * reads best — sits *above* `.run { display: flex }` and loses on source
+   * order, silently, looking exactly like a query that never matched. That
+   * cost three separate rounds on this file: a twelve-segment run strip
+   * squeezing a title down to "LIAR G…" at 412px, twelve pixels of horizontal
+   * page scroll, and Play buttons that ignored being told to left-align.
+   */
+
+  /* Below this the date column costs more than it earns. */
+  @media (max-width: 760px) {
+    .day {
+      grid-template-columns: 1fr;
+    }
+
+    .marker {
+      padding-top: var(--space-2);
+    }
+  }
+
+  /* The run strip is the first thing to go: it is the only part of the row
+     that is texture rather than text. */
+  @media (max-width: 1000px) {
+    .episode {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .run {
+      display: none;
+    }
+  }
+
+  /*
+    On a phone the actions drop onto their own line.
+
+    Beside the text they cost 99px of a 324px row, which left "Ascendance of a
+    Bookworm" rendering as "Ascendanc…". Under it they cost nothing but a line
+    of height, and they line up with the words rather than with the artwork.
+  */
+  @media (max-width: 760px) {
+    .episode {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-2);
+    }
+
+    .tail {
+      justify-content: flex-start;
+      /* Artwork plus the gap, so the buttons start under the title. */
+      padding-left: calc(68px + var(--space-3));
+    }
   }
 </style>

@@ -325,6 +325,21 @@ export async function createBridge(): Promise<WtaApi> {
   let progress: Progress | null = null
 
   const surface = createPlayerSurface({
+    /**
+     * What is on screen, for the parser's benefit.
+     *
+     * Read at message time rather than captured: the surface is built once and
+     * outlives every episode shown in it.
+     */
+    expects: () =>
+      session === null
+        ? null
+        : {
+            tmdbId: session.req.tmdbId,
+            season: session.req.season ?? null,
+            episode: session.req.episode ?? null,
+          },
+
     onReading: (reading) => {
       if (!progress || !session) return
 

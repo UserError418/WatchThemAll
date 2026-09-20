@@ -56,7 +56,20 @@
   const remaining = $derived(next && !aired ? countdown(episode.airDate, now) : '')
 </script>
 
-<div class="episode" class:watched class:current class:unaired={!aired} class:next-up={remaining}>
+<!--
+  `episode-row` is a marker for the phone's global sheet and is styled nowhere
+  in this file. `mobile.css` needs to reach in here to re-proportion the row at
+  412px, and the class it used to reach with was `.episode` — which is also the
+  Releases timeline's row and the Watchlist card's caption. See the note beside
+  those rules.
+-->
+<div
+  class="episode episode-row"
+  class:watched
+  class:current
+  class:unaired={!aired}
+  class:next-up={remaining}
+>
   <button
     class="thumb"
     onclick={() => aired && onplay(episode)}
