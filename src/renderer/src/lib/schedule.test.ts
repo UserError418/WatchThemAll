@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { EpisodeStub, ReleaseTracker } from '@shared/types'
-import { airDayAt, buildTimeline, countEpisodes, dayHeading } from './schedule'
+import {
+  airDayAt,
+  buildTimeline,
+  countEpisodes,
+  dayHeading,
+  nextUp,
+  seriesRun,
+  trackerRows,
+  unwatchedCount,
+  weekStrip,
+} from './schedule'
 
 /**
  * Local noon, so every "is this the same day" assertion is unambiguous about
@@ -96,16 +106,37 @@ describe('buildTimeline', () => {
     expect(line.upcoming[0]?.label).toBe('Today')
   })
 
-  it('sorts upcoming soonest first and recent newest first', () => {
+  /**
+   * The ordering rule the whole page rests on. The view stacks later,
+   * upcoming, the now rule, then recent — so if any of the three ran the other
+   * way the axis would reverse direction mid-page, which is how this first
+   * shipped: tomorrow at the very top, and the two days either side of now as
+   * far apart as the page could put them.
+   */
+  it('returns every half newest first, so the page reads backwards in time', () => {
     const line = buildTimeline(
       [
         tracker({ schedule: [stub({ airDate: isoDay(9) }), stub({ episode: 8, airDate: isoDay(2) })] }),
         tracker({ schedule: [stub({ airDate: isoDay(-8) }), stub({ episode: 8, airDate: isoDay(-2) })] }),
+        tracker({ schedule: [stub({ airDate: isoDay(40) }), stub({ episode: 8, airDate: isoDay(60) })] }),
       ],
       { now: NOW },
     )
-    expect(line.upcoming.map((d) => d.label)).toEqual([dayHeading(airDayAt(isoDay(2))!, NOW), dayHeading(airDayAt(isoDay(9))!, NOW)])
+    expect(line.upcoming.map((d) => d.label)).toEqual([
+      dayHeading(airDayAt(isoDay(9))!, NOW),
+      dayHeading(airDayAt(isoDay(2))!, NOW),
+    ])
+    expect(line.later[0]?.at).toBeGreaterThan(line.later[1]!.at)
     expect(line.recent[0]?.at).toBeGreaterThan(line.recent[1]!.at)
+  })
+
+  /** The one the view depends on by name: the last upcoming day is the soonest. */
+  it('puts the soonest upcoming day last, against the now rule', () => {
+    const line = buildTimeline(
+      [tracker({ schedule: [stub({ airDate: isoDay(1) }), stub({ episode: 8, airDate: isoDay(6) })] })],
+      { now: NOW },
+    )
+    expect(line.upcoming[line.upcoming.length - 1]?.label).toBe('Tomorrow')
   })
 
   it('groups several series airing the same day into one marker', () => {
@@ -235,5 +266,188 @@ describe('buildTimeline', () => {
   it('handles an empty tracker list', () => {
     const line = buildTimeline([], { now: NOW })
     expect(line).toEqual({ upcoming: [], later: [], recent: [], unscheduled: [] })
+  })
+})
+
+/* ── The rail ───────────────────────────────────────────────────────────── */
+
+/** Nothing has been watched. The common case for a series tracked, not played. */
+const unseen = () => false
+
+describe('seriesRun', () => {
+  const season = (count: number, first = -3) =>
+    Array.from({ length: count }, (_, index) =>
+      stub({ season: 3, episode: index + 1, airDate: isoDay(first + index) }),
+    )
+
+  it('marks what has aired and what has been seen', () => {
+    const t = tracker({ schedule: season(4) })
+    const run = seriesRun(t, (_id, _s, e) => e === 1, { now: NOW })
+    expect(run.map((r) => r.episode)).toEqual([1, 2, 3, 4])
+    expect(run.map((r) => r.aired)).toEqual([true, true, true, false])
+    expect(run.map((r) => r.seen)).toEqual([true, false, false, false])
+  })
+
+  /** Today's episode has not aired: TMDB gives no hour, so the day is the unit. */
+  it('does not count an episode airing today as aired', () => {
+    const t = tracker({ schedule: [stub({ season: 3, episode: 1, airDate: isoDay(0) })] })
+    expect(seriesRun(t, unseen, { now: NOW })[0]?.aired).toBe(false)
+  })
+
+  it('draws only the focused episode’s season', () => {
+    const t = tracker({
+      schedule: [
+        stub({ season: 2, episode: 9, airDate: isoDay(-9) }),
+        stub({ season: 3, episode: 1, airDate: isoDay(-2) }),
+      ],
+    })
+    const run = seriesRun(t, unseen, { now: NOW, focus: { season: 2, episode: 9 } })
+    expect(run.map((r) => r.season)).toEqual([2])
+    expect(run[0]?.focus).toBe(true)
+  })
+
+  /** With no focus, the season being tracked is the newest one it holds. */
+  it('falls back to the highest season it knows about', () => {
+    const t = tracker({
+      schedule: [
+        stub({ season: 2, episode: 9, airDate: isoDay(-9) }),
+        stub({ season: 3, episode: 1, airDate: isoDay(-2) }),
+      ],
+    })
+    expect(seriesRun(t, unseen, { now: NOW }).map((r) => r.season)).toEqual([3])
+  })
+
+  /**
+   * A long season otherwise always shows its first sixteen, which is the part
+   * of the run the reader is least interested in.
+   */
+  it('slides its window to keep the focused episode visible', () => {
+    const t = tracker({ schedule: season(40, -30) })
+    const run = seriesRun(t, unseen, { now: NOW, focus: { season: 3, episode: 30 }, limit: 6 })
+    expect(run).toHaveLength(6)
+    expect(run.some((r) => r.focus)).toBe(true)
+  })
+
+  it('clamps the window to the end of the run', () => {
+    const t = tracker({ schedule: season(20, -19) })
+    const run = seriesRun(t, unseen, { now: NOW, focus: { season: 3, episode: 20 }, limit: 6 })
+    expect(run.map((r) => r.episode)).toEqual([15, 16, 17, 18, 19, 20])
+  })
+
+  it('has nothing to draw for a series with no dated episodes', () => {
+    expect(seriesRun(tracker({ schedule: [stub({ airDate: null })] }), unseen, { now: NOW })).toEqual(
+      [],
+    )
+  })
+})
+
+describe('unwatchedCount', () => {
+  it('counts aired episodes with no mark against them', () => {
+    const t = tracker({
+      schedule: [
+        stub({ episode: 1, airDate: isoDay(-5) }),
+        stub({ episode: 2, airDate: isoDay(-2) }),
+        stub({ episode: 3, airDate: isoDay(3) }),
+      ],
+    })
+    expect(unwatchedCount(t, unseen, NOW)).toBe(2)
+    expect(unwatchedCount(t, (_id, _s, e) => e === 1, NOW)).toBe(1)
+  })
+
+  it('does not count what has not aired yet', () => {
+    const t = tracker({ schedule: [stub({ airDate: isoDay(0) }), stub({ episode: 8, airDate: isoDay(4) })] })
+    expect(unwatchedCount(t, unseen, NOW)).toBe(0)
+  })
+})
+
+describe('weekStrip', () => {
+  it('covers seven consecutive days starting today, empty ones included', () => {
+    const strip = weekStrip([tracker({ schedule: [stub({ airDate: isoDay(2) })] })], NOW)
+    expect(strip).toHaveLength(7)
+    expect(strip[0]?.isToday).toBe(true)
+    expect(strip[0]?.label).toBe('Today')
+    expect(strip.map((d) => d.count)).toEqual([0, 0, 1, 0, 0, 0, 0])
+  })
+
+  it('adds up several series landing on one day', () => {
+    const strip = weekStrip(
+      [
+        tracker({ schedule: [stub({ airDate: isoDay(1) })] }),
+        tracker({ schedule: [stub({ airDate: isoDay(1) })] }),
+      ],
+      NOW,
+    )
+    expect(strip[1]?.count).toBe(2)
+  })
+
+  it('ignores anything outside the seven days', () => {
+    const strip = weekStrip([tracker({ schedule: [stub({ airDate: isoDay(-1) })] })], NOW)
+    expect(strip.every((d) => d.count === 0)).toBe(true)
+  })
+})
+
+describe('trackerRows', () => {
+  it('orders by next airing, with the undated ones last', () => {
+    const rows = trackerRows(
+      [
+        tracker({ title: 'Ended', status: 'Ended', schedule: [stub({ airDate: isoDay(-40) })] }),
+        tracker({ title: 'Later', schedule: [stub({ airDate: isoDay(9) })] }),
+        tracker({ title: 'Sooner', schedule: [stub({ airDate: isoDay(1) })] }),
+      ],
+      unseen,
+      NOW,
+    )
+    expect(rows.map((r) => r.tracker.title)).toEqual(['Sooner', 'Later', 'Ended'])
+    expect(rows[2]?.nextAt).toBeNull()
+  })
+
+  /** Today counts as still to come, exactly as the timeline splits it. */
+  it('treats an episode airing today as the next one', () => {
+    const rows = trackerRows([tracker({ schedule: [stub({ airDate: isoDay(0) })] })], unseen, NOW)
+    expect(rows[0]?.nextAt).toBe(airDayAt(isoDay(0)))
+  })
+
+  it('carries the unwatched count for each series', () => {
+    const rows = trackerRows(
+      [tracker({ schedule: [stub({ airDate: isoDay(-3) }), stub({ episode: 8, airDate: isoDay(3) })] })],
+      unseen,
+      NOW,
+    )
+    expect(rows[0]?.unwatched).toBe(1)
+  })
+
+  it('keeps a series the schedule has nothing dated for', () => {
+    const rows = trackerRows([tracker({ schedule: [] })], unseen, NOW)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.next).toBeNull()
+  })
+})
+
+describe('nextUp', () => {
+  /** The lists run furthest-first, so "the next thing" is the last element. */
+  it('finds the soonest upcoming episode, which is at the end', () => {
+    const line = buildTimeline(
+      [
+        tracker({ title: 'Far', schedule: [stub({ airDate: isoDay(9) })] }),
+        tracker({ title: 'Near', schedule: [stub({ airDate: isoDay(1) })] }),
+      ],
+      { now: NOW },
+    )
+    expect(nextUp(line)?.title).toBe('Near')
+  })
+
+  it('falls back to the soonest beyond the window when nothing is inside it', () => {
+    const line = buildTimeline(
+      [
+        tracker({ title: 'Far', schedule: [stub({ airDate: isoDay(90) })] }),
+        tracker({ title: 'Nearer', schedule: [stub({ airDate: isoDay(30) })] }),
+      ],
+      { now: NOW, windowDays: 14 },
+    )
+    expect(nextUp(line)?.title).toBe('Nearer')
+  })
+
+  it('reports nothing when nothing is scheduled', () => {
+    expect(nextUp(buildTimeline([], { now: NOW }))).toBeNull()
   })
 })

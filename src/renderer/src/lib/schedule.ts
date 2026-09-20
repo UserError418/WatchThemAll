@@ -21,6 +21,19 @@
  * day is today or later is upcoming; strictly earlier is recent.** Today's
  * episodes sit at the head of the timeline rather than at the top of the past,
  * which is also the honest answer — TMDB has not said what hour they air.
+ *
+ * ## One axis, and it only runs one way
+ *
+ * Every day list here is returned **newest first**, upcoming included. That is
+ * not a preference, it is what makes the page a timeline at all: the view
+ * stacks `later`, then `upcoming`, then the now rule, then `recent`, so
+ * reading downwards is reading backwards through time without interruption.
+ *
+ * The first cut had `upcoming` ascending, which put tomorrow at the very top
+ * of the page and the last day before *now* a thousand pixels above it — the
+ * axis reversed direction at the rule, and the two episodes closest to this
+ * moment, which are the whole point of the tab, ended up as far apart as the
+ * page could put them.
  */
 
 import type { EpisodeStub, ReleaseTracker } from '@shared/types'
@@ -65,15 +78,22 @@ export interface TimelineDay {
 }
 
 export interface Timeline {
-  /** Soonest first, within the window. Today's episodes lead. */
+  /**
+   * Within the window, **furthest away first** — so the last day in the list
+   * is today or tomorrow, immediately above the now rule. See the axis rule in
+   * the module header.
+   */
   upcoming: TimelineDay[]
   /**
-   * Scheduled beyond the window, soonest first.
+   * Scheduled beyond the window, furthest away first.
    *
    * Held back rather than dropped. A real tracker list puts 37 episodes over
    * the next four weeks on this page, and with all of them inline the user has
    * to scroll past every one to reach what aired yesterday — which is half of
    * what the tab is for. These stay one press away.
+   *
+   * Ordered like `upcoming` and rendered *above* it, because everything in
+   * here is further from now than everything in there.
    */
   later: TimelineDay[]
   /** Most recent first, back as far as the window. */
@@ -115,7 +135,7 @@ export function dayHeading(at: number, now = Date.now()): string {
  * the timeline instead of dropping into "not scheduled". Deduplicated by
  * season and episode, because the two sources overlap by design.
  */
-function episodesOf(tracker: ReleaseTracker): EpisodeStub[] {
+export function episodesOf(tracker: ReleaseTracker): EpisodeStub[] {
   const byNumber = new Map<string, EpisodeStub>()
   for (const episode of tracker.schedule ?? []) {
     byNumber.set(`${episode.season}:${episode.episode}`, episode)
@@ -217,8 +237,9 @@ export function buildTimeline(
   }
 
   return {
-    upcoming: toDays(upcoming, now, true),
-    later: toDays(later, now, true),
+    // All three descending: one axis, running backwards down the page.
+    upcoming: toDays(upcoming, now, false),
+    later: toDays(later, now, false),
     recent: toDays(recent, now, false),
     unscheduled: unscheduled.sort((a, b) => a.title.localeCompare(b.title)),
   }
@@ -227,4 +248,227 @@ export function buildTimeline(
 /** How many episodes a half of the timeline holds, for the section counts. */
 export function countEpisodes(days: readonly TimelineDay[]): number {
   return days.reduce((total, day) => total + day.episodes.length, 0)
+}
+
+/* ── The rail: what the timeline cannot say in a column of days ─────────── */
+
+/**
+ * Whether one episode has been marked watched.
+ *
+ * Injected rather than imported so everything in this file stays pure and
+ * testable. The view passes `library.isWatched`.
+ */
+export type SeenFn = (tmdbId: number, season: number, episode: number) => boolean
+
+export interface RunSegment {
+  key: string
+  season: number
+  episode: number
+  /** Aired strictly before today, matching the `recent` half of the split. */
+  aired: boolean
+  seen: boolean
+  /** The episode this run was drawn around, drawn taller. */
+  focus: boolean
+}
+
+/**
+ * How many segments a run strip draws before it starts sliding its window.
+ *
+ * Sixteen because that is what fits in the width a timeline row has spare at
+ * 1280px without the segments becoming a texture. Past that the strip stops
+ * saying "you are three from the end" and starts saying "this is a long
+ * series", which the title already said.
+ */
+export const RUN_LIMIT = 16
+
+/**
+ * The current season as a row of segments: aired, seen, and where this episode
+ * sits among them.
+ *
+ * This is what fills the middle of a timeline row, and it is the one thing on
+ * the page that answers "am I keeping up" without the user opening anything.
+ * It is deliberately the same visual idiom as the Watchlist card's episode
+ * pips — one series, one meaning, on both surfaces.
+ */
+export function seriesRun(
+  tracker: ReleaseTracker,
+  seen: SeenFn,
+  options: {
+    now?: number
+    focus?: { season: number; episode: number } | null
+    limit?: number
+  } = {},
+): RunSegment[] {
+  const now = options.now ?? Date.now()
+  const limit = options.limit ?? RUN_LIMIT
+  const today = startOfDay(now)
+
+  const dated = episodesOf(tracker).filter((episode) => airDayAt(episode.airDate) !== null)
+  if (dated.length === 0) return []
+
+  // The season in play: the one the focused episode belongs to, else the
+  // highest the schedule knows about. A tracker mid-way through a season
+  // changeover carries both, and the new one is the one being tracked.
+  const season = options.focus?.season ?? Math.max(...dated.map((e) => e.season))
+  const run = dated
+    .filter((episode) => episode.season === season)
+    .sort((a, b) => a.episode - b.episode)
+
+  const segments = run.map((episode) => ({
+    key: `${episode.season}:${episode.episode}`,
+    season: episode.season,
+    episode: episode.episode,
+    aired: (airDayAt(episode.airDate) ?? 0) < today,
+    seen: seen(tracker.tmdbId, episode.season, episode.episode),
+    focus:
+      options.focus != null &&
+      options.focus.season === episode.season &&
+      options.focus.episode === episode.episode,
+  }))
+
+  if (segments.length <= limit) return segments
+
+  // Slide the window so the focused episode stays in it. Without this a long
+  // season always shows its first sixteen, which is the part of the run the
+  // user is least interested in.
+  const anchor = segments.findIndex((segment) => segment.focus)
+  const centre = anchor >= 0 ? anchor : segments.length - 1
+  const start = Math.max(0, Math.min(segments.length - limit, centre - Math.floor(limit / 2)))
+  return segments.slice(start, start + limit)
+}
+
+/**
+ * Episodes of a tracked series that have aired and carry no watched mark.
+ *
+ * Says "unwatched", not "behind", and the difference is not pedantry: a series
+ * the user watches elsewhere and only tracks here has no marks at all, so
+ * "behind" would be an accusation the app cannot support. Counted across every
+ * season the schedule holds, which is the fortnight-ish either side of now.
+ */
+export function unwatchedCount(
+  tracker: ReleaseTracker,
+  seen: SeenFn,
+  now = Date.now(),
+): number {
+  const today = startOfDay(now)
+  let count = 0
+  for (const episode of episodesOf(tracker)) {
+    const airAt = airDayAt(episode.airDate)
+    if (airAt === null || airAt >= today) continue
+    if (!seen(tracker.tmdbId, episode.season, episode.episode)) count += 1
+  }
+  return count
+}
+
+export interface StripDay {
+  key: string
+  at: number
+  /** A single letter — "M", "T" — because the strip is seven columns wide. */
+  letter: string
+  /** The full label, for the tooltip and the screen reader. */
+  label: string
+  count: number
+  isToday: boolean
+}
+
+/**
+ * The next seven days as a bar strip: how many episodes land on each.
+ *
+ * The timeline below it only draws days that have something on them, which is
+ * right for a list and loses the shape — four episodes on Saturday and nothing
+ * until Wednesday reads as "two days" there and as an actual week here.
+ */
+export function weekStrip(
+  trackers: readonly ReleaseTracker[],
+  now = Date.now(),
+  days = 7,
+): StripDay[] {
+  const today = startOfDay(now)
+  const counts = new Map<number, number>()
+
+  for (const tracker of trackers) {
+    for (const episode of episodesOf(tracker)) {
+      const airAt = airDayAt(episode.airDate)
+      if (airAt === null) continue
+      counts.set(airAt, (counts.get(airAt) ?? 0) + 1)
+    }
+  }
+
+  const strip: StripDay[] = []
+  for (let offset = 0; offset < days; offset += 1) {
+    const at = today + offset * DAY_MS
+    const date = new Date(at)
+    strip.push({
+      key: String(at),
+      at,
+      letter: date.toLocaleDateString(undefined, { weekday: 'narrow' }),
+      label: dayHeading(at, now),
+      count: counts.get(at) ?? 0,
+      isToday: offset === 0,
+    })
+  }
+  return strip
+}
+
+export interface TrackerRow {
+  tracker: ReleaseTracker
+  /** Local midnight of its next airing, or null when it has none scheduled. */
+  nextAt: number | null
+  next: EpisodeStub | null
+  unwatched: number
+}
+
+/**
+ * Every tracked series in one list, soonest first, the undated ones last.
+ *
+ * One list rather than the timeline's three buckets, because the question it
+ * answers is different: the timeline is "what happens on Thursday", this is
+ * "what am I tracking, and is any of it alive". A series that has ended
+ * belongs on it — quietly, at the bottom, but present, because the only other
+ * way to find out it is still being tracked is to notice it never appears.
+ */
+export function trackerRows(
+  trackers: readonly ReleaseTracker[],
+  seen: SeenFn,
+  now = Date.now(),
+): TrackerRow[] {
+  const today = startOfDay(now)
+
+  const rows = trackers.map((tracker) => {
+    let next: EpisodeStub | null = null
+    let nextAt: number | null = null
+
+    for (const episode of episodesOf(tracker)) {
+      const airAt = airDayAt(episode.airDate)
+      if (airAt === null || airAt < today) continue
+      if (nextAt === null || airAt < nextAt) {
+        nextAt = airAt
+        next = episode
+      }
+    }
+
+    return { tracker, nextAt, next, unwatched: unwatchedCount(tracker, seen, now) }
+  })
+
+  return rows.sort((a, b) => {
+    if (a.nextAt === null && b.nextAt === null) {
+      return a.tracker.title.localeCompare(b.tracker.title)
+    }
+    if (a.nextAt === null) return 1
+    if (b.nextAt === null) return -1
+    return a.nextAt - b.nextAt || a.tracker.title.localeCompare(b.tracker.title)
+  })
+}
+
+/**
+ * The single soonest episode, for the rail's headline.
+ *
+ * Reads the *end* of the day lists because they run furthest-first — the one
+ * place in the app where "the next thing" is the last element, and worth
+ * saying out loud since it is exactly the kind of thing a later edit silently
+ * turns back into `[0]`.
+ */
+export function nextUp(timeline: Timeline): TimelineEpisode | null {
+  const days = timeline.upcoming.length > 0 ? timeline.upcoming : timeline.later
+  return days[days.length - 1]?.episodes[0] ?? null
 }
