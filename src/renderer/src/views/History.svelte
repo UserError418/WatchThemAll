@@ -218,6 +218,7 @@
       right on mount so the weeks that matter — the recent ones — are the ones
       on screen.
     -->
+    <div class="board">
     <section class="calendar" aria-label="Viewing calendar">
       <div class="calendar-head">
         <h2>When</h2>
@@ -352,6 +353,7 @@
         {/each}
       {/if}
     </section>
+    </div>
   {/if}
 </div>
 
@@ -361,7 +363,32 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-6);
+  }
 
+  /*
+    Below this the page is a single column, which is right for a phone and was
+    wrong for a 1920px desktop: the calendar sat in a 300px corner and the
+    timeline ran underneath it, leaving most of the window empty. Past it the
+    two sit side by side and the calendar takes the space it can actually use.
+
+    A media query rather than `auto-fit`, because these two panels are not
+    interchangeable — the calendar wants to be as wide as it can get and the
+    timeline wants a readable measure, so they need different shares of the row
+    rather than equal ones.
+  */
+  @media (min-width: 1100px) {
+    .board {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
+      gap: var(--space-6);
+      align-items: start;
+    }
+
+    /* The timeline scrolls within the page, not the column, so a long history
+       does not leave the calendar floating beside a strip of whitespace. */
+    .board > .timeline {
+      min-width: 0;
+    }
   }
 
   /*
@@ -530,6 +557,8 @@
   .grid-scroll {
     display: flex;
     gap: var(--space-2);
+    /* Only scrolls when there is genuinely not enough room — at desktop widths
+       the grid fits and a scrollbar under a chart that fits looks broken. */
     overflow-x: auto;
     padding-bottom: var(--space-2);
     margin-inline: calc(-1 * var(--heat-bleed, 0px));
@@ -538,8 +567,9 @@
 
   .weekdays {
     display: grid;
-    grid-template-rows: repeat(7, 1fr);
+    grid-template-rows: repeat(7, auto);
     gap: 3px;
+    align-items: center;
     font-size: var(--text-2xs);
     color: var(--text-tertiary);
     flex: none;
@@ -561,16 +591,55 @@
     line-height: var(--heat-cell, 12px);
   }
 
+  /*
+    Twenty-six columns that share whatever width there is, rather than
+    twenty-six fixed 12px columns that leave the rest of the panel blank. The
+    cells stay square via `aspect-ratio`, so the whole chart grows and shrinks
+    as one thing instead of needing a size picked per breakpoint.
+  */
   .grid {
-    display: flex;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(var(--heat-cell, 12px), 1fr);
     gap: 3px;
-    flex: none;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .week {
     display: grid;
-    grid-template-rows: repeat(7, 1fr);
+    /* `auto`, not `1fr`: a fraction stretches each row to fill the column's
+       height, which overrides the cells' own aspect ratio and turns the squares
+       into tall rectangles. Letting the rows take their content's height is
+       what keeps a day square at every width. */
+    grid-template-rows: repeat(7, auto);
     gap: 3px;
+    min-width: 0;
+  }
+
+  /*
+    Only the cells *inside the chart* flex. The legend's swatches live in a flex
+    row with nothing to stretch them, so the same rule collapses them to nothing
+    — they keep the fixed size below.
+  */
+  .grid .cell {
+    /* Width from the column, height from the width — which is what keeps a day
+       square at any width without picking a size per breakpoint. Both are
+       stated explicitly because the base `.cell` rule below pins a fixed height,
+       and an explicit height beats an aspect ratio every time. */
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    /*
+      Capped on the *width*, not the height. Capping the height lets the width
+      keep growing and the days stop being squares — which is the one thing a
+      calendar heatmap has to be. Past this the grid simply stops expanding.
+    */
+    max-width: 30px;
+    border-radius: 3px;
+    border: none;
+    padding: 0;
+    background: var(--bg-elevated);
   }
 
   .cell {
