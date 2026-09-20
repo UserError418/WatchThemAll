@@ -19,6 +19,7 @@
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
+  import { resumeTarget } from '@shared/progress'
 
   interface Props {
     media: MediaSummary
@@ -274,7 +275,25 @@
     library.recordWatch(playable, episode?.season ?? null, episode?.episode ?? null)
   }
 
-  /** Resume from the stored position, or the first episode if there is none. */
+  /**
+   * Where this series picks up.
+   *
+   * Derived rather than read straight off the entry: `lastSeason`/`lastEpisode`
+   * are the last episode *started*, which is very often one that was then
+   * finished — and a finished episode is not a place to resume. See
+   * `shared/progress.ts` for the rule and for the write race it sidesteps.
+   */
+  const resumeAt = $derived(
+    resumeTarget({
+      episodes: season?.episodes ?? [],
+      lastSeason: entry?.lastSeason ?? 1,
+      lastEpisode: entry?.lastEpisode ?? 1,
+      seasonCount: detail?.seasonCount ?? 1,
+      isWatched: (s, e) => library.isWatched(subject.tmdbId, s, e),
+    }),
+  )
+
+  /** Resume from the derived position, or the first episode if there is none. */
   function resume(): void {
     if (playable.type === 'movie') {
       void play(null)
@@ -287,7 +306,7 @@
     }
     const target =
       season?.episodes.find(
-        (e) => e.season === entry?.lastSeason && e.episode === entry?.lastEpisode,
+        (e) => e.season === resumeAt.season && e.episode === resumeAt.episode,
       ) ?? season?.episodes[0]
     void play(target ?? null)
   }
@@ -438,7 +457,7 @@
 
           <div class="actions">
             <button class="primary" onclick={resume} disabled={!detail}>
-              ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(entry.lastSeason ?? 1, entry.lastEpisode ?? 1)}` : 'Play'}
+              ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
             </button>
             <SourcePicker
               selected={chosenProvider}
@@ -586,8 +605,8 @@
                   next={episode.episode === nextUnaired}
                   progress={library.episodeProgress(subject.tmdbId, episode.season, episode.episode)}
                   watched={library.isWatched(subject.tmdbId, episode.season, episode.episode)}
-                  current={entry?.lastSeason === episode.season &&
-                    entry?.lastEpisode === episode.episode}
+                  current={resumeAt.season === episode.season &&
+                    resumeAt.episode === episode.episode}
                   onplay={(e) => play(e)}
                   ontoggleWatched={(e, watched) => {
                     if (!library.isInWatchlist(subject.tmdbId)) library.addToWatchlist(detail ?? subject)

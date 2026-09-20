@@ -309,6 +309,26 @@ class Library {
 
     const entry = this.watchlistEntry(tmdbId)
     if (!entry) return
+
+    /*
+     * Never move the position backwards.
+     *
+     * Leaving an episode settles it in the main process, and leaving is also
+     * what happens when the user picks the *next* one — so "E1 finished" and
+     * "E2 started" are two writes to this field with no guaranteed order
+     * between them. Without this guard the settling of E1 lands last often
+     * enough to rewind the position onto an episode already watched to the
+     * end, which is what the user sees as a Resume button that will not move
+     * on. `resumeTarget` decides where to actually go; this only stops the
+     * stored position losing ground.
+     */
+    const behind =
+      entry.lastSeason !== null &&
+      entry.lastEpisode !== null &&
+      (season < entry.lastSeason ||
+        (season === entry.lastSeason && episode < entry.lastEpisode))
+    if (behind) return
+
     entry.lastSeason = season
     entry.lastEpisode = episode
     void this.persist({ watchlist: this.watchlist })
