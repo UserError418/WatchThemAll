@@ -19,7 +19,7 @@
 
 import { backOut, cubicIn, expoOut } from 'svelte/easing'
 import type { FlyParams, ScaleParams, TransitionConfig } from 'svelte/transition'
-import { fly, scale, fade } from 'svelte/transition'
+import { fly, scale, fade, slide } from 'svelte/transition'
 
 /**
  * Whether the user has asked for less motion.
@@ -120,4 +120,34 @@ export function stagger(index: number, step = 22, cap = 8): FlyParams {
     delay: duration(Math.min(index, cap) * step),
     easing: expoOut,
   }
+}
+
+/**
+ * A control strip arriving over artwork.
+ *
+ * Shorter and shallower than `modalIn`: it is revealing something the pointer
+ * is already resting on, so it has nothing to announce and any distance it
+ * travels reads as lag between the hover and the response.
+ */
+export function revealIn(node: Element): TransitionConfig {
+  return fly(node, { y: 10, duration: duration(DUR_FAST), easing: expoOut, opacity: 0 })
+}
+
+export function revealOut(node: Element): TransitionConfig {
+  return fly(node, { y: 6, duration: duration(100), easing: cubicIn, opacity: 0 })
+}
+
+/**
+ * A disclosure opening — the Watched tab's seasons.
+ *
+ * `slide` rather than a height transition written by hand, because the content
+ * height is not known until it is measured and a wrong guess makes the rows
+ * below jump at the end of the animation instead of during it.
+ */
+export function expandIn(node: Element): TransitionConfig {
+  return slide(node, { duration: duration(DUR_MID), easing: expoOut })
+}
+
+export function expandOut(node: Element): TransitionConfig {
+  return slide(node, { duration: duration(DUR_FAST), easing: cubicIn })
 }
