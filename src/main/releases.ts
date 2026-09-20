@@ -18,7 +18,7 @@
  * season" whenever TMDB corrected its metadata.
  */
 
-import type { EpisodeStub, ReleaseTracker, StoreShape, Synced } from '@shared/types'
+import type { Episode, EpisodeStub, ReleaseTracker, StoreShape, Synced } from '@shared/types'
 /**
  * Only what a sweep actually needs.
  *
@@ -38,6 +38,19 @@ import * as tmdb from './tmdb'
 /** Spacing between TMDB calls, so a large tracker list does not burst. */
 const REQUEST_SPACING_MS = 250
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How far either side of now `tracker.schedule` reaches.
+ *
+ * Back far enough to outlast the widest window the Releases tab offers (30
+ * days) with room for a sweep that has not run in a while; forward far enough
+ * that a season announced months ahead still appears on the timeline. Stored
+ * rather than filtered at render time because the view cannot fetch.
+ */
+const SCHEDULE_BACK_DAYS = 45
+const SCHEDULE_AHEAD_DAYS = 90
+
 export interface ReleaseNotice {
   tracker: ReleaseTracker
   episode: EpisodeStub
@@ -48,6 +61,54 @@ function isNewerThan(candidate: EpisodeStub, baseline: EpisodeStub | null): bool
   if (!baseline) return false
   if (candidate.season !== baseline.season) return candidate.season > baseline.season
   return candidate.episode > baseline.episode
+}
+
+/**
+ * The episodes of a season worth storing, trimmed to stubs.
+ *
+ * Only the four fields the timeline draws. The full `Episode` carries an
+ * overview and a still path, and keeping those would put a paragraph of prose
+ * per episode into a document that syncs over Drive on every change.
+ */
+export function scheduleWindow(episodes: readonly Episode[], now = Date.now()): EpisodeStub[] {
+  const from = now - SCHEDULE_BACK_DAYS * DAY_MS
+  const to = now + SCHEDULE_AHEAD_DAYS * DAY_MS
+
+  return episodes
+    .filter((episode) => {
+      if (!episode.airDate) return false
+      const at = new Date(`${episode.airDate}T00:00:00`).getTime()
+      return !Number.isNaN(at) && at >= from && at <= to
+    })
+    .map(({ season, episode, name, airDate }) => ({ season, episode, name, airDate }))
+}
+
+/**
+ * Whether this sweep should spend a request on the season listing.
+ *
+ * A season's air dates do not change once published, so re-fetching every
+ * hour would double the sweep's cost to re-learn the same answer. It is worth
+ * paying when there is nothing stored, when the series has moved on to a
+ * season the stored list does not cover, or when everything stored has already
+ * aired — that last one being how a schedule that has simply run out is told
+ * apart from one that is still current.
+ */
+export function needsSchedule(
+  tracker: Pick<ReleaseTracker, 'schedule'>,
+  season: number,
+  now = Date.now(),
+): boolean {
+  const stored = tracker.schedule
+  if (!stored || stored.length === 0) return true
+  if (!stored.some((episode) => episode.season === season)) return true
+
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  return !stored.some((episode) => {
+    if (!episode.airDate) return false
+    const at = new Date(`${episode.airDate}T00:00:00`).getTime()
+    return !Number.isNaN(at) && at >= today.getTime()
+  })
 }
 
 /**
@@ -74,6 +135,26 @@ export async function checkTracker(tracker: ReleaseTracker): Promise<ReleaseNoti
   tracker.nextEpisode = detail.nextEpisode
   tracker.posterPath ??= detail.posterPath
   if (detail.title) tracker.title = detail.title
+
+  /*
+   * The timeline's raw material. Deliberately after `nextEpisode` is stored
+   * and before any of the early returns below: an ended series still has a
+   * last season worth drawing, and a first sighting still wants its dates.
+   *
+   * A failure here is swallowed and leaves `schedule` untouched rather than
+   * clearing it — a stale timeline beats an empty one, and the notification
+   * path below must not be lost to a season listing being unavailable.
+   */
+  const current = detail.nextEpisode?.season ?? detail.lastEpisode?.season ?? null
+  if (current !== null && needsSchedule(tracker, current)) {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, REQUEST_SPACING_MS))
+      const season = await tmdb.season(tracker.tmdbId, current)
+      tracker.schedule = scheduleWindow(season.episodes)
+    } catch (err) {
+      console.error(`[releases] season ${current} unavailable for "${tracker.title}":`, err)
+    }
+  }
 
   const latest = detail.lastEpisode
   if (!latest) return null

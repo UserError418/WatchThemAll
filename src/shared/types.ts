@@ -290,6 +290,22 @@ export interface ReleaseTracker {
   nextEpisode: EpisodeStub | null
   /** The most recent episode we have already told the user about. */
   lastNotified: EpisodeStub | null
+  /**
+   * Episodes of the current season around now, for the Releases timeline.
+   *
+   * `nextEpisode` is one episode forward and `lastNotified` is a notification
+   * bookmark, so neither can answer "what aired over the last fortnight" — and
+   * that is half of what the tab is for. The release sweep fills this from the
+   * season it is already looking at.
+   *
+   * Optional rather than migrated in, for the same reason as
+   * `HistoryEntry.playedMs`: this format is shared with the Android app and
+   * the ReelVault extension, and rewriting every record to add a field would
+   * restamp the whole collection and hand the next sync every conflict. Absent
+   * on anything written before 1.6.0, and on any tracker whose season fetch
+   * failed — the timeline falls back to `nextEpisode` alone.
+   */
+  schedule?: EpisodeStub[]
   addedAt: number
   lastChecked: number
 }
