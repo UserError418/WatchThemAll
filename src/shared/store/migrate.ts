@@ -160,6 +160,19 @@ function fromTyped(
   }
 
   /**
+   * Version 5: scope watched entries and ratings to a season.
+   *
+   * Everything written before seasons existed meant "the whole series", which
+   * is exactly what `null` means here — so this is a normalisation rather than
+   * a reinterpretation, and nothing a user did changes meaning. Spreading a
+   * document does not fill in fields added to an element type afterwards, so
+   * without this the field is simply absent and every reader has to defend
+   * against it.
+   */
+  doc.watched = doc.watched.map((entry) => ({ ...entry, season: entry.season ?? null }))
+  doc.ratings = doc.ratings.map((rating) => ({ ...rating, season: rating.season ?? null }))
+
+  /**
    * Repair watchlist entries written before later fields existed.
    *
    * Spreading fills in absent top-level keys but not fields added to an element

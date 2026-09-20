@@ -41,7 +41,7 @@
       backdropPath: null,
       overview: '',
       releaseDate: null,
-      rating: 0,
+      rating: entry.rating,
       genreIds: entry.genreIds,
     }
   }
@@ -135,12 +135,17 @@
           </button>
 
           <p class="name" title={entry.title}>{entry.title}</p>
+          {#if entry.season !== null}
+            <!-- A series reaches this list one season at a time, so the card
+                 has to say which one or two seasons look like a duplicate. -->
+            <p class="season">Season {entry.season}</p>
+          {/if}
 
           <div class="row">
-            <RateButtons {media} size="sm" />
+            <RateButtons {media} size="sm" season={entry.season} />
             <button
               class="drop"
-              onclick={() => library.removeFromWatched(entry.tmdbId)}
+              onclick={() => library.removeFromWatched(entry.tmdbId, entry.season)}
               aria-label="Remove {entry.title} from watched"
               title="Remove from watched">✕</button
             >
@@ -156,6 +161,12 @@
 </div>
 
 <style>
+  .season {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--text-xs, 12px);
+  }
+
   /* Opposite corner from the MAL badge so the two never overlap. */
   .badge-score {
     position: absolute;

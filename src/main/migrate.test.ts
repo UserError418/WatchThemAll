@@ -304,7 +304,12 @@ describe('watched and ratings', () => {
       // Plus the sync metadata, which is what version 2 adds. `updatedAt`
       // reuses the record's own `addedAt` rather than "now" — see the note on
       // EXISTING_TIMESTAMP for why that matters on the first merge.
-      { ...entry, updatedAt: 1, deletedAt: null },
+      //
+      // And `season: null`, which version 5 adds. An entry written before
+      // seasons were scoped meant "the whole series", and null is exactly that
+      // — a normalisation rather than a reinterpretation, so nothing the user
+      // did changes meaning.
+      { ...entry, season: null, updatedAt: 1, deletedAt: null },
     ])
   })
 })

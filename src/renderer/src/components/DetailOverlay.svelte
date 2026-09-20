@@ -72,7 +72,18 @@
 
   const inWatchlist = $derived(library.isInWatchlist(subject.tmdbId))
   const tracked = $derived(library.isTracked(subject.tmdbId))
-  const seen = $derived(library.hasSeen(subject.tmdbId))
+  /**
+   * Whether the thing the button is about has been watched.
+   *
+   * For a film that is the film. For a series it is *the selected season* —
+   * which is the whole point of the change: "I have watched this" about a
+   * nine-season show, said while looking at season one, used to file all nine.
+   */
+  const seen = $derived(
+    subject.type === 'movie'
+      ? library.hasSeen(subject.tmdbId)
+      : library.hasSeenSeason(subject.tmdbId, selectedSeason),
+  )
   const entry = $derived(library.watchlistEntry(subject.tmdbId))
   const backdrop = $derived(backdropUrl(detail?.backdropPath ?? subject.backdropPath))
   const poster = $derived(posterUrl(detail?.posterPath ?? subject.posterPath, 'w342'))
@@ -206,7 +217,7 @@
   $effect(() => {
     const loaded = season
     if (!loaded || subject.type !== 'tv') return
-    if (!library.hasSeen(subject.tmdbId)) return
+    if (!library.hasSeenSeason(subject.tmdbId, loaded.season)) return
 
     const key = `${subject.tmdbId}:${loaded.season}`
     if (reconciled[key]) return
@@ -312,6 +323,36 @@
         (e) => e.season === resumeAt.season && e.episode === resumeAt.episode,
       ) ?? season?.episodes[0]
     void play(target ?? null)
+  }
+
+  /** What pressing "+ Watched" will actually file, in words. */
+  const watchedScopeLabel = $derived(
+    subject.type === 'movie' ? 'Watched' : `Season ${selectedSeason} watched`,
+  )
+
+  /**
+   * Mark what is on screen as watched, or take it back.
+   *
+   * For a series this files the selected season and ticks off its episodes, so
+   * the Watched tab and the episode browser agree — they disagreeing is the
+   * original fault here, and it is why a MyAnimeList import of completed shows
+   * showed every episode unwatched.
+   */
+  function toggleSeen(): void {
+    const media = detail ?? subject
+    if (subject.type === 'movie') {
+      if (seen) library.removeFromWatched(subject.tmdbId)
+      else library.addToWatched(media)
+      return
+    }
+
+    if (seen) {
+      library.removeFromWatched(subject.tmdbId, selectedSeason)
+      return
+    }
+
+    library.addToWatched(media, 'user', selectedSeason)
+    if (season) toggleSeasonWatched(true)
   }
 
   function toggleSeasonWatched(watched: boolean): void {
@@ -498,17 +539,19 @@
             <button
               class="secondary"
               class:on={seen}
-              onclick={() =>
-                seen
-                  ? library.removeFromWatched(subject.tmdbId)
-                  : library.addToWatched(detail ?? subject)}
-              title={seen ? 'In your watched list' : 'Mark as already watched'}
+              onclick={() => toggleSeen()}
+              title={seen ? 'In your watched list' : watchedScopeLabel}
             >
-              {seen ? '✓ Watched' : '+ Watched'}
+              {seen ? '✓ Watched' : `+ ${watchedScopeLabel}`}
             </button>
 
             {#if seen}
-              <RateButtons media={detail ?? subject} />
+              <!-- Scoped to match the button beside it: an opinion about season
+                   three is a different thing from an opinion about the show. -->
+              <RateButtons
+                media={detail ?? subject}
+                season={subject.type === 'movie' ? null : selectedSeason}
+              />
             {/if}
           </div>
 

@@ -171,7 +171,8 @@ describe('applyMalImport', () => {
     const id = fakeId('Cowboy Bebop')
     const before: StoreShape = {
       ...emptyStore(),
-      ratings: [stamp({ key: `tv:${id}`, tmdbId: id, type: 'tv', rating: 'like', genreIds: [], at: 1 })],
+      ratings: [stamp({ key: `tv:${id}`, tmdbId: id, type: 'tv', season: null,
+ rating: 'like', genreIds: [], at: 1 })],
     }
 
     const { store } = await applyMalImport(

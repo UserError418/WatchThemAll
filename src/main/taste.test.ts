@@ -34,6 +34,7 @@ function watched(tmdbId: number, genreIds: number[]): Synced<WatchedEntry> {
     id: `s${tmdbId}`,
     tmdbId,
     type: 'tv',
+    season: null,
     title: `title ${tmdbId}`,
     posterPath: null,
     imdbId: null,
@@ -46,7 +47,7 @@ function watched(tmdbId: number, genreIds: number[]): Synced<WatchedEntry> {
 }
 
 function rating(tmdbId: number, genreIds: number[], value: 'like' | 'dislike'): Synced<TitleRating> {
-  return stamp({ key: `tv:${tmdbId}`, tmdbId, type: 'tv', rating: value, genreIds, at: 0 })
+  return stamp({ key: `tv:${tmdbId}`, tmdbId, type: 'tv', season: null, rating: value, genreIds, at: 0 })
 }
 
 describe('genreWeights', () => {

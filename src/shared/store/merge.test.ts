@@ -444,3 +444,73 @@ describe('merge algebra', () => {
     )
   })
 })
+
+/**
+ * Seasons, added in version 5.
+ *
+ * A merge is where a new identity scheme fails, and it fails silently: two
+ * records that should be distinct collapse into one, and the user finds out
+ * when half their watched list has disappeared. Both of these would pass a type
+ * check and a linter regardless of which way the identity went.
+ */
+describe('season-scoped watched and ratings', () => {
+  it('keeps one watched entry per season rather than collapsing them', () => {
+    const local = emptyDoc('a')
+    const remote = emptyDoc('b')
+
+    local.watched = [
+      {
+        id: 's1',
+        tmdbId: 1396,
+        type: 'tv',
+        season: 1,
+        title: 'Breaking Bad',
+        posterPath: null,
+        imdbId: 'tt0903747',
+        genreIds: [],
+        rating: 0,
+        addedAt: 1,
+        source: 'user',
+        malId: null,
+        updatedAt: 1,
+        deletedAt: null,
+      },
+    ]
+    remote.watched = [{ ...local.watched[0]!, id: 's2', season: 2, updatedAt: 2 }]
+
+    const merged = mergeDocuments(local, remote)
+    expect(merged.watched.map((w) => w.season).sort()).toEqual([1, 2])
+  })
+
+  /**
+   * The season suffix is what makes this work. A `season` field alone would
+   * leave every season of a series sharing one key, so the newest write would
+   * win and the rest would vanish.
+   */
+  it('keeps a season opinion separate from the opinion of the series', () => {
+    const local = emptyDoc('a')
+    const remote = emptyDoc('b')
+
+    local.ratings = [
+      {
+        key: 'tv:tt0903747',
+        tmdbId: 1396,
+        type: 'tv',
+        season: null,
+        rating: 'like',
+        genreIds: [],
+        at: 1,
+        updatedAt: 1,
+        deletedAt: null,
+      },
+    ]
+    remote.ratings = [
+      { ...local.ratings[0]!, key: 'tv:tt0903747:s3', season: 3, rating: 'dislike', updatedAt: 2 },
+    ]
+
+    const merged = mergeDocuments(local, remote)
+    expect(merged.ratings).toHaveLength(2)
+    expect(merged.ratings.find((r) => r.season === null)?.rating).toBe('like')
+    expect(merged.ratings.find((r) => r.season === 3)?.rating).toBe('dislike')
+  })
+})
