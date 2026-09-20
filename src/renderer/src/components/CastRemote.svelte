@@ -164,19 +164,22 @@
     <button class="ghost stop" onclick={onstop}>Stop casting</button>
   </header>
 
-  <div class="stage">
-    <div class="art">
-      {#if artwork}
-        <img src={artwork} alt="" />
-      {:else}
-        <span class="glyph big" aria-hidden="true">▣</span>
-      {/if}
-    </div>
+  <div class="body">
+    <div class="stage">
+      <div class="art">
+        {#if artwork}
+          <img src={artwork} alt="" />
+        {:else}
+          <svg class="glyph big" viewBox="0 0 24 24" aria-hidden="true"
+            ><path d="M3 5h18v11H3zM8 20h8v-1H8z" /></svg
+          >
+        {/if}
+      </div>
 
-    <h1>{title}</h1>
-    {#if subtitle}<p class="sub">{subtitle}</p>{/if}
+      <h1>{title}</h1>
+      {#if subtitle}<p class="sub">{subtitle}</p>{/if}
 
-    <!--
+      <!--
       What is happening, whenever it is not simply playing.
 
       Moving the television to another episode takes several seconds — the embed
@@ -185,9 +188,9 @@
       the user's behalf. So it is narrated rather than hidden behind a spinner
       that says nothing.
     -->
-    {#if busy}
-      <p class="phase" class:stuck={phase === 'stuck'} role="status">{phaseLabel}</p>
-      <!--
+      {#if busy}
+        <p class="phase" class:stuck={phase === 'stuck'} role="status">{phaseLabel}</p>
+        <!--
         The one place the remote has to let go of the screen.
 
         Several providers fetch nothing at all until their own play button is
@@ -196,82 +199,95 @@
         worse than no remote — so being stuck comes with the way out, and the
         cast button in the bar brings this back.
       -->
-      {#if phase === 'stuck'}
-        <div class="escape">
-          <button class="ghost" onclick={onreveal}>Show the player</button>
-          <button class="ghost" onclick={onretry}>Try again</button>
-        </div>
-      {/if}
-    {:else if !status.proxyRunning}
-      <!-- Connected and serving nothing: the television is still attached and
+        {#if phase === 'stuck'}
+          <div class="escape">
+            <button class="ghost" onclick={onreveal}>Show the player</button>
+            <button class="ghost" onclick={onretry}>Try again</button>
+          </div>
+        {/if}
+      {:else if !status.proxyRunning}
+        <!-- Connected and serving nothing: the television is still attached and
            the stream behind it has stopped, which looks exactly like "paused"
            from the sofa. -->
-      <p class="phase stuck" role="status">The stream ended — the television has nothing left to play.</p>
-    {/if}
-  </div>
-
-  <div class="controls" class:dim={busy}>
-    <div class="row">
-      <span class="t">{clock(seconds)}</span>
-      <input
-        type="range"
-        min="0"
-        max={Math.max(1, Math.round(status.duration))}
-        step="1"
-        value={Math.round(seconds)}
-        disabled={status.duration <= 0 || busy}
-        aria-label="Position"
-        style="--filled: {Math.round(fraction * 100)}%"
-        oninput={(e) => hold(Number(e.currentTarget.value))}
-        onchange={(e) => commitScrub(Number(e.currentTarget.value))}
-      />
-      <span class="t right">-{clock(remaining)}</span>
+        <p class="phase stuck" role="status">
+          The stream ended — the television has nothing left to play.
+        </p>
+      {/if}
     </div>
 
-    <!--
+    <div class="controls" class:dim={busy}>
+      <div class="row">
+        <span class="t">{clock(seconds)}</span>
+        <input
+          type="range"
+          min="0"
+          max={Math.max(1, Math.round(status.duration))}
+          step="1"
+          value={Math.round(seconds)}
+          disabled={status.duration <= 0 || busy}
+          aria-label="Position"
+          style="--filled: {Math.round(fraction * 100)}%"
+          oninput={(e) => hold(Number(e.currentTarget.value))}
+          onchange={(e) => commitScrub(Number(e.currentTarget.value))}
+        />
+        <span class="t right">-{clock(remaining)}</span>
+      </div>
+
+      <!--
       Transport. The primary key is twice the size of the rest, because this is
       the one surface in the app used at arm's length without being looked at —
       that is the argument for the sizes here, not generosity.
     -->
-    <div class="transport">
-      <button
-        class="key"
-        onclick={onprevious}
-        disabled={!canPrevious || busy}
-        title="Previous episode"
-        aria-label="Previous episode">⏮</button
-      >
-      <button
-        class="key"
-        onclick={() => onnudge(-NUDGE_SECONDS)}
-        disabled={busy}
-        title="Back {NUDGE_SECONDS} seconds"
-        aria-label="Back {NUDGE_SECONDS} seconds">−{NUDGE_SECONDS}s</button
-      >
-      <button
-        class="key primary"
-        onclick={ontoggle}
-        disabled={busy}
-        title={status.playing ? 'Pause on the TV' : 'Play on the TV'}
-        aria-label={status.playing ? 'Pause' : 'Play'}>{status.playing ? '❚❚' : '▶'}</button
-      >
-      <button
-        class="key"
-        onclick={() => onnudge(NUDGE_SECONDS)}
-        disabled={busy}
-        title="Forward {NUDGE_SECONDS} seconds"
-        aria-label="Forward {NUDGE_SECONDS} seconds">+{NUDGE_SECONDS}s</button
-      >
-      <button
-        class="key"
-        onclick={onnext}
-        disabled={!canNext || busy}
-        title="Next episode"
-        aria-label="Next episode">⏭</button
-      >
-    </div>
+      <div class="transport">
+        <button
+          class="key"
+          onclick={onprevious}
+          disabled={!canPrevious || busy}
+          title="Previous episode"
+          aria-label="Previous episode"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14H5V5zM19 5v14l-11-7z" /></svg>
+        </button>
+        <button
+          class="key"
+          onclick={() => onnudge(-NUDGE_SECONDS)}
+          disabled={busy}
+          title="Back {NUDGE_SECONDS} seconds"
+          aria-label="Back {NUDGE_SECONDS} seconds">−{NUDGE_SECONDS}s</button
+        >
+        <button
+          class="key primary"
+          onclick={ontoggle}
+          disabled={busy}
+          title={status.playing ? 'Pause on the TV' : 'Play on the TV'}
+          aria-label={status.playing ? 'Pause' : 'Play'}
+        >
+          {#if status.playing}
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg
+            >
+          {:else}
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg>
+          {/if}
+        </button>
+        <button
+          class="key"
+          onclick={() => onnudge(NUDGE_SECONDS)}
+          disabled={busy}
+          title="Forward {NUDGE_SECONDS} seconds"
+          aria-label="Forward {NUDGE_SECONDS} seconds">+{NUDGE_SECONDS}s</button
+        >
+        <button
+          class="key"
+          onclick={onnext}
+          disabled={!canNext || busy}
+          title="Next episode"
+          aria-label="Next episode"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5v14h2V5zM5 5v14l11-7z" /></svg>
+        </button>
+      </div>
 
-    <!--
+      <!--
       Volume, and it is the receiver's own — `SET_VOLUME` on the receiver
       namespace, not a media-session command. Said out loud underneath, because
       on any television doing HDMI-CEC this is the set's volume: a user
@@ -279,27 +295,36 @@
       too. The slider stays live while the phase is busy, unlike the transport —
       volume is the one command that works with nothing playing.
     -->
-    <div class="row volume">
-      <button
-        class="key small"
-        onclick={onmute}
-        title={status.muted ? 'Unmute the television' : 'Mute the television'}
-        aria-label={status.muted ? 'Unmute the television' : 'Mute the television'}
-        >{status.muted ? '🔇' : '🔊'}</button
-      >
-      <input
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        value={volumePercent(level)}
-        aria-label="Television volume"
-        style="--filled: {status.muted ? 0 : volumePercent(level)}%"
-        oninput={(e) => setVolume(Number(e.currentTarget.value))}
-      />
-      <span class="t right">{status.muted ? 'muted' : `${volumePercent(level)}%`}</span>
+      <div class="row volume">
+        <button
+          class="key small"
+          onclick={onmute}
+          title={status.muted ? 'Unmute the television' : 'Mute the television'}
+          aria-label={status.muted ? 'Unmute the television' : 'Mute the television'}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9h3l5-4v14l-5-4H4z" />
+            {#if status.muted}
+              <path d="M16 9l5 6M21 9l-5 6" class="stroke" />
+            {:else}
+              <path d="M16.5 8.5a5 5 0 0 1 0 7" class="stroke" />
+            {/if}
+          </svg>
+        </button>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={volumePercent(level)}
+          aria-label="Television volume"
+          style="--filled: {status.muted ? 0 : volumePercent(level)}%"
+          oninput={(e) => setVolume(Number(e.currentTarget.value))}
+        />
+        <span class="t right">{status.muted ? 'muted' : `${volumePercent(level)}%`}</span>
+      </div>
+      <p class="note">Volume is the television's own.</p>
     </div>
-    <p class="note">Volume is the television's own.</p>
   </div>
 </div>
 
@@ -370,12 +395,29 @@
   }
 
   /*
-    The middle takes whatever is left and centres inside it, so the controls
-    stay a constant distance from the bottom edge — the same buttons in the
-    same place whether this is a 915px phone or a 1080p window.
+    Everything below the header is one centred column of a fixed width.
+
+    Without the width cap this spreads to fill a 1920×1080 window: artwork
+    floating in the upper third, the transport pinned to the bottom edge, and
+    six hundred pixels of nothing between them — seen on screen, and it reads
+    as a broken layout rather than a spacious one. A remote is a small object;
+    it should look like one on a monitor and fill the screen on a phone, which
+    is what a max-width plus `margin: auto` gives for free.
   */
-  .stage {
+  .body {
     flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 460px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 26px;
+  }
+
+  .stage {
+    flex: 0 1 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -386,7 +428,7 @@
   }
 
   .art {
-    width: min(42vh, 55%);
+    width: min(34vh, 72%);
     aspect-ratio: 16 / 9;
     border-radius: 12px;
     overflow: hidden;
@@ -404,9 +446,39 @@
     object-fit: cover;
   }
 
+  /*
+    SVG rather than ⏮ and ⏭, and that is measured rather than tidy-minded.
+
+    Seen on screen under Xvfb, both render as a replacement box: U+23EE and
+    U+23ED are in no font this build can count on, and the emoji speaker is
+    worse — where it does resolve it arrives as a colour emoji that ignores
+    every rule here. A transport button that draws a tofu square is a button
+    nobody can identify, on the one surface in the app used from across a room.
+  */
+  .key svg {
+    width: 22px;
+    height: 22px;
+    display: block;
+    margin: 0 auto;
+    fill: currentColor;
+  }
+
+  .key.primary svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .key svg .stroke {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+
   .glyph.big {
-    font-size: 34px;
-    color: #4a4a57;
+    width: 40px;
+    height: 40px;
+    fill: #4a4a57;
   }
 
   h1 {
@@ -443,13 +515,8 @@
     margin-top: 10px;
   }
 
-  /* Centred and bounded: stretched across a 1080p window the time bar becomes
-     a scrub with pixel-per-minute precision and the keys drift apart. */
   .controls {
     flex: none;
-    width: 100%;
-    max-width: 460px;
-    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -598,6 +665,18 @@
     Declared last, because a `@media` block carries no extra specificity and
     only wins on source order.
   */
+  /*
+    A phone held upright. The transport goes back to the bottom of the screen,
+    because at that size the column is the screen and the keys want to be under
+    a thumb rather than floating in the middle of it.
+  */
+  @media (max-width: 560px) and (min-height: 600px) {
+    .body {
+      justify-content: space-between;
+      padding-bottom: 4px;
+    }
+  }
+
   @media (max-height: 520px) {
     .art {
       display: none;

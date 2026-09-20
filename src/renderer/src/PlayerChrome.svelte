@@ -310,6 +310,18 @@
   async function castTo(deviceId: string): Promise<void> {
     castBusy = true
     castError = null
+    /*
+     * Say what is happening *before* connecting, not after.
+     *
+     * The poll flips `connected` the moment the session exists, which is one
+     * or two seconds before there is a stream on it — so the remote appears
+     * during the beam. Left at `playing` for those seconds it reads
+     * `proxyRunning: false` and announces "the stream ended" over a cast that
+     * is going perfectly. The panel this replaces had the identical bug and
+     * fixed it by testing `castBusy` first; this is the same fix in the phase.
+     */
+    remotePhase = 'beaming'
+    remoteNote = 'Starting the stream on the television…'
     try {
       const connected = await api.cast.connect(deviceId)
       if (!connected.ok) {
@@ -445,6 +457,19 @@
   $effect(() => {
     const pending = suggestion
     if (!pending) {
+      countdown = null
+      return
+    }
+    /*
+     * A cast outranks the auto-switch.
+     *
+     * The local embed failing to start is the *expected* state while casting —
+     * it is muted on the desktop and blanked on the phone — so the countdown
+     * would fire on almost every cast and silently move the user to another
+     * provider, clearing the capture and abandoning the stream the television
+     * is playing. The offer is not merely hidden, it is not armed.
+     */
+    if (casting) {
       countdown = null
       return
     }
@@ -1035,7 +1060,14 @@
   it had stopped drawing over.
 -->
 <div class="offer-slot" bind:clientHeight={suggestionHeight}>
-  {#if suggestion}
+  <!--
+    Never while the remote is up. Two reasons, and the second is the serious
+    one: it draws across the remote's header, and switching provider under a
+    running cast clears the capture and abandons the stream the television is
+    playing. The remote's `stuck` phase already gives the same advice for the
+    case that matters, with the source picker one button away.
+  -->
+  {#if suggestion && !showRemote}
     <div class="suggestion" role="alert">
       <span class="reason">{suggestion.reason}.</span>
       <!--
