@@ -26,6 +26,7 @@ import type { PlayCandidate } from './providers'
 import type { VideoPosition } from './playerview'
 import { checkAll, describeNotice, startReleaseTimer, type ReleaseNotice } from './releases'
 import { backfillScores } from './scorebackfill'
+import { runSeasonSplit, tmdbIdentify } from './seasonsplit'
 import { buildPlayUrl } from './providers'
 import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
@@ -767,37 +768,67 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
     stopReleaseTimer = startReleaseTimer(store, announce)
 
     /**
-     * Top up scores for titles saved before the app stored one.
+     * Background work over the saved library, in order and off the hot path.
      *
-     * Deliberately unawaited and deliberately slow — see `scorebackfill.ts`.
-     * Nothing on screen is waiting for it; the lists it improves simply start
-     * showing scores as the writes land, and a run that is cut short resumes on
-     * the next launch.
+     * Both passes are deliberately unawaited and deliberately slow — nothing on
+     * screen is waiting for either, and a run cut short by the app closing
+     * resumes on the next launch. They are *sequenced* rather than fired
+     * together for a specific reason: the season split tombstones legacy
+     * watched entries, and a score write landing on one of those ids
+     * afterwards would resurrect it.
      */
-    void backfillScores({
-      pending: () => {
-        const document = store.read()
-        const missing = [
-          ...document.watchlist.filter((w) => !(w.rating > 0)),
-          ...document.watched.filter((w) => !(w.rating > 0)),
-        ]
-        // A title in both lists is one lookup, not two.
-        const seen = new Set<number>()
-        return missing.filter((entry) => {
-          if (seen.has(entry.tmdbId)) return false
-          seen.add(entry.tmdbId)
-          return true
-        })
-      },
-      score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type)).rating,
-      save: (tmdbId, score) => {
-        for (const name of ['watchlist', 'watched'] as const) {
-          const collection = store.collection(name)
-          const entry = store.read()[name].find((e) => e.tmdbId === tmdbId)
-          if (entry) collection.put({ ...entry, rating: score })
-        }
-      },
-    })
+    void (async () => {
+      /**
+       * Split whole-series watched entries into one per season.
+       *
+       * A library built before 1.5.7 holds one entry per series meaning "all of
+       * it". Under the per-season model that reads as a shelf of single cards
+       * with every season claimed at once — see `seasonsplit.ts`.
+       */
+      await runSeasonSplit({
+        watched: () => store.read().watched,
+        ratings: () => store.read().ratings,
+        watchlistEntry: (tmdbId) => store.read().watchlist.find((w) => w.tmdbId === tmdbId),
+        identify: tmdbIdentify(tmdb.detail),
+        putWatched: (entries) => store.collection('watched').putMany(entries),
+        removeWatched: (id) => void store.collection('watched').remove(id),
+        putRatings: (ratings) => store.collection('ratings').putMany(ratings),
+        removeRating: (key) => void store.collection('ratings').remove(key),
+      }).catch(() => {
+        // Whatever it managed is already saved, and the rest is still legacy,
+        // so the next launch simply tries again. Failing here must not stop
+        // the score backfill below.
+      })
+
+      /** Top up scores for titles saved before the app stored one. */
+      await backfillScores({
+        pending: () => {
+          const document = store.read()
+          const missing = [
+            ...document.watchlist.filter((w) => !(w.rating > 0)),
+            ...document.watched.filter((w) => !(w.rating > 0)),
+          ]
+          // A title in both lists is one lookup, not two.
+          const seen = new Set<number>()
+          return missing.filter((entry) => {
+            if (seen.has(entry.tmdbId)) return false
+            seen.add(entry.tmdbId)
+            return true
+          })
+        },
+        score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type)).rating,
+        save: (tmdbId, score) => {
+          for (const name of ['watchlist', 'watched'] as const) {
+            const collection = store.collection(name)
+            // Every entry for the title, not the first: a split series has one
+            // watched entry per season and they all want the same score.
+            for (const entry of store.read()[name].filter((e) => e.tmdbId === tmdbId)) {
+              collection.put({ ...entry, rating: score })
+            }
+          }
+        },
+      })
+    })()
 
     /**
      * Load the managed provider list, then look for a newer one.

@@ -821,24 +821,32 @@ class Library {
   }
 
   /**
-   * Mark a title seen when all that is known is its id.
+   * Mark a *film* seen when all that is known is its id.
    *
    * The playback threshold reports a tmdb id and nothing else, because the main
    * process never held the artwork. Playing something adds it to the watchlist
    * first, so that entry is where the title and poster come from; without one
    * there is nothing to build a row out of and nothing to do.
+   *
+   * Series are deliberately excluded rather than filed with `season: null`.
+   * The caller only lands here for a series when the provider reported no
+   * position at all, and a whole-series entry is a much larger claim than the
+   * evidence supports — it would put every season in the Watched tab off one
+   * unidentified episode. It is also exactly the shape `seasonsplit.ts` exists
+   * to remove, so filing it here would make that pass run forever against a
+   * library the app keeps re-corrupting.
    */
   markTitleSeen(tmdbId: number): void {
     if (tmdbId === 0 || this.hasSeen(tmdbId)) return
     const entry = this.watchlistEntry(tmdbId)
-    if (!entry) return
+    if (!entry || entry.type !== 'movie') return
 
     this.watched = [
       {
         id: newId(),
         tmdbId: entry.tmdbId,
         type: entry.type,
-        // A film. Series reach Watched one season at a time.
+        // Always a film; the guard above turns series away.
         season: null,
         title: entry.title,
         rating: entry.rating,
