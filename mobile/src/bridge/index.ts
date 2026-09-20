@@ -77,6 +77,7 @@ import type { PlayerReading } from '@main/playermessage'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from '@main/resume'
 import { createCastBridge } from './cast'
 import { App as CapacitorApp } from '@capacitor/app'
+import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
@@ -430,8 +431,32 @@ export async function createBridge(): Promise<WtaApi> {
     if (now === null) return { ok: false, error: 'Nothing is playing.' }
 
     const result = await castBridge.beam(now)
-    if (result.ok) surface.blank()
+    if (result.ok) {
+      surface.blank()
+      standUpright()
+    }
     return result
+  }
+
+  /**
+   * Turn the phone the right way up for the remote.
+   *
+   * A video wants landscape; a remote control does not. Once the picture is on
+   * the television the phone is a column of buttons — a time bar, five
+   * transport keys and a volume slider — and that is a portrait shape in every
+   * device that has ever done this job.
+   *
+   * Released rather than re-locked when the cast ends. Locking back to
+   * landscape would rotate the screen under a user who may well have put the
+   * phone down, and `followFullscreen` already owns landscape for the case
+   * that actually wants it.
+   */
+  const standUpright = (): void => {
+    void ScreenOrientation.lock({ orientation: 'portrait' }).catch(() => {})
+  }
+
+  const releaseOrientation = (): void => {
+    void ScreenOrientation.unlock().catch(() => {})
   }
 
   /**
@@ -456,6 +481,7 @@ export async function createBridge(): Promise<WtaApi> {
       storeChanged.emit()
     }
     surface.restore()
+    releaseOrientation()
   }
 
   /*

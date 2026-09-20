@@ -25,6 +25,15 @@
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
   import { clock } from './lib/format'
+  import CastRemote from './components/CastRemote.svelte'
+  import {
+    nextEpisode,
+    nudgeTarget,
+    previousEpisode,
+    STREAM_WAIT_MS,
+    type EpisodeStep,
+    type RemotePhase,
+  } from './lib/castremote'
 
   const BAR_HEIGHT = 56
   const EPISODE_PANEL_HEIGHT = 226
@@ -125,6 +134,30 @@
   let castError = $state<string | null>(null)
   /** The cast panel's rendered height, bound from the DOM. See `panelHeight`. */
   let castPanelHeight = $state(0)
+
+  /* ── The remote ───────────────────────────────────────────────────────────
+   *
+   * A connected television replaces the chrome rather than adding to it. The
+   * picture is elsewhere, this window is muted or blanked, and a 56px bar over
+   * a black rectangle is a control surface for nothing — so while a cast is
+   * running this document draws one thing, full bleed. The rest of the
+   * machinery is further down, beside the episode helpers it uses; these three
+   * are here because the height calculation needs them.
+   */
+
+  const casting = $derived(castStatus?.connected === true)
+
+  /**
+   * Stood down on request, while still casting.
+   *
+   * The single reason it exists: a provider that has not started fetching needs
+   * its own play button pressed, and that button is on the page the remote is
+   * covering. Reset whenever a cast starts or ends, so it can never be the
+   * state a user comes back to.
+   */
+  let remoteHidden = $state(false)
+  const showRemote = $derived(casting && !remoteHidden)
+
 
   /*
    * Scrubbing, and why the slider does not simply show `castStatus.seconds`.
@@ -284,15 +317,50 @@
         return
       }
       const beamed = await api.cast.beam()
-      if (!beamed.ok) {
-        castError = beamed.error ?? 'Could not start the stream on that TV.'
-        return
-      }
+      /*
+       * Either way the panel closes and the remote takes the screen, because
+       * `connect` succeeded and a television is attached. So a failure to beam
+       * is handed to the remote as `stuck` rather than left in a panel that is
+       * about to be covered — and `stuck` is the state that offers the player
+       * back, which is exactly what a source that has not started fetching
+       * needs.
+       */
+      remotePhase = beamed.ok ? 'playing' : 'stuck'
+      remoteNote = beamed.ok
+        ? ''
+        : (beamed.error ?? 'Could not start the stream on that TV.')
       // Closing the panel tears the sweep down; see the effect above.
       panel = 'none'
     } finally {
       castBusy = false
       castStatus = await api.cast.status()
+    }
+  }
+
+  /**
+   * The receiver's volume, which is not the media session's.
+   *
+   * `SET_VOLUME` goes to `urn:x-cast:com.google.cast.receiver` addressed to
+   * `receiver-0`; sent to the media transport instead it is accepted and
+   * silently ignored, which is the failure mode this comment exists to stop
+   * anyone rediscovering. Errors land in `castError` like the transport's do,
+   * because a slider that moved and changed nothing is the same lie.
+   */
+  async function setReceiverVolume(level: number): Promise<void> {
+    try {
+      await api.cast.setVolume(level)
+      castStatus = await api.cast.status()
+    } catch (error) {
+      castError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  async function setReceiverMuted(muted: boolean): Promise<void> {
+    try {
+      await api.cast.setMuted(muted)
+      castStatus = await api.cast.status()
+    } catch (error) {
+      castError = error instanceof Error ? error.message : String(error)
     }
   }
 
@@ -502,8 +570,19 @@
    * bounds, so this is the number that decides how much of the picture stays
    * the user's.
    */
+  /**
+   * Larger than any window, because the remote takes the whole slot.
+   *
+   * `placeOverlay` clamps whatever arrives to the video view's own bounds, so
+   * a sentinel is both honest and exact: this document cannot measure the slot
+   * itself — its `innerHeight` is whatever it last asked for, which is 56.
+   */
+  const WHOLE_SLOT = 10_000
+
   const neededHeight = $derived(
-    (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
+    showRemote
+      ? WHOLE_SLOT
+      : (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
   )
 
   $effect(() => {
@@ -554,13 +633,173 @@
       ? ''
       : `S${String(context.season).padStart(2, '0')}E${String(context.episode).padStart(2, '0')}`,
   )
+
+  /* ── The remote ───────────────────────────────────────────────────────────
+   *
+   * A connected television replaces the chrome rather than adding to it. The
+   * picture is elsewhere, this window is blanked or muted, and a 56px bar over
+   * a black rectangle is a control surface for nothing — so while a cast is
+   * running this document draws one thing, full bleed. See `CastRemote.svelte`.
+   */
+
+  let remotePhase = $state<RemotePhase>('playing')
+  /** What the remote says while `remotePhase` is not `playing`. */
+  let remoteNote = $state('')
+
+  /**
+   * Cancels a switch that has been overtaken.
+   *
+   * Pressing ⏭ twice starts a second hand-over while the first is still
+   * retrying, and without this the loser would keep writing phases and
+   * eventually declare the *winner's* episode stuck.
+   */
+  let switchToken = 0
+
+  $effect(() => {
+    if (casting) return
+    // Whatever the remote was in the middle of stopped mattering the moment
+    // the television let go.
+    switchToken += 1
+    remoteHidden = false
+    remotePhase = 'playing'
+    remoteNote = ''
+  })
+
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  /**
+   * Hand whatever this window is now playing to the television.
+   *
+   * A retry loop rather than one call, because the stream does not exist yet
+   * when the episode starts loading: the embed has to reach its player and
+   * fetch something before there is anything to cast. `beam` answers "nothing
+   * to cast yet" until then, which is a perfectly ordinary answer and not an
+   * error to show anyone.
+   *
+   * It gives up after `STREAM_WAIT_MS` into `stuck`, which is a real state and
+   * not a failure — several providers fetch nothing at all until their own play
+   * button is pressed, and the honest thing is to say so and offer the screen.
+   */
+  async function handOver(token: number): Promise<void> {
+    const deadline = Date.now() + STREAM_WAIT_MS
+    remotePhase = 'beaming'
+    remoteNote = `Handing it to ${castStatus?.deviceName ?? 'the television'}…`
+
+    while (Date.now() < deadline) {
+      if (token !== switchToken) return
+      const result = await api.cast.beam()
+      if (token !== switchToken) return
+      if (result.ok) {
+        remotePhase = 'playing'
+        remoteNote = ''
+        castStatus = await api.cast.status()
+        return
+      }
+      await sleep(1200)
+    }
+
+    if (token !== switchToken) return
+    remotePhase = 'stuck'
+    remoteNote = `${context?.providerName ?? 'This source'} has not handed over a stream yet. Some sources fetch nothing until their own play button is pressed.`
+  }
+
+  /**
+   * Step the television to another episode.
+   *
+   * Three things in order, and the order is the whole difficulty: this window
+   * loads the episode, the provider fetches its stream, and only then can it be
+   * sent. The television keeps showing the previous episode throughout — there
+   * is nothing to put in its place until the last step — so the remote narrates
+   * rather than pretending the jump was instant.
+   */
+  async function stepTo(step: EpisodeStep | null): Promise<void> {
+    if (step === null || context === null) return
+    const token = ++switchToken
+
+    remotePhase = 'switching'
+    remoteNote = `Loading S${String(step.season).padStart(2, '0')}E${String(step.episode).padStart(2, '0')} here first — the television is fed from this window.`
+    api.goTo(step.season, step.episode)
+
+    // Nothing is captured for a beat after a navigation; asking immediately
+    // only burns the first attempt.
+    await sleep(2000)
+    if (token !== switchToken) return
+    await handOver(token)
+  }
+
+  /** The season the television is playing, for `canNext` and the still. */
+  const playingEpisodes = $derived(
+    browsingSeason === context?.season ? episodes : [],
+  )
+
+  const remoteStep = $derived<EpisodeStep | null>(
+    context?.season != null && context.episode != null
+      ? { season: context.season, episode: context.episode }
+      : null,
+  )
+
+  /**
+   * The episode still, when the season happens to be loaded.
+   *
+   * Never fetched for its own sake. It is decoration on a control surface, and
+   * a remote that waits for artwork before it can pause anything has its
+   * priorities backwards.
+   */
+  const remoteArtwork = $derived(
+    still(playingEpisodes.find((e) => e.episode === context?.episode)?.stillPath ?? null),
+  )
+
+  /**
+   * Load the season the moment the remote comes up.
+   *
+   * For the still, and for the one thing `nextEpisode` cannot decide without
+   * it: whether this is the last episode of the season.
+   */
+  $effect(() => {
+    if (!showRemote) return
+    if (context?.type !== 'tv' || context.season === null) return
+    if (browsingSeason === context.season) return
+    void loadSeason(context.season)
+  })
 </script>
 
 <!--
   `onmouseenter`/`onmouseleave` on the chrome itself is what holds it open. The
   pointer merely being near the top is a trigger, handled above.
 -->
-{#if !barVisible && !touch}
+{#if showRemote}
+  <!--
+    A television is attached, so this document is the remote and nothing else.
+
+    Not stacked over the bar: the bar's four buttons are Back, reload, Episodes
+    and the source picker, and reloading or changing source under a running cast
+    is how you lose the stream. The remote carries the two that still mean
+    something — Back, and Stop casting — and the rest come back with the
+    picture.
+  -->
+  <CastRemote
+    status={castStatus!}
+    title={context?.title ?? ''}
+    subtitle={[positionLabel, context?.providerName ?? ''].filter(Boolean).join(' · ')}
+    artwork={remoteArtwork}
+    phase={remotePhase}
+    phaseLabel={remoteNote}
+    canPrevious={previousEpisode(remoteStep) !== null}
+    canNext={nextEpisode(remoteStep, playingEpisodes.length) !== null}
+    onreveal={() => (remoteHidden = true)}
+    onretry={() => void handOver(++switchToken)}
+    onback={() => api.back()}
+    onstop={() => void stopCasting()}
+    ontoggle={() => void send(castStatus?.playing ? 'pause' : 'play')}
+    onseek={(seconds) => void send('seek', seconds)}
+    onnudge={(by) =>
+      void send('seek', nudgeTarget(castStatus?.seconds ?? 0, by, castStatus?.duration ?? 0))}
+    onprevious={() => void stepTo(previousEpisode(remoteStep))}
+    onnext={() => void stepTo(nextEpisode(remoteStep, playingEpisodes.length))}
+    onvolume={(level) => void setReceiverVolume(level)}
+    onmute={() => void setReceiverMuted(!(castStatus?.muted ?? false))}
+  />
+{:else if !barVisible && !touch}
   <!--
     The invisible strip along the top edge. `onmousemove` as well as
     `onmouseenter`, because the enter can be missed: the bar hides by shrinking
@@ -617,7 +856,7 @@
           class:active={panel === 'cast'}
           class:casting={castStatus?.connected === true}
           title={castStatus?.connected ? `Playing on ${castStatus.deviceName}` : 'Play on a TV'}
-          onclick={openCast}
+          onclick={casting ? () => (remoteHidden = false) : openCast}
         >
           <span class="glyph" aria-hidden="true">▣</span>
           <span class="label">{castStatus?.connected ? castStatus.deviceName : 'Cast'}</span>

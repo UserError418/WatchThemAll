@@ -287,6 +287,11 @@ describe('CastSession', () => {
       playing: false, // GET_STATUS answers PAUSED
       seconds: 99,
       duration: 8348.5,
+      // The receiver's own volume, which arrives on a different namespace to
+      // everything else here — this fake's LAUNCH answer carries none, so the
+      // floor is what a caller sees until a RECEIVER_STATUS turns up.
+      volume: 0,
+      muted: false,
     })
   })
 

@@ -80,6 +80,19 @@ export interface InlinePlayer {
   /** Reload the current URL, for a source that loaded but then stalled. */
   reload: () => void
   /**
+   * Silence the embed without stopping it.
+   *
+   * Used while a cast is running. The provider's player has to keep loading —
+   * it is the only thing that fetches a stream, so stepping to another episode
+   * on the television means loading that episode *here* first and capturing
+   * what it fetches. What must not keep happening is the sound, which would
+   * otherwise come out of two rooms at once.
+   *
+   * Muting rather than blanking, for that reason: blanking would throw away
+   * the capture the next beam depends on.
+   */
+  setMuted: (muted: boolean) => void
+  /**
    * The embed's own session partition.
    *
    * Exposed so casting can watch what the provider fetches — `castcapture.ts`
@@ -383,6 +396,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     setBounds: () => {},
     load: () => {},
     reload: () => {},
+    setMuted: () => {},
     position: () => null,
     takeProgressMs: () => 0,
     destroy: () => {},
@@ -1491,6 +1505,11 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     armResume('reload')
     beginLoad()
     contents.reload()
+  }
+
+  player.setMuted = (muted: boolean): void => {
+    if (!alive()) return
+    contents.setAudioMuted(muted)
   }
 
   player.destroy = (): void => {

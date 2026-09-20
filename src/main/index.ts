@@ -170,6 +170,16 @@ async function createMainWindow(): Promise<void> {
  */
 const cast = createCastService()
 
+/**
+ * A television that stops on its own gives the sound back.
+ *
+ * `setAudioMuted` is the one piece of cast state that lives outside the cast
+ * service, so nothing else would ever undo it — and a user who ended the cast
+ * from the TV's own remote would be left with a permanently silent player and
+ * no control in this app that explains it.
+ */
+cast.onSessionEnded(() => player?.setMuted(false))
+
 function openPlayer(
   url: string,
   title: string,
@@ -474,6 +484,15 @@ function navigatePlayer(season: number, episode: number): void {
   player.context = next
   player.candidates = selection.candidates
   player.candidateIndex = 0
+  /*
+   * The episode being left is still the newest thing in the capture buffer, and
+   * stays so for the first seconds of the new one. Without this, the remote's
+   * next-episode button would put the *previous* episode back on the
+   * television while this window showed the right one — the same trap as
+   * switching provider, which already clears it, and as opening a player,
+   * which already clears it.
+   */
+  cast.forget()
   player.load(selection.url)
 
   sendPlayerState()
@@ -726,6 +745,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       },
       keepWaiting: () => player?.keepWaiting(),
       reloadPlayer: () => player?.reload(),
+      setPlayerMuted: (muted) => player?.setMuted(muted),
       cast,
       castNowPlaying: () => {
         if (!player) return null

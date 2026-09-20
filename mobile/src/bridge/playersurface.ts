@@ -290,6 +290,10 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
   return {
     show(candidate) {
       const el = ensure()
+      // Anything shown is meant to be seen, including the first episode loaded
+      // after a blank — stepping to another episode while casting comes back
+      // through here, not through `restore`.
+      el.style.visibility = 'visible'
       current = candidate.url
       // `src` rather than `location.replace`: the frame is cross-origin, so its
       // `contentWindow` is off limits from here.
@@ -304,11 +308,23 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
     },
 
     blank() {
-      if (frame) frame.src = 'about:blank'
+      if (!frame) return
+      /**
+       * Hidden as well as emptied, because `about:blank` is white.
+       *
+       * The host behind it is black and always was, so this looked like a
+       * styling detail and is not: the iframe paints its own white page over
+       * the host, and while casting that white rectangle *is* the whole
+       * screen. It is what "the player becomes white" was.
+       */
+      frame.style.visibility = 'hidden'
+      frame.src = 'about:blank'
     },
 
     restore() {
-      if (frame && current) frame.src = current
+      if (!frame || !current) return
+      frame.style.visibility = 'visible'
+      frame.src = current
     },
 
     setBounds({ x, y, width, height }) {

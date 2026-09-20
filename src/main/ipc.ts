@@ -118,6 +118,14 @@ export interface IpcDeps {
    * they had been watching.
    */
   castNowPlaying: () => NowPlaying | null
+  /**
+   * Silence the local copy while the television has it.
+   *
+   * See `PlayerWindow.setMuted` for why this is a mute and not a stop: the
+   * embed is the only thing that can fetch the next episode's stream, so it
+   * has to keep running for the remote's next-episode button to work at all.
+   */
+  setPlayerMuted: (muted: boolean) => void
 }
 
 /**
@@ -217,17 +225,13 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.syncDisconnect, () => sync?.disconnect())
   ipcMain.handle(CH.syncNow, () => sync?.now() ?? { ok: false, error: NO_CLIENT_REASON })
   /**
-   * Casting, which the desktop does not do.
+   * Casting.
    *
-   * These exist for the same reason the sync handlers above answer when there
-   * is no client: the contract declares the channels and main asserts at
-   * startup that every one has a handler, so a missing handler is a failure to
-   * launch rather than a missing feature.
-   *
-   * `available: false` is the whole answer — the renderer asks before it offers
-   * anything, so the cast button never appears here. Implementing it would mean
-   * a Cast sender for Electron, which is a different problem from the phone's:
-   * the desktop has no Google Play Services and would need the protocol itself.
+   * The desktop reaches a Chromecast through `castdiscovery.ts` and
+   * `castsender.ts`, which speak mDNS and CastV2 by hand — Electron has no
+   * Google Play Services, so unlike the phone there is nothing to delegate to.
+   * These handlers are the thin part; everything interesting is in
+   * `castservice.ts`.
    */
   const { cast } = deps
   ipcMain.handle(CH.castAvailable, () => true)
@@ -235,17 +239,25 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.castStopDiscovery, () => cast.stopDiscovery())
   ipcMain.handle(CH.castDevices, () => cast.devices())
   ipcMain.handle(CH.castConnect, (_e, deviceId: string) => cast.connect(deviceId))
-  ipcMain.handle(CH.castDisconnect, () => cast.disconnect())
+  ipcMain.handle(CH.castDisconnect, async () => {
+    await cast.disconnect()
+    // The picture is ours again, so give the sound back with it.
+    deps.setPlayerMuted(false)
+  })
   ipcMain.handle(CH.castStatus, () => cast.status())
   ipcMain.handle(CH.castControl, (_e, action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
     cast.control(action, seconds),
   )
   ipcMain.handle(CH.castSetVolume, (_e, level: number) => cast.setVolume(level))
   ipcMain.handle(CH.castSetMuted, (_e, muted: boolean) => cast.setMuted(muted))
-  ipcMain.handle(CH.castBeam, () => {
+  ipcMain.handle(CH.castBeam, async () => {
     const now = deps.castNowPlaying()
     if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON }
-    return cast.beam(now)
+    const result = await cast.beam(now)
+    // Only on success. A failed beam leaves the user watching here, and taking
+    // the sound away from that would turn one disappointment into two.
+    if (result.ok) deps.setPlayerMuted(true)
+    return result
   })
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
