@@ -173,14 +173,49 @@ describe('buildTimeline', () => {
 
   /**
    * A series whose next episode is months out has a schedule. Filing it as
-   * unscheduled would be a lie, and would hide the one thing being tracked.
+   * unscheduled would be a lie, and would hide the one thing being tracked —
+   * so it goes to `later`, out of the way but one press from view.
    */
-  it('does not call a distantly-scheduled series unscheduled', () => {
+  it('holds a distantly-scheduled series in later, not unscheduled', () => {
     const line = buildTimeline([tracker({ schedule: [stub({ airDate: isoDay(120) })] })], {
       now: NOW,
     })
     expect(line.unscheduled).toHaveLength(0)
+    expect(countEpisodes(line.upcoming)).toBe(0)
+    expect(countEpisodes(line.later)).toBe(1)
+  })
+
+  /**
+   * The window reaches both ways. Without a forward horizon the twenty-one
+   * tracked series here put 37 episodes above the fold and the recently-aired
+   * half — half of what the tab is for — starts below it.
+   */
+  it('keeps the window symmetric, holding back what is beyond it', () => {
+    const line = buildTimeline(
+      [
+        tracker({ schedule: [stub({ episode: 1, airDate: isoDay(3) })] }),
+        tracker({ schedule: [stub({ episode: 2, airDate: isoDay(20) })] }),
+      ],
+      { now: NOW, windowDays: 14 },
+    )
     expect(countEpisodes(line.upcoming)).toBe(1)
+    expect(countEpisodes(line.later)).toBe(1)
+  })
+
+  it('moves an episode into view when the window widens', () => {
+    const trackers = [tracker({ schedule: [stub({ airDate: isoDay(20) })] })]
+    expect(countEpisodes(buildTimeline(trackers, { now: NOW, windowDays: 14 }).upcoming)).toBe(0)
+    expect(countEpisodes(buildTimeline(trackers, { now: NOW, windowDays: 30 }).upcoming)).toBe(1)
+  })
+
+  /** Exactly on the horizon is still inside it. */
+  it('includes an episode airing exactly at the horizon', () => {
+    const line = buildTimeline([tracker({ schedule: [stub({ airDate: isoDay(14) })] })], {
+      now: NOW,
+      windowDays: 14,
+    })
+    expect(countEpisodes(line.upcoming)).toBe(1)
+    expect(countEpisodes(line.later)).toBe(0)
   })
 
   it('ignores episodes TMDB has not dated', () => {
@@ -199,6 +234,6 @@ describe('buildTimeline', () => {
 
   it('handles an empty tracker list', () => {
     const line = buildTimeline([], { now: NOW })
-    expect(line).toEqual({ upcoming: [], recent: [], unscheduled: [] })
+    expect(line).toEqual({ upcoming: [], later: [], recent: [], unscheduled: [] })
   })
 })

@@ -65,11 +65,20 @@ export interface TimelineDay {
 }
 
 export interface Timeline {
-  /** Soonest first. Today's episodes lead. */
+  /** Soonest first, within the window. Today's episodes lead. */
   upcoming: TimelineDay[]
+  /**
+   * Scheduled beyond the window, soonest first.
+   *
+   * Held back rather than dropped. A real tracker list puts 37 episodes over
+   * the next four weeks on this page, and with all of them inline the user has
+   * to scroll past every one to reach what aired yesterday — which is half of
+   * what the tab is for. These stay one press away.
+   */
+  later: TimelineDay[]
   /** Most recent first, back as far as the window. */
   recent: TimelineDay[]
-  /** Tracked series with nothing in either half — ended, cancelled, or undated. */
+  /** Tracked series with nothing in any of the three — ended, or undated. */
   unscheduled: ReleaseTracker[]
 }
 
@@ -150,10 +159,16 @@ function toDays(episodes: TimelineEpisode[], now: number, ascending: boolean): T
 /**
  * Split the tracked series into a timeline.
  *
- * A tracker appears in `unscheduled` only when it contributes *nothing* to
- * either half — so a series whose next episode is four months out still shows
- * up under its date rather than being filed as unscheduled, which would be a
- * lie about a series that has a schedule.
+ * The window reaches equally in both directions — it is "how far either side
+ * of now am I looking", not just how far back. Forward matters as much:
+ * twenty-one tracked series put 37 episodes across the next four weeks, and
+ * with all of them inline the recently-aired half starts below the fold.
+ * What is beyond the window goes to `later` rather than being lost.
+ *
+ * A tracker appears in `unscheduled` only when it contributes *nothing* to any
+ * of the three — so a series whose next episode is four months out is in
+ * `later`, not filed as unscheduled, which would be a lie about a series that
+ * has a schedule.
  */
 export function buildTimeline(
   trackers: readonly ReleaseTracker[],
@@ -163,8 +178,10 @@ export function buildTimeline(
   const windowDays = options.windowDays ?? 14
   const today = startOfDay(now)
   const floor = today - windowDays * DAY_MS
+  const horizon = today + windowDays * DAY_MS
 
   const upcoming: TimelineEpisode[] = []
+  const later: TimelineEpisode[] = []
   const recent: TimelineEpisode[] = []
   const unscheduled: ReleaseTracker[] = []
 
@@ -183,7 +200,10 @@ export function buildTimeline(
         airAt,
       }
 
-      if (airAt >= today) {
+      if (airAt > horizon) {
+        later.push(item)
+        placed += 1
+      } else if (airAt >= today) {
         upcoming.push(item)
         placed += 1
       } else if (airAt >= floor) {
@@ -198,6 +218,7 @@ export function buildTimeline(
 
   return {
     upcoming: toDays(upcoming, now, true),
+    later: toDays(later, now, true),
     recent: toDays(recent, now, false),
     unscheduled: unscheduled.sort((a, b) => a.title.localeCompare(b.title)),
   }
