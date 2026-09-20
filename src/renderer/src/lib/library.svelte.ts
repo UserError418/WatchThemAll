@@ -26,6 +26,7 @@ import type {
   WatchlistEntry,
 } from '@shared/types'
 import { resumeKey } from '@shared/types'
+import { ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 
 /** `crypto.randomUUID` needs a secure context; file:// in Electron qualifies. */
@@ -887,9 +888,18 @@ class Library {
    * a show can be worth watching while one season of it is not.
    */
   ratingFor(tmdbId: number, season: number | null = null): Rating | null {
-    return (
-      this.ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)?.rating ?? null
-    )
+    return ratingForScope(this.ratings, tmdbId, season)
+  }
+
+  /**
+   * The opinion on a watched entry, at whatever scope that entry is about.
+   *
+   * Preferred over `ratingFor` for anything holding an entry, because the entry
+   * already knows its own season and passing one separately is how the Watched
+   * tab came to list seasons the user had just rated under "Unrated".
+   */
+  ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): Rating | null {
+    return ratingForEntry(this.ratings, entry)
   }
 
   /**
@@ -935,7 +945,7 @@ class Library {
   get unratedWatched(): WatchedEntry[] {
     // Asked at the entry's own scope: a season nobody has rated is still
     // unrated even when the series as a whole has an opinion on it.
-    return this.watched.filter((w) => this.ratingFor(w.tmdbId, w.season ?? null) === null)
+    return this.watched.filter((w) => this.ratingForEntry(w) === null)
   }
 
   /**
