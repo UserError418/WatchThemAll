@@ -36,7 +36,7 @@ import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { excludedTmdbIds, genreWeights, hasEnoughSignal, seedTitles } from './taste'
+import { buildTailoredRow } from './tailored'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -121,21 +121,6 @@ export interface IpcDeps {
 }
 
 /**
- * Alternate two lists, longest tail last.
- *
- * Not concat: a mixed row that is all series followed by all films reads as two
- * rows that failed to separate.
- */
-function interleave<T>(a: T[], b: T[]): T[] {
-  const out: T[] = []
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if (a[i]) out.push(a[i]!)
-    if (b[i]) out.push(b[i]!)
-  }
-  return out
-}
-
-/**
  * The entries from the most recent preview, awaiting a decision.
  *
  * Kept here rather than round-tripped through the renderer: the alternative is
@@ -162,97 +147,12 @@ export function registerIpc(deps: IpcDeps): void {
    * ids to send back would put the recommendation in the surface that draws it,
    * where the next surface wanting the same thing has to reimplement it.
    */
-  ipcMain.handle(CH.tmdbTailored, async (_e, req: TailoredRequest) => {
-    const data = store.read()
-    if (!hasEnoughSignal(data)) return { items: [], genreIds: [], ready: false }
-
-    const weights = genreWeights(data)
-    if (weights.length === 0) return { items: [], genreIds: [], ready: false }
-
-    const excludedIds = new Set(excludedTmdbIds(data))
-
-    /**
-     * Content first: what is like the titles this person actually invested in.
-     *
-     * Genre filtering answers "popular in Drama this week", which is the same
-     * answer for two people with opposite taste and the same top genre. Asking
-     * TMDB what is *like* the specific titles someone rated and sat through is
-     * a different question, and one it answers from co-watching rather than
-     * from tags. See `seedTitles` for how the seeds are chosen.
-     *
-     * A candidate recommended by several seeds is a stronger match than one
-     * recommended by a single seed, so votes are accumulated and weighted by
-     * how strongly each seed represents the user.
-     */
-    const seeds = seedTitles(data)
-    const pooled = new Map<number, { item: MediaSummary; score: number }>()
-
-    if (seeds.length > 0) {
-      const pages = await Promise.all(
-        seeds.map((seed) => tmdb.recommendations(seed.tmdbId, seed.type, req.page)),
-      )
-
-      pages.forEach((page, index) => {
-        const seedScore = seeds[index]?.score ?? 1
-        for (const item of page.items) {
-          if (excludedIds.has(item.tmdbId)) continue
-          const existing = pooled.get(item.tmdbId)
-          if (existing) existing.score += seedScore
-          else pooled.set(item.tmdbId, { item, score: seedScore })
-        }
-      })
-    }
-
-    /**
-     * How many recommendations are enough to stand on their own.
-     *
-     * Below this the row looks thin and arbitrary, so the genre discover is
-     * appended to fill it out — which is also what happens for a library with
-     * seeds TMDB knows nothing about.
-     */
-    const ENOUGH = 12
-    const contentBased = [...pooled.values()]
-      .sort((a, b) => b.score - a.score || b.item.rating - a.item.rating)
-      .map((entry) => entry.item)
-
-    if (contentBased.length >= ENOUGH) {
-      return { items: contentBased, genreIds: weights.slice(0, 3).map((g) => g.genreId), ready: true }
-    }
-
-    /**
-     * Up to three genres, combined with OR rather than AND.
-     *
-     * AND would demand a title be simultaneously every genre the user likes,
-     * which for anything but the blandest taste profile returns almost nothing.
-     * Three rather than all of them because past the third the weights are long
-     * tails and including them makes the row indistinguishable from "popular".
-     */
-    const genreIds = weights.slice(0, 3).map((g) => g.genreId)
-    const excluded = excludedIds
-
-    /**
-     * Both media types, interleaved.
-     *
-     * A taste profile built from a mixed library and then answered with series
-     * only reads as a bug to anyone whose likes are mostly films.
-     */
-    const [tv, movie] = await Promise.all([
-      tmdb.discoverByGenres('tv', genreIds, req.page),
-      tmdb.discoverByGenres('movie', genreIds, req.page),
-    ])
-
-    /*
-     * Content-based matches first, genre fill after — and never the same title
-     * twice, which is what a naive concatenation would produce for anything
-     * both queries agree on.
-     */
-    const seen = new Set(contentBased.map((m) => m.tmdbId))
-    const filler = interleave(tv.items, movie.items).filter(
-      (m) => !excluded.has(m.tmdbId) && !seen.has(m.tmdbId),
-    )
-
-    return { items: [...contentBased, ...filler], genreIds, ready: true }
-  })
+  ipcMain.handle(CH.tmdbTailored, (_e, req: TailoredRequest) =>
+    buildTailoredRow(store.read(), req.page, {
+      recommendations: tmdb.recommendations,
+      discoverByGenres: tmdb.discoverByGenres,
+    }),
+  )
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))
   ipcMain.handle(CH.tmdbDetail, (_e, id: number, type: MediaType) => tmdb.detail(id, type))
