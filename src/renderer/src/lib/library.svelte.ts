@@ -26,6 +26,7 @@ import type {
   WatchlistEntry,
 } from '@shared/types'
 import { resumeKey } from '@shared/types'
+import { ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 
 /** `crypto.randomUUID` needs a secure context; file:// in Electron qualifies. */
@@ -821,24 +822,32 @@ class Library {
   }
 
   /**
-   * Mark a title seen when all that is known is its id.
+   * Mark a *film* seen when all that is known is its id.
    *
    * The playback threshold reports a tmdb id and nothing else, because the main
    * process never held the artwork. Playing something adds it to the watchlist
    * first, so that entry is where the title and poster come from; without one
    * there is nothing to build a row out of and nothing to do.
+   *
+   * Series are deliberately excluded rather than filed with `season: null`.
+   * The caller only lands here for a series when the provider reported no
+   * position at all, and a whole-series entry is a much larger claim than the
+   * evidence supports — it would put every season in the Watched tab off one
+   * unidentified episode. It is also exactly the shape `seasonsplit.ts` exists
+   * to remove, so filing it here would make that pass run forever against a
+   * library the app keeps re-corrupting.
    */
   markTitleSeen(tmdbId: number): void {
     if (tmdbId === 0 || this.hasSeen(tmdbId)) return
     const entry = this.watchlistEntry(tmdbId)
-    if (!entry) return
+    if (!entry || entry.type !== 'movie') return
 
     this.watched = [
       {
         id: newId(),
         tmdbId: entry.tmdbId,
         type: entry.type,
-        // A film. Series reach Watched one season at a time.
+        // Always a film; the guard above turns series away.
         season: null,
         title: entry.title,
         rating: entry.rating,
@@ -879,9 +888,18 @@ class Library {
    * a show can be worth watching while one season of it is not.
    */
   ratingFor(tmdbId: number, season: number | null = null): Rating | null {
-    return (
-      this.ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)?.rating ?? null
-    )
+    return ratingForScope(this.ratings, tmdbId, season)
+  }
+
+  /**
+   * The opinion on a watched entry, at whatever scope that entry is about.
+   *
+   * Preferred over `ratingFor` for anything holding an entry, because the entry
+   * already knows its own season and passing one separately is how the Watched
+   * tab came to list seasons the user had just rated under "Unrated".
+   */
+  ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): Rating | null {
+    return ratingForEntry(this.ratings, entry)
   }
 
   /**
@@ -927,7 +945,7 @@ class Library {
   get unratedWatched(): WatchedEntry[] {
     // Asked at the entry's own scope: a season nobody has rated is still
     // unrated even when the series as a whole has an opinion on it.
-    return this.watched.filter((w) => this.ratingFor(w.tmdbId, w.season ?? null) === null)
+    return this.watched.filter((w) => this.ratingForEntry(w) === null)
   }
 
   /**

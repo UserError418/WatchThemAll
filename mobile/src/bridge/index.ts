@@ -87,6 +87,7 @@ import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
 import { buildTailoredRow } from '@main/tailored'
 import { backfillScores } from '@main/scorebackfill'
+import { runSeasonSplit, tmdbIdentify } from '@main/seasonsplit'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
@@ -985,35 +986,65 @@ export async function createBridge(): Promise<WtaApi> {
   })
 
   /**
-   * Top up scores for titles saved before the app stored one.
+   * Background work over the saved library, in order and off the hot path.
    *
    * The desktop does the same at startup; the phone needs its own call because
    * the two have no shared process, only a shared module. Unawaited and slow on
-   * purpose — see `scorebackfill.ts`. Nothing on screen waits for it, and a run
-   * cut short by the app being backgrounded resumes next launch.
+   * purpose — nothing on screen waits for either, and a run cut short by the
+   * app being backgrounded resumes next launch. They are *sequenced* rather
+   * than fired together because the season split tombstones legacy watched
+   * entries, and a score write landing on one of those ids afterwards would
+   * resurrect it.
    */
-  void backfillScores({
-    pending: () => {
-      const document = store.read()
-      const seen = new Set<number>()
-      return [
-        ...document.watchlist.filter((w) => !(w.rating > 0)),
-        ...document.watched.filter((w) => !(w.rating > 0)),
-      ].filter((entry) => {
-        if (seen.has(entry.tmdbId)) return false
-        seen.add(entry.tmdbId)
-        return true
-      })
-    },
-    score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type))?.rating ?? 0,
-    save: (tmdbId, score) => {
-      for (const name of ['watchlist', 'watched'] as const) {
-        const collection = store.collection(name)
-        const entry = store.read()[name].find((e) => e.tmdbId === tmdbId)
-        if (entry) collection.put({ ...entry, rating: score })
-      }
-    },
-  })
+  void (async () => {
+    /**
+     * Split whole-series watched entries into one per season.
+     *
+     * A library built before 1.5.7 holds one entry per series meaning "all of
+     * it", which under the per-season model reads as a shelf of single cards
+     * with every season claimed at once — see `seasonsplit.ts`.
+     */
+    await runSeasonSplit({
+      watched: () => store.read().watched,
+      ratings: () => store.read().ratings,
+      watchlistEntry: (tmdbId) => store.read().watchlist.find((w) => w.tmdbId === tmdbId),
+      identify: tmdbIdentify(tmdb.detail),
+      putWatched: (entries) => store.collection('watched').putMany(entries),
+      removeWatched: (id) => void store.collection('watched').remove(id),
+      putRatings: (ratings) => store.collection('ratings').putMany(ratings),
+      removeRating: (key) => void store.collection('ratings').remove(key),
+    }).catch(() => {
+      // Whatever it managed is already saved and the rest is still legacy, so
+      // the next launch tries again. Failing here must not stop the backfill.
+    })
+
+    /** Top up scores for titles saved before the app stored one. */
+    await backfillScores({
+      pending: () => {
+        const document = store.read()
+        const seen = new Set<number>()
+        return [
+          ...document.watchlist.filter((w) => !(w.rating > 0)),
+          ...document.watched.filter((w) => !(w.rating > 0)),
+        ].filter((entry) => {
+          if (seen.has(entry.tmdbId)) return false
+          seen.add(entry.tmdbId)
+          return true
+        })
+      },
+      score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type))?.rating ?? 0,
+      save: (tmdbId, score) => {
+        for (const name of ['watchlist', 'watched'] as const) {
+          const collection = store.collection(name)
+          // Every entry for the title, not the first: a split series has one
+          // watched entry per season and they all want the same score.
+          for (const entry of store.read()[name].filter((e) => e.tmdbId === tmdbId)) {
+            collection.put({ ...entry, rating: score })
+          }
+        }
+      },
+    })
+  })()
 
   return {
     store: {

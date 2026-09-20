@@ -50,7 +50,10 @@
     const needle = query.trim().toLowerCase()
     return library.watched.filter((entry) => {
       if (needle && !entry.title.toLowerCase().includes(needle)) return false
-      const rating = library.ratingFor(entry.tmdbId)
+      // The entry's own scope, not the title's. Asking for the series opinion
+      // here is what listed seasons the user had just rated under "Unrated",
+      // with a lit thumb on the very same card.
+      const rating = library.ratingForEntry(entry)
       if (filter === 'unrated') return rating === null
       if (filter === 'liked') return rating === 'like'
       if (filter === 'disliked') return rating === 'dislike'
