@@ -27,6 +27,7 @@
   import { posterUrl } from '../lib/images'
   import { episodeCode } from '../lib/format'
   import {
+    byHour,
     clockTime,
     completion,
     dayKey,
@@ -34,9 +35,12 @@
     duration,
     groupByDay,
     heatmap,
+    hourLabel,
+    peakHour,
     playedMs,
     shortDate,
     summarise,
+    topTitles,
   } from '../lib/historystats'
 
   interface Props {
@@ -79,6 +83,34 @@
   /** Whether any play in the whole history carries a measured duration. */
   const timed = $derived(summary.measured > 0)
   const grid = $derived(heatmap(library.history, now, 26))
+
+  /**
+   * The other two axes of the same habit.
+   *
+   * The calendar answers "which days" and structurally cannot answer either of
+   * these: a Tuesday square is the same square whether it was an hour at
+   * breakfast or four hours after midnight, and it says nothing at all about
+   * *what* was on. Both are filters, like the calendar — a shape that cannot
+   * be interrogated is decoration, and this page already has one grid earning
+   * its place that way.
+   */
+  const hours = $derived(byHour(library.history))
+  const peak = $derived(peakHour(hours))
+  const tops = $derived(topTitles(library.history, 8))
+
+  /** The title currently narrowing the timeline, lowercased for comparison. */
+  const needle = $derived(query.trim().toLowerCase())
+
+  function pickTitle(title: string): void {
+    query = needle === title.toLowerCase() ? '' : title
+  }
+
+  /** What a bar says when the pointer rests on it. */
+  function hourTitle(hour: number, plays: number, ms: number): string {
+    if (plays === 0) return `${hourLabel(hour)} — nothing`
+    const what = plays === 1 ? '1 play' : `${plays} plays`
+    return ms > 0 ? `${hourLabel(hour)} — ${what}, ${duration(ms)}` : `${hourLabel(hour)} — ${what}`
+  }
 
   const visible = $derived.by(() => {
     const needle = query.trim().toLowerCase()
@@ -219,6 +251,7 @@
       on screen.
     -->
     <div class="board">
+    <div class="left">
     <section class="calendar" aria-label="Viewing calendar">
       <div class="calendar-head">
         <h2>When</h2>
@@ -267,6 +300,100 @@
         <span>More</span>
       </div>
     </section>
+
+    <!--
+      The clock.
+
+      Twenty-four bars, one per hour of the day, by when a play *started* —
+      not by the hours it ran through, which would need an end time the entry
+      does not carry. "When do you sit down to watch" is the question anyway,
+      and it is the one the calendar above cannot answer at all.
+    -->
+    <section class="panel" aria-label="Time of day">
+      <div class="panel-head">
+        <h2>Rhythm</h2>
+        {#if peak}
+          <span class="hint">Most of it starts around {hourLabel(peak.hour)}.</span>
+        {:else}
+          <span class="hint">When in the day you watch.</span>
+        {/if}
+      </div>
+
+      <div class="hours" role="group" aria-label="Plays by hour of day">
+        {#each hours as bucket (bucket.hour)}
+          <span
+            class="hour"
+            class:idle={bucket.plays === 0}
+            class:peak={peak !== null && bucket.hour === peak.hour}
+            title={hourTitle(bucket.hour, bucket.plays, bucket.ms)}
+            aria-label={hourTitle(bucket.hour, bucket.plays, bucket.ms)}
+          >
+            <!-- A floor of 6%, so an hour with something in it is never drawn
+                 as an hour with nothing in it. -->
+            <span
+              class="hour-fill"
+              style="height: {bucket.plays === 0 ? 0 : Math.max(6, Math.round(bucket.share * 100))}%"
+            ></span>
+          </span>
+        {/each}
+      </div>
+
+      <div class="hour-axis" aria-hidden="true">
+        <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
+      </div>
+    </section>
+
+    <!--
+      What, rather than when.
+
+      Folded by title, so eleven episodes of one series are one bar — which is
+      the entire difference between this and the timeline beside it. Pressing
+      one narrows that timeline, exactly as pressing a calendar square does.
+    -->
+    {#if tops.length > 0}
+      <section class="panel" aria-label="Most watched titles">
+        <div class="panel-head">
+          <h2>Most watched</h2>
+          <span class="hint">Pick one to narrow the timeline.</span>
+        </div>
+
+        <ul class="tops">
+          {#each tops as row (row.tmdbId || row.title)}
+            {@const on = needle === row.title.toLowerCase()}
+            <li>
+              <button class="top" class:on onclick={() => pickTitle(row.title)}>
+                {#if posterUrl(row.posterPath, 'w154')}
+                  <img
+                    class="top-art"
+                    src={posterUrl(row.posterPath, 'w154')}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    width="26"
+                    height="39"
+                  />
+                {:else}
+                  <span class="top-art blank" aria-hidden="true">{row.title.slice(0, 1)}</span>
+                {/if}
+
+                <span class="top-lines">
+                  <span class="top-title">{row.title}</span>
+                  <span class="top-track">
+                    <span class="top-fill" style="width: {Math.max(2, row.share * 100)}%"></span>
+                  </span>
+                </span>
+
+                <span class="top-value">
+                  {#if timed && row.ms > 0}{duration(row.ms)}{:else}{row.plays}
+                    {row.plays === 1 ? 'play' : 'plays'}{/if}
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+    </div>
 
     <!-- The timeline. -->
     <section class="timeline" aria-label="Timeline">
@@ -532,6 +659,176 @@
   }
 
   /* ── Calendar ─────────────────────────────────────────────────────────── */
+
+  /*
+    The left column: the calendar and the two panels under it.
+
+    The calendar is about 370px tall and the timeline beside it is as tall as
+    the history is long, so on a desktop window the bottom two thirds of this
+    column was empty. These are the two questions the calendar cannot answer —
+    which part of the day, and what — so they earn the space rather than
+    filling it.
+  */
+  .left {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    min-width: 0;
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  /* ── Rhythm ───────────────────────────────────────────────────────── */
+
+  .hours {
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    gap: 3px;
+    height: 104px;
+    align-items: end;
+  }
+
+  .hour {
+    display: flex;
+    align-items: flex-end;
+    height: 100%;
+    border-radius: var(--radius-xs);
+    background: var(--bg-raised);
+    overflow: hidden;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+
+  .hour:hover {
+    background: var(--bg-elevated);
+  }
+
+  .hour-fill {
+    width: 100%;
+    border-radius: var(--radius-xs);
+    background: linear-gradient(to top, var(--accent-press), var(--accent));
+    opacity: 0.85;
+    transition: height var(--dur-mid) var(--ease-out);
+  }
+
+  /* The one hour the habit actually lives in. */
+  .hour.peak .hour-fill {
+    opacity: 1;
+    background: linear-gradient(to top, var(--accent), var(--accent-hover));
+  }
+
+  .hour.idle .hour-fill {
+    background: transparent;
+  }
+
+  .hour-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Most watched ─────────────────────────────────────────────────── */
+
+  .tops {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    text-align: left;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+
+  .top:hover {
+    background: var(--bg-raised);
+  }
+
+  /* Selected: the same treatment a picked calendar day gets. */
+  .top.on {
+    background: var(--accent-subtle);
+  }
+
+  .top-art {
+    width: 26px;
+    height: 39px;
+    flex: none;
+    border-radius: var(--radius-xs);
+    object-fit: cover;
+    background: var(--bg-raised);
+  }
+
+  .top-art.blank {
+    display: grid;
+    place-items: center;
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+  }
+
+  .top-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .top-title {
+    font-size: var(--text-xs);
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .top-track {
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: var(--bg-raised);
+    overflow: hidden;
+  }
+
+  .top-fill {
+    display: block;
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    opacity: 0.75;
+    transition: width var(--dur-mid) var(--ease-out);
+  }
+
+  .top:hover .top-fill,
+  .top.on .top-fill {
+    opacity: 1;
+  }
+
+  .top-value {
+    flex: none;
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
 
   .calendar-head,
   .day-head {

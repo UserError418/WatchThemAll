@@ -32,8 +32,10 @@
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import {
+    deepest,
     groupWatched,
     leaning,
+    ribbon,
     summarise,
     tallyLabel,
     WATCHED_SORTS,
@@ -105,6 +107,27 @@
   const groups = $derived(groupWatched(visible, (e) => library.ratingForEntry(e), sort))
   const totals = $derived(summarise(groups))
   const unratedCount = $derived(library.unratedWatched.length)
+
+  /**
+   * The header band is a portrait of the *library*, not of the current filter.
+   *
+   * Derived from everything rather than from `groups`, and sorted by title
+   * rather than by the user's choice, so that neither typing in the filter box
+   * nor changing the sort recomputes it — and, more importantly, so the
+   * numbers do not rearrange themselves the moment you press "Liked" to go
+   * looking for them.
+   */
+  const shelf = $derived(groupWatched(library.watched, (e) => library.ratingForEntry(e), 'title'))
+  const portrait = $derived(summarise(shelf))
+  const rated = $derived(portrait.likes + portrait.dislikes)
+  const top = $derived(deepest(shelf))
+
+  /** "liked" / "disliked" / "not rated", for a ribbon segment's tooltip. */
+  function ratingWord(rating: 'like' | 'dislike' | null): string {
+    if (rating === 'like') return 'liked'
+    if (rating === 'dislike') return 'disliked'
+    return 'not rated'
+  }
 
   /**
    * Under a filter every visible season is one the user came here to act on,
@@ -179,17 +202,118 @@
     </p>
   {:else}
     <!--
-      A prompt rather than a modal. Rating is worth encouraging and not worth
-      interrupting for: a dialog over a two-hundred-title library gets
-      dismissed, and dismissed prompts train people to dismiss the next one.
+      The band: what is actually in here, before the list of it.
+
+      An archive of two hundred rows has no single headline fact, so this is
+      the nearest thing — how much, how it was received, and the one series
+      with the most of the user's life in it. The unrated tile and every
+      segment of the meter are filters, which is what stops this being
+      decoration: a shape you cannot interrogate is a picture.
     -->
-    {#if unratedCount > 0 && filter !== 'unrated'}
-      <button class="prompt" onclick={() => (filter = 'unrated')}>
-        <span class="prompt-lead">{unratedCount} of these have no rating yet.</span>
-        <span class="prompt-hint"
-          >Rating them is what makes the tailored row on Browse worth reading — show me →</span
-        >
+    <section class="band" aria-label="Library at a glance">
+      <div class="stat wide">
+        <span class="figure">{portrait.titles}</span>
+        <span class="label">titles</span>
+      </div>
+      <div class="stat">
+        <span class="figure">{portrait.seasons}</span>
+        <span class="label">seasons &amp; films</span>
+      </div>
+      <button
+        class="stat act"
+        class:on={filter === 'liked'}
+        onclick={() => (filter = filter === 'liked' ? 'all' : 'liked')}
+      >
+        <span class="figure good">{portrait.likes}</span>
+        <span class="label">liked</span>
       </button>
+      <button
+        class="stat act"
+        class:on={filter === 'disliked'}
+        onclick={() => (filter = filter === 'disliked' ? 'all' : 'disliked')}
+      >
+        <span class="figure bad">{portrait.dislikes}</span>
+        <span class="label">disliked</span>
+      </button>
+      <button
+        class="stat act"
+        class:on={filter === 'unrated'}
+        onclick={() => (filter = filter === 'unrated' ? 'all' : 'unrated')}
+      >
+        <span class="figure">{portrait.unrated}</span>
+        <span class="label">unrated</span>
+      </button>
+      {#if top}
+        <button class="stat act deep" onclick={() => onselect(asMedia(top.seasons[0]!.entry))}>
+          <span class="figure small">{top.title}</span>
+          <span class="label">{top.seasons.length} seasons — your deepest</span>
+        </button>
+      {/if}
+    </section>
+
+    <!--
+      The split, as one bar.
+
+      Three counts in three tiles are three numbers; the same three as widths
+      are a proportion, which is the thing a person actually wants to know
+      about their own library and cannot get by reading digits.
+    -->
+    {#if portrait.seasons > 0}
+      <!--
+        A segment with nothing in it is not drawn at all. `flex: 0` still
+        leaves a button with its own padding on the bar, which reads as "a
+        few disliked" on a library where nothing is.
+      -->
+      <div class="meter" role="group" aria-label="How the library was rated">
+        {#if portrait.likes > 0}
+          <button
+            class="mseg like"
+            style="flex: {portrait.likes}"
+            onclick={() => (filter = 'liked')}
+            aria-label="{portrait.likes} liked"
+            title="{portrait.likes} liked"
+          ></button>
+        {/if}
+        {#if portrait.dislikes > 0}
+          <button
+            class="mseg dislike"
+            style="flex: {portrait.dislikes}"
+            onclick={() => (filter = 'disliked')}
+            aria-label="{portrait.dislikes} disliked"
+            title="{portrait.dislikes} disliked"
+          ></button>
+        {/if}
+        {#if portrait.unrated > 0}
+          <button
+            class="mseg blank"
+            style="flex: {portrait.unrated}"
+            onclick={() => (filter = 'unrated')}
+            aria-label="{portrait.unrated} unrated"
+            title="{portrait.unrated} unrated"
+          ></button>
+        {/if}
+      </div>
+
+      <!--
+        The nudge, as a caption rather than the box it used to be. Rating is
+        worth encouraging and not worth interrupting for: a panel over a
+        two-hundred-title library gets dismissed, and dismissed prompts train
+        people to dismiss the next one.
+      -->
+      <p class="caption">
+        {#if unratedCount > 0}
+          <button class="link" onclick={() => (filter = 'unrated')}>{unratedCount} unrated</button>
+          — rating them is what makes the tailored row on Browse worth reading.
+        {:else}
+          Every season here has an opinion against it. That is what the tailored row on Browse
+          reads.
+        {/if}
+        {#if rated > 0}
+          <span class="caption-dim">
+            {Math.round((portrait.likes / rated) * 100)}% of what you rated, you liked.
+          </span>
+        {/if}
+      </p>
     {/if}
 
     {#if groups.length === 0}
@@ -240,6 +364,40 @@
                   </span>
                 </span>
               </button>
+
+              <!--
+                The season ribbon: one segment per season, tinted by what was
+                thought of it, oldest on the left.
+
+                This is what the middle of the row is for, and it is the only
+                thing on the page that shows the *shape* of an opinion — that
+                a twenty-season series was loved for fifteen of them and then
+                was not. Pressing it opens the seasons, which is the question
+                it provokes.
+              -->
+              {#if !group.flat}
+                {@const strip = ribbon(group)}
+                <button
+                  class="ribbon"
+                  onclick={() => toggle(group)}
+                  aria-expanded={open}
+                  aria-label="{group.seasons.length} seasons — {tallyLabel(group)}"
+                >
+                  {#if strip.hidden > 0}
+                    <span class="rib-more">+{strip.hidden}</span>
+                  {/if}
+                  {#each strip.segments as segment (segment.key)}
+                    <span
+                      class="rib"
+                      class:like={segment.rating === 'like'}
+                      class:dislike={segment.rating === 'dislike'}
+                      title="{segment.label} · {ratingWord(segment.rating)}"
+                    ></span>
+                  {/each}
+                </button>
+              {:else}
+                <span class="ribbon"></span>
+              {/if}
 
               <span class="score"><Score rating={group.score} /></span>
 
@@ -398,25 +556,137 @@
     clip-path: inset(50%);
   }
 
-  .prompt {
-    display: flex;
+  /* ── The band ─────────────────────────────────────────────────────── */
+
+  .band {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: var(--space-2);
-    flex-wrap: wrap;
-    align-items: baseline;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
     background: var(--bg-raised);
+    border: 1px solid transparent;
     text-align: left;
+    min-width: 0;
   }
 
-  .prompt-lead {
-    font-size: var(--text-sm);
+  .stat.wide {
+    background: linear-gradient(140deg, var(--accent-subtle), var(--bg-raised) 70%);
+  }
+
+  .stat.act {
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .stat.act:hover {
+    background: var(--bg-elevated);
+  }
+
+  /* The tile and the filter pill are the same control; both light up. */
+  .stat.act.on {
+    border-color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  .figure {
+    font-size: var(--text-xl);
+    font-weight: var(--weight-bold);
     color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--leading-tight);
   }
 
-  .prompt-hint {
+  .figure.good {
+    color: var(--success);
+  }
+
+  .figure.bad {
+    color: var(--danger);
+  }
+
+  /* A title is not a number and cannot be set like one. */
+  .figure.small {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stat .label {
+    font-size: var(--text-2xs);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .deep {
+    grid-column: span 2;
+  }
+
+  .meter {
+    display: flex;
+    gap: 2px;
+    height: 10px;
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    background: var(--bg-raised);
+  }
+
+  .mseg {
+    min-width: 0;
+    padding: 0;
+    border-radius: 2px;
+    transition:
+      filter var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+
+  .mseg:hover {
+    filter: brightness(1.25);
+  }
+
+  .mseg.like {
+    background: var(--success);
+  }
+
+  .mseg.dislike {
+    background: var(--danger);
+  }
+
+  .mseg.blank {
+    background: var(--bg-hover);
+  }
+
+  .caption {
+    margin: calc(var(--space-2) * -1) 0 0;
     font-size: var(--text-xs);
     color: var(--text-secondary);
+  }
+
+  .caption-dim {
+    color: var(--text-tertiary);
+  }
+
+  .link {
+    color: var(--accent);
+    font-size: inherit;
+  }
+
+  .link:hover {
+    text-decoration: underline;
   }
 
   .list {
@@ -430,7 +700,14 @@
 
   .row {
     display: grid;
-    grid-template-columns: 22px 1fr auto auto auto;
+    /*
+      The third column is the ribbon, and it is why the row no longer has a
+      few hundred pixels of nothing between the title and the score. The
+      identity column is a fixed measure rather than a fraction: as `1.2fr` it
+      was nine hundred pixels wide for three hundred of title, and the ribbon
+      started adrift of the words it belongs to.
+    */
+    grid-template-columns: 22px minmax(0, 460px) minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: var(--space-3);
     position: relative;
@@ -465,7 +742,7 @@
   }
 
   .row.like::before {
-    background: color-mix(in srgb, var(--positive, #5ac887) 38%, transparent);
+    background: color-mix(in srgb, var(--success) 32%, transparent);
   }
 
   .row.dislike::before {
@@ -474,7 +751,7 @@
 
   /* Full strength on the row under the pointer: the one you are asking about. */
   .row.like:hover::before {
-    background: var(--positive, #5ac887);
+    background: var(--success);
   }
 
   .row.dislike:hover::before {
@@ -566,6 +843,80 @@
     border-radius: var(--radius-sm);
     background: var(--bg-raised);
     color: var(--text-tertiary);
+  }
+
+  /* ── The season ribbon ────────────────────────────────────────────── */
+
+  .ribbon {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 22px;
+    min-width: 0;
+    padding: 0 var(--space-2);
+  }
+
+  .rib {
+    flex: 1;
+    min-width: 4px;
+    max-width: 26px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    /* Unrated is a real state and reads as one: present, and empty. */
+    background: var(--bg-hover);
+    transition:
+      height var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+  }
+
+  .rib.like {
+    background: color-mix(in srgb, var(--success) 62%, transparent);
+  }
+
+  .rib.dislike {
+    background: color-mix(in srgb, var(--danger) 62%, transparent);
+  }
+
+  /* Full strength, and taller, on the row being asked about. */
+  .row:hover .rib {
+    height: 14px;
+  }
+
+  .row:hover .rib.like {
+    background: var(--success);
+  }
+
+  .row:hover .rib.dislike {
+    background: var(--danger);
+  }
+
+  .rib-more {
+    flex: none;
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+    On a phone the ribbon is the first thing to go.
+
+    Not a nicety: `.rib` carries a 4px floor so a twenty-season strip stays
+    made of targets rather than hairlines, and twenty of those in a flex row
+    overflow a 402px grid track that has already shrunk to zero — twelve
+    pixels of horizontal scroll across the whole page, measured at 412px.
+
+    After the `.ribbon` rules it overrides, not next to the `.row` grid it
+    also changes: same specificity means source order decides, and declared
+    up there it lost to the `display: flex` down here.
+  */
+  @media (max-width: 760px) {
+    .row {
+      grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
+    }
+
+    .ribbon {
+      display: none;
+    }
   }
 
   .drop {

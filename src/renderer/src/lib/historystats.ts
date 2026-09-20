@@ -328,3 +328,141 @@ export function completion(entry: HistoryEntry): number | null {
   if (!Number.isFinite(seconds) || !Number.isFinite(total) || total <= 0) return null
   return Math.max(0, Math.min(1, seconds / total))
 }
+
+/* ── When in the day ────────────────────────────────────────────────────── */
+
+export interface HourBucket {
+  hour: number
+  /** Plays *started* in this hour. What the bar height is. */
+  plays: number
+  /** Time played by those plays. For the tooltip; never for the ranking. */
+  ms: number
+  /** 0–1 against the busiest hour, so the view never divides by zero. */
+  share: number
+}
+
+/**
+ * The twenty-four hours of the day, however many plays started in each.
+ *
+ * The calendar above it answers "which days", and cannot answer "which part of
+ * the day" — a Tuesday square is the same square whether it was an hour at
+ * breakfast or four hours after midnight. This is the other axis of the same
+ * habit, and it is the one that surprises people.
+ *
+ * Bucketed by the hour a play **started**, not by the hours it covered.
+ * Splitting a play across the hours it ran through would be more precise and
+ * would need an end time the entry does not carry; an entry knows when it was
+ * opened, and "when do you sit down to watch" is the question anyway.
+ *
+ * ## Counted in plays, not minutes
+ *
+ * Weighting by duration was the first cut and it was incoherent with the
+ * bucketing: a play started at 23:00 and run for three hours credited all
+ * three to 23:00. On the real history it was worse than incoherent — a single
+ * forgotten player, capped at six hours by `playedMs`, made 07:00 the peak of
+ * a panel captioned "most of it starts around", against one play ever started
+ * at that hour. Counting starts says exactly what the panel claims, and is
+ * immune to both.
+ *
+ * `ms` is still carried, for the tooltip, where it is a fact about that hour
+ * rather than a ranking of it.
+ */
+export function byHour(history: readonly HistoryEntry[]): HourBucket[] {
+  const buckets: HourBucket[] = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    plays: 0,
+    ms: 0,
+    share: 0,
+  }))
+
+  for (const entry of history) {
+    const bucket = buckets[new Date(entry.watchedAt).getHours()]
+    if (bucket === undefined) continue
+    bucket.plays += 1
+    bucket.ms += playedMs(entry)
+  }
+
+  const peak = Math.max(...buckets.map((bucket) => bucket.plays))
+  if (peak > 0) for (const bucket of buckets) bucket.share = bucket.plays / peak
+  return buckets
+}
+
+/** The busiest hour, or null when nothing has been watched. */
+export function peakHour(buckets: readonly HourBucket[]): HourBucket | null {
+  let best: HourBucket | null = null
+  for (const bucket of buckets) {
+    if (bucket.plays === 0) continue
+    if (best === null || bucket.share > best.share) best = bucket
+  }
+  return best
+}
+
+/** "20:00–21:00", in the reader's own clock convention. */
+export function hourLabel(hour: number): string {
+  const start = new Date()
+  start.setHours(hour, 0, 0, 0)
+  const end = new Date(start.getTime() + 60 * 60 * 1000)
+  const format = (date: Date): string =>
+    date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return `${format(start)}–${format(end)}`
+}
+
+/* ── What, most ─────────────────────────────────────────────────────────── */
+
+export interface TitleTotal {
+  tmdbId: number
+  title: string
+  posterPath: string | null
+  plays: number
+  ms: number
+  /** 0–1 against the leader, for the bar width. */
+  share: number
+}
+
+/**
+ * The titles the most time has gone into, longest first.
+ *
+ * Keyed by `tmdbId`, so eleven episodes of one series are one bar rather than
+ * eleven — which is the entire difference between this and the timeline below
+ * it. A `tmdbId` of 0 is the unresolved-import case and would otherwise fold
+ * every one of them into a single bar with a borrowed name, so those key on
+ * their title instead.
+ *
+ * Ranked by time where any is known and by play count where none is, matching
+ * `byHour`, so the two panels never disagree about which is the busier.
+ */
+export function topTitles(history: readonly HistoryEntry[], limit = 8): TitleTotal[] {
+  const totals = new Map<string, TitleTotal>()
+  let timed = false
+
+  for (const entry of history) {
+    const key = entry.tmdbId ? `t${entry.tmdbId}` : `n${entry.title}`
+    const ms = playedMs(entry)
+    if (ms > 0) timed = true
+
+    const row = totals.get(key)
+    if (row === undefined) {
+      totals.set(key, {
+        tmdbId: entry.tmdbId,
+        title: entry.title,
+        posterPath: entry.posterPath,
+        plays: 1,
+        ms,
+        share: 0,
+      })
+    } else {
+      row.plays += 1
+      row.ms += ms
+      row.posterPath ??= entry.posterPath
+    }
+  }
+
+  const weight = (row: TitleTotal): number => (timed ? row.ms : row.plays)
+  const ranked = [...totals.values()]
+    .sort((a, b) => weight(b) - weight(a) || a.title.localeCompare(b.title))
+    .slice(0, limit)
+
+  const leader = ranked.length > 0 ? weight(ranked[0]!) : 0
+  if (leader > 0) for (const row of ranked) row.share = weight(row) / leader
+  return ranked
+}

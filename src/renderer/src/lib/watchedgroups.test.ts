@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Rating, WatchedEntry } from '@shared/types'
-import { groupWatched, leaning, summarise, tallyLabel } from './watchedgroups'
+import { deepest, groupWatched, leaning, ribbon, summarise, tallyLabel } from './watchedgroups'
 
 let seq = 0
 function entry(over: Partial<WatchedEntry> = {}): WatchedEntry {
@@ -197,10 +197,88 @@ describe('summarise', () => {
       [entry({ tmdbId: 1, season: 1 }), entry({ tmdbId: 1, season: 2 }), entry({ tmdbId: 2 })],
       ratings({ '1:1': 'like' }),
     )
-    expect(summarise(groups)).toEqual({ titles: 2, seasons: 3, likes: 1, dislikes: 0 })
+    expect(summarise(groups)).toEqual({
+      titles: 2,
+      seasons: 3,
+      likes: 1,
+      dislikes: 0,
+      unrated: 2,
+    })
   })
 
   it('handles an empty library', () => {
-    expect(summarise([])).toEqual({ titles: 0, seasons: 0, likes: 0, dislikes: 0 })
+    expect(summarise([])).toEqual({ titles: 0, seasons: 0, likes: 0, dislikes: 0, unrated: 0 })
+  })
+})
+
+describe('deepest', () => {
+  it('finds the title with the most seasons', () => {
+    const groups = groupWatched(
+      [
+        entry({ tmdbId: 1, title: 'Short', season: 1 }),
+        entry({ tmdbId: 2, title: 'Long', season: 1 }),
+        entry({ tmdbId: 2, title: 'Long', season: 2 }),
+        entry({ tmdbId: 2, title: 'Long', season: 3 }),
+      ],
+      none,
+    )
+    expect(deepest(groups)?.title).toBe('Long')
+  })
+
+  /** A library of films and one-season shows has no such fact to report. */
+  it('reports nothing when nothing has more than one season', () => {
+    const groups = groupWatched([entry({ tmdbId: 1, season: 1 })], none)
+    expect(deepest(groups)).toBeNull()
+  })
+
+  it('breaks a tie on the title, so the tile does not flicker', () => {
+    const groups = groupWatched(
+      [
+        entry({ tmdbId: 1, title: 'Zulu', season: 1 }),
+        entry({ tmdbId: 1, title: 'Zulu', season: 2 }),
+        entry({ tmdbId: 2, title: 'Alpha', season: 1 }),
+        entry({ tmdbId: 2, title: 'Alpha', season: 2 }),
+      ],
+      none,
+    )
+    expect(deepest(groups)?.title).toBe('Alpha')
+  })
+
+  it('handles an empty library', () => {
+    expect(deepest([])).toBeNull()
+  })
+})
+
+describe('ribbon', () => {
+  /**
+   * The expanded list runs newest first like every other list in the app; the
+   * strip runs the other way, because a run of time that starts at the end is
+   * a puzzle.
+   */
+  it('runs oldest first, the opposite way to the expanded list', () => {
+    const groups = groupWatched(
+      [entry({ season: 1 }), entry({ season: 2 }), entry({ season: 3 })],
+      ratings({ '1396:1': 'like', '1396:3': 'dislike' }),
+    )
+    const strip = ribbon(groups[0]!)
+    expect(strip.segments.map((s) => s.label)).toEqual(['Season 1', 'Season 2', 'Season 3'])
+    expect(strip.segments.map((s) => s.rating)).toEqual(['like', null, 'dislike'])
+    expect(strip.hidden).toBe(0)
+  })
+
+  it('names a legacy whole-series entry rather than calling it a season', () => {
+    const groups = groupWatched([entry({ season: null })], none)
+    expect(ribbon(groups[0]!).segments[0]?.label).toBe('Whole series')
+  })
+
+  /** An opinion about season 19 says more than one about season 1. */
+  it('keeps the recent seasons when there are more than fit', () => {
+    const groups = groupWatched(
+      Array.from({ length: 8 }, (_, i) => entry({ season: i + 1 })),
+      none,
+    )
+    const strip = ribbon(groups[0]!, 3)
+    expect(strip.segments.map((s) => s.label)).toEqual(['Season 6', 'Season 7', 'Season 8'])
+    expect(strip.hidden).toBe(5)
   })
 })
