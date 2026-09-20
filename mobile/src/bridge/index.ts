@@ -86,6 +86,7 @@ import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
 import { buildTailoredRow } from '@main/tailored'
+import { backfillScores } from '@main/scorebackfill'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
@@ -980,6 +981,37 @@ export async function createBridge(): Promise<WtaApi> {
       status: () => castBridge.status(),
       beam: async () => beamToTv(),
       control: (action, seconds) => castBridge.control(action, seconds),
+    },
+  })
+
+  /**
+   * Top up scores for titles saved before the app stored one.
+   *
+   * The desktop does the same at startup; the phone needs its own call because
+   * the two have no shared process, only a shared module. Unawaited and slow on
+   * purpose — see `scorebackfill.ts`. Nothing on screen waits for it, and a run
+   * cut short by the app being backgrounded resumes next launch.
+   */
+  void backfillScores({
+    pending: () => {
+      const document = store.read()
+      const seen = new Set<number>()
+      return [
+        ...document.watchlist.filter((w) => !(w.rating > 0)),
+        ...document.watched.filter((w) => !(w.rating > 0)),
+      ].filter((entry) => {
+        if (seen.has(entry.tmdbId)) return false
+        seen.add(entry.tmdbId)
+        return true
+      })
+    },
+    score: async (tmdbId, type) => (await tmdb.detail(tmdbId, type))?.rating ?? 0,
+    save: (tmdbId, score) => {
+      for (const name of ['watchlist', 'watched'] as const) {
+        const collection = store.collection(name)
+        const entry = store.read()[name].find((e) => e.tmdbId === tmdbId)
+        if (entry) collection.put({ ...entry, rating: score })
+      }
     },
   })
 
