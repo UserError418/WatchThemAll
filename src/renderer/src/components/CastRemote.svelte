@@ -340,7 +340,14 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
-    padding: 12px 16px 22px;
+    /*
+      `position: fixed` escapes the host's own `padding-top: var(--safe-top)`,
+      so the inset is taken again here or the header sits under the phone's
+      clock. The fallbacks are what make one rule serve both shells: in
+      `chrome.html` these properties do not exist and resolve to 0, which is
+      correct — a desktop window has no status bar to clear.
+    */
+    padding: calc(12px + var(--safe-top, 0px)) 16px calc(22px + var(--safe-bottom, 0px));
     box-sizing: border-box;
     background: radial-gradient(120% 90% at 50% 0%, #15161d, #050508 72%);
     color: #e9e9ee;
