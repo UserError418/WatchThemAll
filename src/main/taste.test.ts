@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { excludedTmdbIds, genreWeights, hasEnoughSignal, MIN_SIGNAL, WEIGHTS } from './taste'
+import {
+  excludedTmdbIds,
+  genreWeights,
+  hasEnoughSignal,
+  MIN_SIGNAL,
+  SEED_LIMIT,
+  seedTitles,
+  titleAffinity,
+  WEIGHTS,
+} from './taste'
 import type { StoreShape, Synced, TitleRating, WatchedEntry, WatchlistEntry } from '@shared/types'
 import { stamp } from '@shared/store/core'
 
@@ -44,6 +53,10 @@ function watched(tmdbId: number, genreIds: number[]): Synced<WatchedEntry> {
     source: 'user',
     malId: null,
   })
+}
+
+function seasonSeen(tmdbId: number, season: number): Synced<WatchedEntry> {
+  return stamp({ ...watched(tmdbId, []), id: `s${tmdbId}-${season}`, season })
 }
 
 function rating(tmdbId: number, genreIds: number[], value: 'like' | 'dislike'): Synced<TitleRating> {
@@ -167,5 +180,114 @@ describe('hasEnoughSignal', () => {
         }),
       ),
     ).toBe(true)
+  })
+})
+
+/* ── Affinity ────────────────────────────────────────────────────────────── */
+
+function play(tmdbId: number, playedMs: number, id = `h${tmdbId}-${playedMs}`) {
+  return stamp({
+    id,
+    tmdbId,
+    type: 'tv' as const,
+    title: `title ${tmdbId}`,
+    posterPath: null,
+    season: 1,
+    episode: 1,
+    watchedAt: 0,
+    playedMs,
+  })
+}
+
+function affinityStore(over: Partial<Parameters<typeof titleAffinity>[0]> = {}) {
+  return { ratings: [], watched: [], watchlist: [], history: [], ...over } as Parameters<
+    typeof titleAffinity
+  >[0]
+}
+
+describe('titleAffinity', () => {
+  it('ranks a stated like above a mere watchlist entry', () => {
+    const ranked = titleAffinity(
+      affinityStore({
+        watchlist: [watchlist(1, [18]), watchlist(2, [18])],
+        ratings: [rating(2, [18], 'like')],
+      }),
+    )
+
+    expect(ranked[0]?.tmdbId).toBe(2)
+  })
+
+  /**
+   * The signal the store has always recorded and nothing read. Saving a title
+   * is an intention and rating one is a claim; sitting through eleven hours of
+   * something is a fact.
+   */
+  it('lets time actually invested outrank an untouched saved title', () => {
+    const ranked = titleAffinity(
+      affinityStore({
+        watchlist: [watchlist(1, [18]), watchlist(2, [18])],
+        history: [play(2, 11 * 3_600_000)],
+      }),
+    )
+
+    expect(ranked[0]?.tmdbId).toBe(2)
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score)
+  })
+
+  /**
+   * A 90-hour comfort show must not become the entire profile. Hours are
+   * damped, so ten times the watching is not ten times the weight.
+   */
+  it('damps hours so one long series cannot swamp everything else', () => {
+    const modest = titleAffinity(
+      affinityStore({ watchlist: [watchlist(1, [18])], history: [play(1, 4 * 3_600_000)] }),
+    )[0]!.score
+    const enormous = titleAffinity(
+      affinityStore({ watchlist: [watchlist(1, [18])], history: [play(1, 400 * 3_600_000)] }),
+    )[0]!.score
+
+    // A hundred times the hours, nowhere near a hundred times the weight.
+    expect(enormous).toBeLessThan(modest * 12)
+  })
+
+  /** Asking "what is like this?" about something disliked discredits the row. */
+  it('keeps disliked titles out entirely rather than ranking them last', () => {
+    const ranked = titleAffinity(
+      affinityStore({ watchlist: [watchlist(7, [18])], ratings: [rating(7, [18], 'dislike')] }),
+    )
+
+    expect(ranked.map((t) => t.tmdbId)).not.toContain(7)
+  })
+
+  /**
+   * The acceptance criterion for this change: recommendations have to move when
+   * the history moves. A profile that returns the same order regardless of what
+   * was watched is the static behaviour this replaced.
+   */
+  it('produces a different ordering for a different history', () => {
+    const base = { watchlist: [watchlist(1, [18]), watchlist(2, [18]), watchlist(3, [18])] }
+
+    const likesOne = titleAffinity(affinityStore({ ...base, history: [play(1, 20 * 3_600_000)] }))
+    const likesThree = titleAffinity(affinityStore({ ...base, history: [play(3, 20 * 3_600_000)] }))
+
+    expect(likesOne.map((t) => t.tmdbId)).not.toEqual(likesThree.map((t) => t.tmdbId))
+    expect(likesOne[0]?.tmdbId).toBe(1)
+    expect(likesThree[0]?.tmdbId).toBe(3)
+  })
+
+  it('counts several watched seasons as a bigger claim than one', () => {
+    const oneSeason = titleAffinity(affinityStore({ watched: [seasonSeen(1, 1)] }))[0]!.score
+    const three = titleAffinity(
+      affinityStore({ watched: [seasonSeen(1, 1), seasonSeen(1, 2), seasonSeen(1, 3)] }),
+    )[0]!.score
+
+    expect(three).toBeGreaterThan(oneSeason)
+  })
+})
+
+describe('seedTitles', () => {
+  it('takes only the strongest few, since each one costs a request', () => {
+    const many = Array.from({ length: 20 }, (_, i) => watchlist(i + 1, [18]))
+    expect(seedTitles(affinityStore({ watchlist: many })).length).toBe(SEED_LIMIT)
   })
 })

@@ -36,7 +36,7 @@ import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { excludedTmdbIds, genreWeights, hasEnoughSignal } from './taste'
+import { excludedTmdbIds, genreWeights, hasEnoughSignal, seedTitles } from './taste'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -169,6 +169,56 @@ export function registerIpc(deps: IpcDeps): void {
     const weights = genreWeights(data)
     if (weights.length === 0) return { items: [], genreIds: [], ready: false }
 
+    const excludedIds = new Set(excludedTmdbIds(data))
+
+    /**
+     * Content first: what is like the titles this person actually invested in.
+     *
+     * Genre filtering answers "popular in Drama this week", which is the same
+     * answer for two people with opposite taste and the same top genre. Asking
+     * TMDB what is *like* the specific titles someone rated and sat through is
+     * a different question, and one it answers from co-watching rather than
+     * from tags. See `seedTitles` for how the seeds are chosen.
+     *
+     * A candidate recommended by several seeds is a stronger match than one
+     * recommended by a single seed, so votes are accumulated and weighted by
+     * how strongly each seed represents the user.
+     */
+    const seeds = seedTitles(data)
+    const pooled = new Map<number, { item: MediaSummary; score: number }>()
+
+    if (seeds.length > 0) {
+      const pages = await Promise.all(
+        seeds.map((seed) => tmdb.recommendations(seed.tmdbId, seed.type, req.page)),
+      )
+
+      pages.forEach((page, index) => {
+        const seedScore = seeds[index]?.score ?? 1
+        for (const item of page.items) {
+          if (excludedIds.has(item.tmdbId)) continue
+          const existing = pooled.get(item.tmdbId)
+          if (existing) existing.score += seedScore
+          else pooled.set(item.tmdbId, { item, score: seedScore })
+        }
+      })
+    }
+
+    /**
+     * How many recommendations are enough to stand on their own.
+     *
+     * Below this the row looks thin and arbitrary, so the genre discover is
+     * appended to fill it out — which is also what happens for a library with
+     * seeds TMDB knows nothing about.
+     */
+    const ENOUGH = 12
+    const contentBased = [...pooled.values()]
+      .sort((a, b) => b.score - a.score || b.item.rating - a.item.rating)
+      .map((entry) => entry.item)
+
+    if (contentBased.length >= ENOUGH) {
+      return { items: contentBased, genreIds: weights.slice(0, 3).map((g) => g.genreId), ready: true }
+    }
+
     /**
      * Up to three genres, combined with OR rather than AND.
      *
@@ -178,7 +228,7 @@ export function registerIpc(deps: IpcDeps): void {
      * tails and including them makes the row indistinguishable from "popular".
      */
     const genreIds = weights.slice(0, 3).map((g) => g.genreId)
-    const excluded = new Set(excludedTmdbIds(data))
+    const excluded = excludedIds
 
     /**
      * Both media types, interleaved.
@@ -191,8 +241,17 @@ export function registerIpc(deps: IpcDeps): void {
       tmdb.discoverByGenres('movie', genreIds, req.page),
     ])
 
-    const items = interleave(tv.items, movie.items).filter((m) => !excluded.has(m.tmdbId))
-    return { items, genreIds, ready: true }
+    /*
+     * Content-based matches first, genre fill after — and never the same title
+     * twice, which is what a naive concatenation would produce for anything
+     * both queries agree on.
+     */
+    const seen = new Set(contentBased.map((m) => m.tmdbId))
+    const filler = interleave(tv.items, movie.items).filter(
+      (m) => !excluded.has(m.tmdbId) && !seen.has(m.tmdbId),
+    )
+
+    return { items: [...contentBased, ...filler], genreIds, ready: true }
   })
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))
