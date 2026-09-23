@@ -133,6 +133,7 @@
   let scanDone = $state(0)
   let scanTotal = $state(0)
   let scanCurrent = $state<string | null>(null)
+  let scanConfirming = $state(false)
 
   $effect(() =>
     api?.onProviderScan((progress) => {
@@ -140,6 +141,7 @@
       scanDone = progress.done
       scanTotal = progress.total
       scanCurrent = progress.providerName
+      scanConfirming = progress.confirming
       scanning = !progress.finished
     }),
   )
@@ -1113,7 +1115,10 @@
           <span class="dot none"></span>
           <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
           {#if scanning}
-            <span class="tag">{scanCurrent ?? '…'} {scanDone + 1}/{scanTotal}</span>
+            <span class="tag"
+              >{#if scanConfirming}re-checking {scanCurrent}{:else}{scanCurrent ?? '…'}
+                {scanDone + 1}/{scanTotal}{/if}</span
+            >
           {/if}
         </button>
       </div>

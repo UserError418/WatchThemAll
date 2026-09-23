@@ -221,6 +221,11 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
+          // Always false here. The re-check exists to undo starvation caused by
+          // probing several providers at once, and this side cannot do that —
+          // one capture buffer means one provider at a time, so nothing it
+          // measures was ever competing for bandwidth.
+          confirming: false,
           finished,
           cancelled: finished && token !== mine,
         })

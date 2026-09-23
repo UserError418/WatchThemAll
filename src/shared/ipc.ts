@@ -408,6 +408,15 @@ export interface ProviderScanProgress {
   total: number
   /** Verdicts settled so far. */
   verdicts: Record<string, ProbeVerdict>
+  /**
+   * The scan is re-checking a provider that looked dead.
+   *
+   * A parallel pass is fast and occasionally starves a provider into looking
+   * broken, so anything that comes back dead is tried again on its own before
+   * the verdict is believed. The UI says so rather than appearing to stall at
+   * 100%.
+   */
+  confirming: boolean
   /** True once every provider has resolved or the user cancelled. */
   finished: boolean
   /** Set when the user stopped it, so the UI can say so rather than claim a result. */

@@ -181,6 +181,16 @@ const cast = createCastService()
  */
 const scan = createScanService({
   providers: enabledProviders,
+  /**
+   * Overridable so the trade can be *measured* rather than argued about.
+   *
+   * Raising it makes a scan finish sooner and risks measuring the user's
+   * bandwidth instead of the providers — a starved player produces no media
+   * and scores `dead`, which is the one verdict that costs a working source.
+   * `WTA_SCAN_CONCURRENCY=6` next to a run at the default is how that claim
+   * gets checked against real providers instead of reasoning.
+   */
+  concurrency: Number(process.env.WTA_SCAN_CONCURRENCY) || undefined,
   frameUrl: (providerUrl) =>
     rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl) : providerUrl,
   onProgress: (progress) => {

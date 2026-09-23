@@ -1,6 +1,7 @@
 package net.watchthemall.app;
 
 import android.os.SystemClock;
+import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import android.webkit.WebView;
 
@@ -33,13 +34,29 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * iframe. Origin does not enter into it, because this is not script reaching
  * into a document; it is a touch landing on a pixel.
  *
- * ## What that means for the caller
+ * ## Coordinates are CSS pixels, and the conversion happens here
  *
- * The coordinates are real screen pixels in the WebView, so the thing being
- * tapped has to actually be laid out where the caller says it is. A probe
- * surface positioned off-screen or collapsed to nothing cannot be tapped, and
- * an overlay drawn above it will swallow the touch unless that overlay is
- * `pointer-events: none`. `scan.ts` arranges both.
+ * A caller in JavaScript has `getBoundingClientRect`, which is CSS pixels. A
+ * `View` works in device pixels. On this Pixel profile the two differ by
+ * 2.625, so passing one for the other puts the touch about a third of the way
+ * up the screen — in the app's own UI rather than on the provider's play
+ * button, and every provider that needs a click gets reported as having no
+ * stream.
+ *
+ * The conversion is done here rather than in `scan.ts` because this is the
+ * side that holds the `View` and can ask it, and because "CSS pixels" is the
+ * only unit a web caller has without being told a scale factor to apply.
+ *
+ * Coordinates are relative to the WebView, not to the screen, so no allowance
+ * is made for the system bars: the WebView is laid out between them, and its
+ * own origin is CSS (0, 0). Anything driving `adb input tap` from outside does
+ * need that offset — see `scripts/android-ui.py` — which is a different
+ * mechanism, not a disagreement.
+ *
+ * The thing being tapped still has to be laid out where the caller says it is.
+ * A probe surface positioned off-screen or collapsed to nothing cannot be
+ * tapped, and an overlay drawn above it swallows the touch unless that overlay
+ * is `pointer-events: none`. `scan.ts` arranges both.
  *
  * ## Why this is not on `CastPlugin`
  *
@@ -67,9 +84,16 @@ public class ScanPlugin extends Plugin {
             return;
         }
 
-        final float px = x.floatValue();
-        final float py = y.floatValue();
         final WebView webView = getBridge().getWebView();
+
+        /*
+         * CSS pixels in, device pixels out. `density` is the same number the
+         * WebView reports to JavaScript as `devicePixelRatio` while the page
+         * is at initial scale, which Capacitor's viewport tag pins it to.
+         */
+        DisplayMetrics metrics = getContext().getResources().getDisplayMetrics();
+        final float px = x.floatValue() * metrics.density;
+        final float py = y.floatValue() * metrics.density;
 
         /*
          * Touch dispatch is main-thread only, and a plugin method arrives on one

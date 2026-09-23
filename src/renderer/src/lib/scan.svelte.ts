@@ -46,6 +46,8 @@ class ProviderScanState {
   current = $state<string | null>(null)
   /** Set when the last run was stopped by the user rather than finishing. */
   cancelled = $state(false)
+  /** The run is re-checking a provider that looked dead. */
+  confirming = $state(false)
 
   /**
    * Start listening once, for the life of the renderer.
@@ -61,6 +63,7 @@ class ProviderScanState {
       this.done = progress.done
       this.total = progress.total
       this.current = progress.providerName
+      this.confirming = progress.confirming
       this.cancelled = progress.cancelled
       this.running = !progress.finished
     })
@@ -86,6 +89,7 @@ class ProviderScanState {
     this.cancelled = false
     this.running = true
     this.current = null
+    this.confirming = false
 
     try {
       await window.wta.providers.scan(media, episode)

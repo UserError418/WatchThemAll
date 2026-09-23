@@ -152,8 +152,12 @@
    */
   const scanLabel = $derived.by(() => {
     if (!scanning) return null
+    if (!scan.current) return 'Starting…'
+    // The re-check runs after every provider has a verdict, so the counter is
+    // already at its maximum — saying "12 of 12" again would read as stuck.
+    if (scan.confirming) return `Double-checking ${scan.current}`
     const of = scan.total > 0 ? ` of ${scan.total}` : ''
-    return scan.current ? `Testing ${scan.current} (${scan.done + 1}${of})` : 'Starting…'
+    return `Testing ${scan.current} (${scan.done + 1}${of})`
   })
 
   /** How many sources the last scan found streaming, once it has finished. */

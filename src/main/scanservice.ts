@@ -27,23 +27,40 @@
  * kills every cheaper approach: several providers resolve nothing at all until
  * something clicks.
  *
- * ## Concurrency is deliberately low
+ * ## Fan out, then re-check anything that died
  *
- * Two at a time. The temptation is to fan out across all twelve and finish in
- * fifteen seconds, and it produces a measurement of the user's bandwidth rather
- * than of the providers: a dozen HLS players starting at once starve each
- * other, and a starved player looks exactly like a broken one. Since the whole
- * value of this feature is the user trusting a red dot enough not to try that
- * source, a false red is the most expensive thing it can produce.
+ * Contention is real and it was measured, against the shipped catalogue on one
+ * title, nine providers:
  *
- * Two still cuts a twelve-provider scan from around two and a half minutes to
- * about seventy seconds, which is the difference between a feature people use
- * and one they cancel.
+ * | at once | time  | verdicts                        |
+ * |---------|-------|---------------------------------|
+ * | 2       | 34.3s | 7 stream, 2 unsure, 0 dead      |
+ * | 6       | 12.0s | 7 stream, 2 unsure, 0 dead      |
+ * | 6 again | 12.0s | 6 stream, 2 unsure, 1 dead      |
+ * | 9       | 12.1s | 4 stream, 3 unsure, 2 dead      |
+ *
+ * Two things follow. Going wider than six buys **nothing** — past that the
+ * per-provider timeout is the floor rather than the queue — while costing
+ * providers that demonstrably stream: one that worked at two and at six came
+ * back dead at nine. And six is not perfectly clean either; a provider that
+ * streamed on one run died on the next.
+ *
+ * A starved player is indistinguishable from a broken one, and the whole value
+ * of the feature is the user trusting a red dot enough to stop trying that
+ * source. So speed is taken from the fan-out and accuracy is bought back
+ * afterwards: anything that comes back `dead` is probed again **on its own**,
+ * with nothing to compete with, and the better of the two results stands.
+ *
+ * That keeps the common case — most sources working — at the fast path, and
+ * only pays for the re-check on sources that looked broken, which are the ones
+ * worth being right about. A title where everything is dead is the slow case,
+ * and it is the case where being wrong is least acceptable.
  */
 
 import type { Provider } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import { probeStream, type ProbeSubject, type StreamVerdict } from './streamprobe'
+import { providerRank } from '@shared/scanrank'
 
 /**
  * What each network verdict means for the user's dot.
@@ -82,7 +99,7 @@ export interface ScanServiceOptions {
   onProgress: (progress: ProviderScanProgress) => void
   /** Per-provider budget. The default matches the CLI probe's. */
   timeoutMs?: number
-  /** How many providers to measure at once. See the header on why this is low. */
+  /** How many providers to measure at once. See the header for the measurements. */
   concurrency?: number
 }
 
@@ -103,7 +120,12 @@ export interface ScanService {
 
 export function createScanService(options: ScanServiceOptions): ScanService {
   const timeoutMs = options.timeoutMs ?? 12_000
-  const concurrency = Math.max(1, options.concurrency ?? 2)
+  /**
+   * Six, measured rather than chosen — see the table in the header. Wider is
+   * not faster and is less accurate; narrower is three times slower for the
+   * same answer.
+   */
+  const concurrency = Math.max(1, options.concurrency ?? 6)
 
   /**
    * Identifies the run, so a cancelled scan's stragglers cannot write.
@@ -136,6 +158,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const verdicts: Record<string, ProbeVerdict> = {}
       const total = providers.length
 
+      let confirming = false
       const publish = (provider: Provider | null, finished: boolean): void => {
         options.onProgress({
           titleKey,
@@ -144,9 +167,15 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
+          confirming,
           finished,
           cancelled: finished && token !== mine,
         })
+      }
+
+      const probe = async (provider: Provider): Promise<ProbeVerdict> => {
+        const result = await probeStream(provider, subject, { timeoutMs, frameUrl: options.frameUrl })
+        return VERDICT[result.verdict]
       }
 
       publish(providers[0] ?? null, false)
@@ -168,17 +197,44 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           if (!provider) return
 
           publish(provider, false)
-          const result = await probeStream(provider, subject, { timeoutMs, frameUrl: options.frameUrl })
+          const verdict = await probe(provider)
 
           // Checked again after the await: the user may have cancelled during
           // the probe, and a late write would corrupt the next run's verdicts.
           if (token !== mine) return
-          verdicts[provider.id] = VERDICT[result.verdict]
+          verdicts[provider.id] = verdict
           publish(provider, false)
         }
       }
 
       await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker))
+
+      /**
+       * Re-check the dead ones, alone.
+       *
+       * The fan-out above is the only thing that could have starved them, so
+       * this pass removes that variable rather than adding a retry for its own
+       * sake — a provider genuinely without the title fails here too, and keeps
+       * its red dot.
+       *
+       * The better of the two results stands. Streaming under either condition
+       * proves the source can serve this title, and the question the dot
+       * answers is whether it is worth the user's click.
+       */
+      confirming = true
+      for (const provider of providers) {
+        if (token !== mine) break
+        if (verdicts[provider.id] !== 'dead') continue
+
+        publish(provider, false)
+        const second = await probe(provider)
+        if (token !== mine) break
+        if (providerRank(undefined, second) < providerRank(undefined, verdicts[provider.id])) {
+          verdicts[provider.id] = second
+        }
+        publish(provider, false)
+      }
+      confirming = false
 
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts }
       if (token === mine) running = false
