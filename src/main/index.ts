@@ -31,13 +31,14 @@ import { buildPlayUrl } from './providers'
 import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
 import {
-  automaticOrder,
   defaultProviderOrder,
   mediaKey,
   outcomesForTitle,
   record,
   titleKey,
 } from './outcomes'
+import { freshScan, scanAwareOrder } from './providerscan'
+import { createScanService } from './scanservice'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from './resume'
 import {
   readCache,
@@ -169,6 +170,27 @@ async function createMainWindow(): Promise<void> {
  * cast from one would leave the other reporting a session that is gone.
  */
 const cast = createCastService()
+
+/**
+ * Trying every provider in the background, so the user does not have to.
+ *
+ * Constructed here beside `cast` and for the same reason: it owns hidden
+ * browser windows, and exactly one place should decide when those exist. The
+ * provider list is read per run rather than captured, so a scan started after
+ * the user switches a source on includes it.
+ */
+const scan = createScanService({
+  providers: enabledProviders,
+  frameUrl: (providerUrl) =>
+    rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl) : providerUrl,
+  onProgress: (progress) => {
+    send(EV.providerScan, progress)
+    // The player chrome is a separate document with its own preload, so the
+    // app window's `send` does not reach it. Both surfaces can start a scan
+    // and both draw its dots, so both have to be told.
+    player?.notifyChrome(EV.providerScan, progress)
+  },
+})
 
 /**
  * A television that stops on its own gives the sound back.
@@ -536,15 +558,23 @@ function enabledProviders(): Provider[] {
 /**
  * Order the enabled providers for one request.
  *
- * All three rules are the user's own — their drag order, narrowed to sources
- * known to have played this title, with favourites in front. The reasoning, and
- * what it replaced, is in `automaticOrder`.
+ * Every rule is the user's own — their drag order, narrowed to sources known to
+ * have played this title, with favourites in front — plus whatever a recent
+ * scan measured. The reasoning is in `scanAwareOrder`, which degrades to
+ * exactly `automaticOrder` when nothing has been scanned.
+ *
+ * This is the half of the scan feature the user never sees. The dots tell them
+ * which source to pick; this makes the *automatic* choice and every mid-episode
+ * fallback use the same measurement, so "Automatic" stops walking into sources
+ * that were measured dead a minute ago.
  */
 function orderedForRequest(req: PlayRequest): Provider[] {
-  const { streamOutcomes, favouriteProviderIds } = store.read()
-  return automaticOrder(enabledProviders(), outcomesForTitle(streamOutcomes, titleKey(req)), {
+  const { streamOutcomes, favouriteProviderIds, providerScans } = store.read()
+  const key = titleKey(req)
+  return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
+    scan: freshScan(providerScans, key),
   })
 }
 
@@ -766,6 +796,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       checkReleases,
       allProviders,
       orderProviders: orderedForRequest,
+      scan,
     })
 
     // Export/import from the menu are routed back through the renderer so they

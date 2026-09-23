@@ -75,6 +75,16 @@ export interface InlinePlayer {
   keepWaiting: () => void
   /** Move the video. Called by the renderer whenever its slot moves or resizes. */
   setBounds: (bounds: PlayerBounds) => void
+  /**
+   * Forward an event to the player chrome's own document.
+   *
+   * The chrome is a separate `WebContentsView` with its own preload, so the
+   * app window's `send` does not reach it — every event it receives is posted
+   * to `overlay.webContents` from inside this module. A no-op when no chrome
+   * is mounted, which is the case for a probe player and for a build with no
+   * chrome URL.
+   */
+  notifyChrome: (channel: string, payload: unknown) => void
   /** Load a different URL into the same view, e.g. another episode. */
   load: (url: string) => void
   /** Reload the current URL, for a source that loaded but then stalled. */
@@ -394,6 +404,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // Replaced below, once the view exists to press into.
     pressPlay: async () => {},
     setBounds: () => {},
+    // Replaced once the overlay exists; until then there is nothing to tell.
+    notifyChrome: () => {},
     load: () => {},
     reload: () => {},
     setMuted: () => {},
@@ -1610,6 +1622,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     overlay.setBackgroundColor('#00000000')
     void overlay.webContents.loadURL(options.chromeUrl)
     win.contentView.addChildView(overlay)
+
+    player.notifyChrome = (channel, payload): void => {
+      // Destroyed between the event being raised and delivered is ordinary:
+      // the user closed the player while a provider scan was still running.
+      if (overlay === null || overlay.webContents.isDestroyed()) return
+      overlay.webContents.send(channel, payload)
+    }
   }
 
   /**

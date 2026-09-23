@@ -17,37 +17,77 @@
    * misleading, because these are single-page apps whose document loads with a
    * clean 200 and then fails to resolve a stream.
    *
-   * It now reports recorded playback for this title on this machine:
+   * It now reports two kinds of evidence, both about *this* title:
    *
-   *   - nothing at all — never tried, and saying anything would be a guess
-   *   - red — tried, and it has never produced a stream for this title
-   *   - green — it has actually played this title
+   *   - nothing at all — never tried or scanned, and saying anything would be
+   *     a guess
+   *   - red — tried or measured, and it produced no stream
+   *   - amber — reachable, but nothing streamed while testing. Worth a try
+   *   - green — it has actually played, or was just measured streaming
    *   - blue — the source this title was last streamed on, labelled "resume"
    *
    * Blue outranks green because it is the more specific claim: every blue
    * source is also a green one, and "this is where you were" is what the user
-   * is looking for when they open this list mid-series.
+   * is looking for when they open this list mid-series. Everything below blue
+   * is decided by `providerDot`, which is derived from `providerRank` — the
+   * same function that orders Automatic's fallback chain, so the list reads top
+   * to bottom in the order the app will actually try.
+   *
+   * ## Testing every source
+   *
+   * The dots above are blank for a title nobody has watched, which is exactly
+   * when the user most needs them. "Test all sources" fills them in: it loads
+   * every enabled provider in a hidden window and watches for a real media
+   * request, which is the only signal a page that loads fine and plays nothing
+   * cannot fake. It takes about a minute and reports as it goes.
    *
    * Still shown, never used to disable an option. A provider that failed
    * yesterday may work today, and the user's judgement has to be able to
-   * override ours.
+   * override ours — so a red row stays clickable.
    */
-  import type { TitleOutcome, TitleProviderState, TitleRef } from '@shared/ipc'
+  import type { ProbeVerdict, TitleProviderState, TitleRef } from '@shared/ipc'
+  import { providerDot } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
   import { menuIn, menuOut } from '../lib/motion'
+  import { scan } from '../lib/scan.svelte'
 
   interface Props {
     /** Currently selected provider id, or null to let the app decide. */
     selected: string | null
     /** The title the dots are about. */
     media: TitleRef
+    /**
+     * Which episode to test, for a series.
+     *
+     * Coverage is episode-level — a provider routinely carries a season one and
+     * not a season four — so a scan that did not say which episode would
+     * measure whichever one the URL template happened to build, and report it
+     * as a fact about the show.
+     */
+    episode?: { season: number; episode: number } | null
     onselect: (providerId: string | null) => void
   }
 
-  const { selected, media, onselect }: Props = $props()
+  const { selected, media, episode = null, onselect }: Props = $props()
 
   let open = $state(false)
-  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null })
+  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null, scan: null })
+
+  /**
+   * The verdicts to draw, live run preferred over the stored one.
+   *
+   * A scan in flight for *this* title is the most current thing there is, and
+   * its partial results are what make the dots fill in one by one instead of
+   * appearing all at once at the end. When nothing is running, or the running
+   * scan is measuring a different title, the stored scan is used — which
+   * `providers.outcomes` has already discarded if it aged out.
+   */
+  const verdicts = $derived<Record<string, ProbeVerdict>>(
+    scan.matches(media) ? scan.verdicts : (sourceState.scan?.verdicts ?? {}),
+  )
+
+  /** True while a scan of the title this picker is showing is running. */
+  const scanning = $derived(scan.running && scan.matches(media))
 
   let trigger = $state<HTMLButtonElement | null>(null)
   /**
@@ -94,13 +134,47 @@
     selected ? (enabled.find((p) => p.id === selected)?.name ?? 'Automatic') : 'Automatic',
   )
 
-  /** Colour and tooltip, kept together so they cannot drift apart. */
-  const OUTCOME_META: Record<TitleOutcome, { colour: string; title: string }> = {
-    worked: { colour: 'var(--success)', title: 'Has played this title for you' },
-    failed: { colour: 'var(--danger)', title: 'Tried, and could not play this title' },
+  const RESUME_TITLE = 'The source this title was last streamed on'
+
+  /** This document has the token sheet, so tones resolve to custom properties. */
+  const TONE: Record<'good' | 'warn' | 'bad', string> = {
+    good: 'var(--success)',
+    warn: 'var(--warning)',
+    bad: 'var(--danger)',
   }
 
-  const RESUME_TITLE = 'The source this title was last streamed on'
+  /**
+   * How far the running scan has got, as a sentence.
+   *
+   * A bare spinner for sixty seconds is indistinguishable from a hang, and this
+   * feature's entire pitch is that it saves the user from waiting through
+   * providers one at a time — so it has to be visibly doing that.
+   */
+  const scanLabel = $derived.by(() => {
+    if (!scanning) return null
+    const of = scan.total > 0 ? ` of ${scan.total}` : ''
+    return scan.current ? `Testing ${scan.current} (${scan.done + 1}${of})` : 'Starting…'
+  })
+
+  /** How many sources the last scan found streaming, once it has finished. */
+  const scanSummary = $derived.by(() => {
+    if (scanning || !scan.matches(media)) return null
+    const settled = Object.keys(scan.verdicts).length
+    if (settled === 0) return null
+    const working = Object.values(scan.verdicts).filter((v) => v === 'stream').length
+    const stopped = scan.cancelled ? ' (stopped)' : ''
+    return `${working} of ${settled} sources streaming${stopped}`
+  })
+
+  async function runScan(): Promise<void> {
+    if (scanning) {
+      await scan.cancel()
+      return
+    }
+    await scan.start(media, episode)
+    // Re-read so the stored scan and the outcome dots come from one moment.
+    sourceState = await window.wta.providers.outcomes(media)
+  }
 
   /**
    * Re-read every time the menu opens.
@@ -167,7 +241,8 @@
 
       {#each enabled as provider (provider.id)}
         {@const resume = provider.id === sourceState.lastUsed}
-        {@const outcome = sourceState.outcomes[provider.id]}
+        {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
+        {@const testing = scanning && scan.current === provider.name}
         <button
           class="item"
           class:active={selected === provider.id}
@@ -180,26 +255,50 @@
           -->
           {#if resume}
             <span class="dot" style:background="var(--resume)" title={RESUME_TITLE}></span>
-          {:else if outcome}
-            <span
-              class="dot"
-              style:background={OUTCOME_META[outcome].colour}
-              title={OUTCOME_META[outcome].title}
-            ></span>
+          {:else if dot.tone}
+            <span class="dot" style:background={TONE[dot.tone]} title={dot.hint}></span>
           {:else}
-            <span class="dot none" title="Not tried for this title yet"></span>
+            <span class="dot none" title={dot.hint}></span>
           {/if}
           <span class="name">{provider.name}</span>
           {#if resume}
             <span class="hint resume">resume</span>
-          {:else if outcome === 'failed'}
-            <span class="hint bad">no stream</span>
+          {:else if testing}
+            <!-- The one being measured right now, so the list shows progress
+                 moving down it rather than only a counter changing. -->
+            <span class="hint testing">testing…</span>
+          {:else if dot.label}
+            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}</span>
           {/if}
         </button>
       {/each}
 
       {#if enabled.length === 0}
         <p class="empty">No providers enabled. Turn one on in the Providers panel.</p>
+      {:else}
+        <div class="divider"></div>
+        <!--
+          The button that fills the dots in.
+          
+          At the foot of the menu rather than the head: the list is what the
+          user came for, and a title that has already been scanned needs this
+          control less than it needs the answer.
+        -->
+        <button class="scan" class:running={scanning} onclick={runScan}>
+          <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+          {#if scanLabel}
+            <span class="hint">{scanLabel}</span>
+          {:else if scanSummary}
+            <span class="hint">{scanSummary}</span>
+          {:else}
+            <span class="hint">About a minute</span>
+          {/if}
+        </button>
+        {#if scanning && scan.total > 0}
+          <div class="progress" role="progressbar" aria-valuenow={scan.done} aria-valuemin={0} aria-valuemax={scan.total}>
+            <div class="bar" style:width="{(scan.done / scan.total) * 100}%"></div>
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -308,6 +407,61 @@
 
   .hint.resume {
     color: var(--resume);
+  }
+
+  .hint.testing {
+    color: var(--accent);
+  }
+
+  /*
+    Deliberately shaped like an `.item` rather than like a primary button.
+    It sits in a list of sources and does something *to* that list, so making
+    it the loudest thing in the menu would pull the eye away from the choice
+    the user opened the menu to make.
+  */
+  .scan {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .scan:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  .scan.running {
+    color: var(--accent);
+  }
+
+  .scan .name {
+    font-weight: 500;
+  }
+
+  .progress {
+    height: 2px;
+    margin: 0 var(--space-3) var(--space-2);
+    overflow: hidden;
+    border-radius: 1px;
+    background: var(--border-subtle);
+  }
+
+  .bar {
+    height: 100%;
+    background: var(--accent);
+    /* Providers settle at wildly different speeds, so an un-eased bar jumps.
+       The transition is what makes it read as progress rather than as glitching. */
+    transition: width 240ms ease;
   }
 
   .divider {

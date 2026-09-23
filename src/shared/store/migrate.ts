@@ -17,7 +17,7 @@
  *   metadata that makes two copies mergeable. See `document.ts`.
  */
 
-import type { StoreShape } from '../types'
+import type { ProbeVerdict, ProviderScan, StoreShape } from '../types'
 import { SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
 import { DEFAULT_SETTINGS, emptyDocument } from './core'
@@ -155,6 +155,8 @@ function fromTyped(
   // startup, so one place decides what "no order yet" means.
   doc.providerOrder = stringList(raw.providerOrder)
 
+  doc.providerScans = providerScans(raw.providerScans)
+
   if (raw.preferenceUpdatedAt && typeof raw.preferenceUpdatedAt === 'object') {
     doc.preferenceUpdatedAt = { ...(raw.preferenceUpdatedAt as Record<string, number>) }
   }
@@ -221,6 +223,41 @@ function fromTyped(
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** The three verdicts a scan can record. Anything else is not from this app. */
+const PROBE_VERDICTS = new Set<ProbeVerdict>(['stream', 'unsure', 'dead'])
+
+/**
+ * Read back stored provider scans, discarding anything malformed.
+ *
+ * Validated field by field rather than cast, for the reason this whole file
+ * exists: the document is user-writable JSON on disk, and a scan with a
+ * `verdicts` value of `"green"` would reach `providerRank`, match none of its
+ * cases and quietly sort that provider into the "nothing known" tier — a wrong
+ * answer that nothing would report.
+ *
+ * Nothing here is *migrated*, because the field has only ever had one shape. A
+ * document written before it existed simply has none, and an empty list is the
+ * honest reading of that: this install has scanned nothing yet.
+ */
+function providerScans(value: unknown): ProviderScan[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((entry): ProviderScan[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const scan = entry as Record<string, unknown>
+    const at = timestamp(scan.at)
+    if (typeof scan.titleKey !== 'string' || at === null) return []
+
+    const verdicts: Record<string, ProbeVerdict> = {}
+    if (scan.verdicts && typeof scan.verdicts === 'object') {
+      for (const [id, verdict] of Object.entries(scan.verdicts as Record<string, unknown>)) {
+        if (PROBE_VERDICTS.has(verdict as ProbeVerdict)) verdicts[id] = verdict as ProbeVerdict
+      }
+    }
+    return [{ titleKey: scan.titleKey, at, verdicts }]
+  })
 }
 
 /** Version 0 — the extension's `vidsrc_*` keys. */

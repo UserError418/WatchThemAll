@@ -15,11 +15,23 @@ import type {
   MediaDetail,
   MediaSummary,
   MediaType,
+  ProbeVerdict,
   Provider,
+  ProviderScan,
   Season,
   StoreShape,
   StorePatch,
 } from './types'
+
+/**
+ * Re-exported so the contract reads as one document.
+ *
+ * Both are *stored* types, so they are defined in `types.ts` beside the store
+ * shape that holds them — but every consumer meets them here, on
+ * `TitleProviderState` and `ProviderScanProgress`, and importing the same
+ * concept from two files is how a reader concludes there are two concepts.
+ */
+export type { ProbeVerdict, ProviderScan }
 import type { SyncStatus } from './sync/types'
 
 /** Invoke channels: renderer → main, with a reply. */
@@ -49,6 +61,17 @@ export const CH = {
    * the only question the user has: did this source ever play *this* show.
    */
   providersOutcomes: 'providers:outcomes',
+  /**
+   * Try every enabled provider for one title and report which ones stream.
+   *
+   * The outcome log answers "what has played", which is blank for a title
+   * nobody has watched yet — precisely when the user most needs to know which
+   * source to pick. This measures it instead of waiting for them to find out by
+   * hand. Long-running: progress arrives on `providerScan`, not in the reply.
+   */
+  providersScan: 'providers:scan',
+  /** Stop a scan in flight. Whatever it settled before stopping is kept. */
+  providersScanCancel: 'providers:scan-cancel',
   /** Ask main what to recommend. See TailoredRequest. */
   tmdbTailored: 'tmdb:tailored',
   playOpen: 'play:open',
@@ -225,6 +248,17 @@ export const EV = {
    * honest thing it could say is "wait".
    */
   malProgress: 'evt:mal-progress',
+
+  /**
+   * How far a provider scan has got, and what it has decided so far.
+   *
+   * Same reasoning as `malProgress`, with a sharper edge: a scan loads a dozen
+   * third-party players in turn and takes the better part of a minute, and the
+   * whole point of the feature is to replace the user doing that by hand. A
+   * spinner that reports nothing until the end replaces visible waiting with
+   * invisible waiting, which is not the improvement being sold.
+   */
+  providerScan: 'evt:provider-scan',
 } as const
 
 /**
@@ -358,6 +392,29 @@ export interface TitleRef {
 export type TitleOutcome = 'failed' | 'worked'
 
 /**
+ * A scan in flight, pushed to the renderer as each provider resolves.
+ *
+ * Carries the verdicts so far rather than only a count, so the dots fill in one
+ * by one instead of appearing all at once at the end. A scan of a dozen
+ * providers takes the better part of a minute, and a progress bar that conveys
+ * nothing for fifty seconds reads as a hang.
+ */
+export interface ProviderScanProgress {
+  titleKey: string
+  /** What is being measured right now, for the status line. */
+  providerId: string | null
+  providerName: string | null
+  done: number
+  total: number
+  /** Verdicts settled so far. */
+  verdicts: Record<string, ProbeVerdict>
+  /** True once every provider has resolved or the user cancelled. */
+  finished: boolean
+  /** Set when the user stopped it, so the UI can say so rather than claim a result. */
+  cancelled: boolean
+}
+
+/**
  * Everything the source pickers need to draw one title's provider list.
  *
  * `lastUsed` travels with the outcomes rather than in its own round trip
@@ -370,6 +427,16 @@ export interface TitleProviderState {
   outcomes: Record<string, TitleOutcome>
   /** The provider that most recently *streamed* this title, if any. */
   lastUsed: string | null
+  /**
+   * The most recent scan of this title, if one is recent enough to believe.
+   *
+   * Travels with the outcomes for the same reason `lastUsed` does: the dots are
+   * drawn from both, and fetching them separately would let the two describe
+   * different instants. Null when the title has never been scanned, or when the
+   * last scan has aged past `SCAN_TTL_MS` — an expired measurement is discarded
+   * rather than shown faded, because the user cannot act on the difference.
+   */
+  scan: ProviderScan | null
 }
 
 /* ── MyAnimeList import ─────────────────────────────────────────────────── */
@@ -562,6 +629,21 @@ export interface WtaApi {
      * it. See `TitleProviderState`.
      */
     outcomes(media: TitleRef): Promise<TitleProviderState>
+    /**
+     * Measure every enabled provider against this title.
+     *
+     * Resolves with the finished scan, or with what had settled when the user
+     * cancelled. Progress arrives on the `providerScan` event meanwhile — this
+     * takes tens of seconds, and a UI with nothing to show until the end reads
+     * as a hang.
+     *
+     * Only one scan runs at a time. Calling this while one is in flight cancels
+     * the first: two scans would compete for the bandwidth each is measuring
+     * and condemn providers that were merely starved.
+     */
+    scan(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<ProviderScan>
+    /** Stop the scan in flight. Verdicts already settled are kept. */
+    cancelScan(): Promise<void>
   }
   releases: {
     /** Run a release sweep now. Resolves once every tracker has been checked. */
@@ -718,6 +800,15 @@ export interface WtaApi {
     /** True while the pointer is near the top edge of the video. */
     playerPointerTop(cb: (nearTop: boolean) => void): () => void
     /**
+     * A provider scan, as each source resolves.
+     *
+     * Fires once per settled provider and once more when the run finishes, so
+     * the dots fill in progressively. Subscribed by both the detail view and
+     * the player chrome — either can start a scan and both draw the result, and
+     * an event is what keeps them agreeing without either owning the state.
+     */
+    providerScan(cb: (progress: ProviderScanProgress) => void): () => void
+    /**
      * Sync state, whenever it changes.
      *
      * Pushed rather than polled because the interesting moments — a code
@@ -758,6 +849,17 @@ export interface WtaChromeApi {
    * sources have worked.
    */
   outcomes(media: TitleRef): Promise<TitleProviderState>
+  /**
+   * Test every enabled source against what is playing.
+   *
+   * Offered here as well as in the detail view, and this is the surface that
+   * needs it most: the user opens this list precisely when a source has just
+   * disappointed them, and without a scan they pick the next one by guessing.
+   */
+  scan(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<ProviderScan>
+  cancelScan(): Promise<void>
+  /** Progress of a scan, wherever it was started from. */
+  onProviderScan(cb: (progress: ProviderScanProgress) => void): () => void
   dismissSuggestion(): Promise<void>
   /** Jump to this position, in seconds. Used only by the skip-intro button. */
   skipTo(seconds: number): void

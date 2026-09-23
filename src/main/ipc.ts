@@ -21,6 +21,7 @@ import type {
   PlayRequest,
   RowRequest,
   TailoredRequest,
+  ProviderScan,
   TitleProviderState,
   TitleRef,
 } from '@shared/ipc'
@@ -33,6 +34,8 @@ import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
 import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
+import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
+import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
@@ -126,6 +129,14 @@ export interface IpcDeps {
    * has to keep running for the remote's next-episode button to work at all.
    */
   setPlayerMuted: (muted: boolean) => void
+  /**
+   * Measure every enabled provider against one title.
+   *
+   * Injected for the same reason as `sync` and `cast`: it owns hidden browser
+   * windows and their lifetime, and exactly one place should decide when those
+   * exist.
+   */
+  scan: ScanService
 }
 
 /**
@@ -180,13 +191,59 @@ export function registerIpc(deps: IpcDeps): void {
    * exactly when the user opens the picker to see what just happened.
    */
   ipcMain.handle(CH.providersOutcomes, (_e, media: TitleRef): TitleProviderState => {
-    const { streamOutcomes } = store.read()
+    const { streamOutcomes, providerScans } = store.read()
     const key = titleKey(media)
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
+      scan: freshScan(providerScans, key),
     }
   })
+
+  /**
+   * Try every enabled provider and report which ones actually stream.
+   *
+   * The reply is the finished scan; the dots fill in from the `providerScan`
+   * event as each source settles, because this takes tens of seconds and a UI
+   * that says nothing until the end is indistinguishable from a hang.
+   *
+   * The result is stored even when the user cancels. A partial scan is not a
+   * failed one — the providers it reached were genuinely measured, and throwing
+   * that away would mean a cancelled run cost the user a minute for nothing.
+   */
+  ipcMain.handle(
+    CH.providersScan,
+    async (
+      _e,
+      media: TitleRef,
+      episode: { season: number; episode: number } | null,
+    ): Promise<ProviderScan> => {
+      const key = titleKey(media)
+      // Never probe a TV title without an episode — see `scanEpisode`.
+      const target = scanEpisode(media.type, episode)
+      const scan = await deps.scan.run(key, {
+        imdbId: media.imdbId ?? '',
+        tmdbId: media.tmdbId,
+        type: media.type,
+        season: target?.season,
+        episode: target?.episode,
+        label: key,
+        // Only `runtimecheck` reads this, and the network probe does not run it
+        // — a scan asks whether a stream exists, not whether it is the right
+        // programme. Inventing a number here would imply a check that is not
+        // happening.
+        runtimeMinutes: null,
+      })
+
+      // Pruned on the way in rather than on load: this is the only moment the
+      // list grows, so it is the only moment it can need trimming, and doing it
+      // here keeps the expiry rule beside the code that depends on it.
+      store.setProviderScans(recordScan(pruneScans(store.read().providerScans), scan))
+      return scan
+    },
+  )
+
+  ipcMain.handle(CH.providersScanCancel, () => deps.scan.cancel())
   ipcMain.handle(CH.dataDir, () => store.dir)
 
   /**

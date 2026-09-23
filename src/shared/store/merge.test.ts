@@ -41,6 +41,7 @@ function emptyDoc(deviceId: string): StoreDocument {
     knownProviderIds: [],
     favouriteProviderIds: [],
     providerOrder: [],
+    providerScans: [],
     settings: { ...DEFAULT_SETTINGS },
   }
 }

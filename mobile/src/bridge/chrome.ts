@@ -49,6 +49,8 @@ import type {
   PlayerContext,
   PlayerState,
   PlayerSuggestion,
+  ProviderScan,
+  ProviderScanProgress,
   SkipOffer,
   TitleProviderState,
   TitleRef,
@@ -68,6 +70,16 @@ export interface ChromeDeps {
   reload(): Promise<void>
   season(tmdbId: number, season: number): Promise<Season | null>
   outcomes(media: TitleRef): Promise<TitleProviderState>
+  /**
+   * Test every enabled source against what is playing.
+   *
+   * Passed through rather than reimplemented: it is the same runner the detail
+   * view's picker drives, so a scan started from either surface is one scan,
+   * and both draw the same dots from it.
+   */
+  scan(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<ProviderScan>
+  cancelScan(): Promise<void>
+  subscribeScan(cb: (progress: ProviderScanProgress) => void): () => void
   /** The cast controls, already built — see `createCastBridge`. */
   cast: WtaChromeApi['cast']
 }
@@ -95,6 +107,9 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     reload: () => deps.reload(),
     season: (tmdbId, season) => deps.season(tmdbId, season),
     outcomes: (media) => deps.outcomes(media),
+    scan: (media, episode) => deps.scan(media, episode),
+    cancelScan: () => deps.cancelScan(),
+    onProviderScan: (cb) => deps.subscribeScan(cb),
     cast: deps.cast,
 
     /** Nothing raises a suggestion here, so there is never one to dismiss. */

@@ -29,6 +29,7 @@ import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
 import { renderTemplate } from './providers'
 import { isSameOrigin } from './sameorigin'
+import { isMediaRequest } from './mediarequest'
 
 /** What the probe concluded, worst last so a sort puts good providers first. */
 export type StreamVerdict =
@@ -70,37 +71,14 @@ export interface StreamProbeResult {
 }
 
 /**
- * What counts as media.
+ * Recognising a stream now lives in `mediarequest.ts`, which has no imports.
  *
- * HLS manifests and segments cover essentially every embed provider in this
- * space; the MP4/WebM cases are for the few that serve progressive files. The
- * `resourceType === 'media'` check catches anything Chromium itself recognises
- * as a video or audio load, which is the broadest signal available and does not
- * depend on the URL looking a particular way.
+ * It was defined here and could not be shared, because this file imports
+ * Electron — so the phone and the Python probe each grew their own copy and
+ * the copies drifted. Re-exported rather than merely imported, so the existing
+ * callers that reach for it here keep working.
  */
-const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm)(\?|$)|\/segment|\/manifest/i
-
-const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|video\/|audio\/)/i
-
-/**
- * Is this request the media, by any of the three signals available?
- *
- * Exported because `streamextract` asks the same question and had its own
- * answer, which was quietly weaker: it tested the URL and Chromium's
- * `resourceType` but never the response's `Content-Type`. That is the signal
- * that matters most in practice — an HLS manifest is fetched by hls.js over
- * XHR, so Chromium calls it `xhr` rather than `media`, and providers routinely
- * serve it from an extensionless proxy path so the URL says nothing either.
- * The result was two measurements of the same thing disagreeing: this file
- * reported Videasy and ScreenScape streaming ten times out of ten while the
- * extractor reported no media URL at all.
- *
- * `mime` is empty at request time. A caller that only has the request must
- * expect misses; ask on the response.
- */
-export function isMediaRequest(url: string, resourceType: string, mime: string): boolean {
-  return resourceType === 'media' || MEDIA_PATTERN.test(url) || MEDIA_MIME.test(mime)
-}
+export { isMediaRequest } from './mediarequest'
 
 /** Words a challenge or block page puts in its title. */
 const BLOCK_PATTERN = /just a moment|attention required|access denied|verify you are human|cf-browser/i

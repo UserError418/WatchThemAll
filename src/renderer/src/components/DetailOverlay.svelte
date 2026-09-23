@@ -503,9 +503,19 @@
             <button class="primary" onclick={resume} disabled={!detail}>
               ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
             </button>
+            <!--
+              `episode` is the one the Play button would start, so a scan
+              measures what the user is about to watch. Coverage is
+              episode-level — a provider carrying season one and not season four
+              is the ordinary case — and a TV request with no episode renders no
+              URL at all, which would mark every source dead.
+            -->
             <SourcePicker
               selected={chosenProvider}
               media={{ type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }}
+              episode={subject.type === 'movie'
+                ? null
+                : { season: resumeAt.season, episode: resumeAt.episode }}
               onselect={chooseProvider}
             />
             <button

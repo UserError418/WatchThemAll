@@ -1,0 +1,232 @@
+/**
+ * The scan's pure half: what a verdict means for the order Automatic walks.
+ *
+ * Worth testing heavily for the same reason `outcomes.test.ts` is — being wrong
+ * here is silent. A provider sorted into the wrong tier does not throw; the app
+ * simply plays the second-best source, or spends twenty seconds on one that was
+ * measured dead a minute ago, and nothing anywhere says so.
+ */
+
+import { describe, expect, it } from 'vitest'
+import type { Provider } from '@shared/types'
+import type { ProviderScan } from '@shared/ipc'
+import {
+  MAX_SCANS,
+  SCAN_TTL_MS,
+  freshScan,
+  providerRank,
+  pruneScans,
+  recordScan,
+  scanAwareOrder,
+  scanEpisode,
+  scanProgress,
+} from './providerscan'
+
+const provider = (id: string): Provider => ({
+  id,
+  name: id,
+  rootUrl: `https://${id}.test/`,
+  tv: { urlTemplate: '{rootUrl}tv/{imdb}/{season}/{episode}' },
+  movie: { urlTemplate: '{rootUrl}movie/{imdb}' },
+})
+
+const scanOf = (verdicts: ProviderScan['verdicts'], at = Date.now()): ProviderScan => ({
+  titleKey: 'tv:tt1',
+  at,
+  verdicts,
+})
+
+describe('providerRank', () => {
+  it('puts a just-measured stream above a provider that merely played before', () => {
+    expect(providerRank(undefined, 'stream')).toBeLessThan(providerRank('worked', undefined))
+  })
+
+  it('puts a just-measured dead provider below one that failed historically', () => {
+    // The fresher fact wins in both directions, which is the whole reason a
+    // scan is worth running on a title the user has already tried.
+    expect(providerRank('failed', undefined)).toBeLessThan(providerRank(undefined, 'dead'))
+  })
+
+  it('ranks "alive but no stream" above never-tried, and below history of working', () => {
+    expect(providerRank('worked', undefined)).toBeLessThan(providerRank(undefined, 'unsure'))
+    expect(providerRank(undefined, 'unsure')).toBeLessThan(providerRank(undefined, undefined))
+  })
+
+  it('treats no evidence at all as better than a recorded failure', () => {
+    expect(providerRank(undefined, undefined)).toBeLessThan(providerRank('failed', undefined))
+  })
+
+  it('lets a fresh stream verdict rescue a provider that failed before', () => {
+    // The case the feature exists for: a provider that was broken last week and
+    // works today must not stay buried under its own history.
+    expect(providerRank('failed', 'stream')).toBe(providerRank(undefined, 'stream'))
+  })
+})
+
+describe('scanAwareOrder', () => {
+  const providers = [provider('a'), provider('b'), provider('c')]
+
+  it('degrades to the user order when there is no scan', () => {
+    const order = scanAwareOrder(providers, {}, { order: ['c', 'b', 'a'] })
+    expect(order.map((p) => p.id)).toEqual(['c', 'b', 'a'])
+  })
+
+  it('promotes the measured-working source over the user order', () => {
+    const order = scanAwareOrder(
+      providers,
+      {},
+      { order: ['a', 'b', 'c'], scan: scanOf({ a: 'dead', b: 'unsure', c: 'stream' }) },
+    )
+    expect(order.map((p) => p.id)).toEqual(['c', 'b', 'a'])
+  })
+
+  it('keeps the user order within a tier', () => {
+    const order = scanAwareOrder(
+      providers,
+      {},
+      { order: ['c', 'b', 'a'], scan: scanOf({ a: 'stream', b: 'stream', c: 'stream' }) },
+    )
+    expect(order.map((p) => p.id)).toEqual(['c', 'b', 'a'])
+  })
+
+  it('leads a tier with favourites but never lifts one out of its tier', () => {
+    // A starred provider measured dead must still lose to one measured working,
+    // or the star silently becomes an instruction to play something broken.
+    const order = scanAwareOrder(
+      providers,
+      {},
+      {
+        order: ['a', 'b', 'c'],
+        favouriteIds: ['a'],
+        scan: scanOf({ a: 'dead', b: 'stream', c: 'stream' }),
+      },
+    )
+    expect(order.map((p) => p.id)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('puts a favourite first among equals', () => {
+    const order = scanAwareOrder(
+      providers,
+      {},
+      { order: ['a', 'b', 'c'], favouriteIds: ['c'], scan: scanOf({}) },
+    )
+    expect(order.map((p) => p.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('never drops a provider, however bad its verdict', () => {
+    // Demote, never filter: if every measured source fails right now, Automatic
+    // still has the rest to walk rather than a dead end.
+    const order = scanAwareOrder(
+      providers,
+      {},
+      { order: ['a', 'b', 'c'], scan: scanOf({ a: 'dead', b: 'dead', c: 'dead' }) },
+    )
+    expect(order.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('is stable for providers the user has never placed', () => {
+    const order = scanAwareOrder(providers, {}, { order: [] })
+    expect(order.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('combines history and measurement across tiers', () => {
+    const order = scanAwareOrder(
+      [provider('played'), provider('measured'), provider('unknown'), provider('broken')],
+      { played: 'worked', broken: 'failed' },
+      {
+        order: ['played', 'measured', 'unknown', 'broken'],
+        scan: scanOf({ measured: 'stream', broken: 'dead' }),
+      },
+    )
+    expect(order.map((p) => p.id)).toEqual(['measured', 'played', 'unknown', 'broken'])
+  })
+})
+
+describe('scanEpisode', () => {
+  it('leaves a movie without an episode', () => {
+    expect(scanEpisode('movie', null)).toBeNull()
+  })
+
+  it('passes a real episode through', () => {
+    expect(scanEpisode('tv', { season: 4, episode: 7 })).toEqual({ season: 4, episode: 7 })
+  })
+
+  it('falls back to the first episode when a series is given none', () => {
+    // The bug this exists for: a TV request with no episode renders no URL at
+    // all, so every provider came back `no-template` and the user was shown a
+    // full row of red dots for sources that were never contacted.
+    expect(scanEpisode('tv', null)).toEqual({ season: 1, episode: 1 })
+    expect(scanEpisode('tv', undefined)).toEqual({ season: 1, episode: 1 })
+  })
+
+  it('rejects a nonsense position rather than probing season zero', () => {
+    expect(scanEpisode('tv', { season: 0, episode: 0 })).toEqual({ season: 1, episode: 1 })
+  })
+})
+
+describe('freshScan', () => {
+  const now = 1_700_000_000_000
+
+  it('returns a scan taken within the window', () => {
+    const scans = [scanOf({ a: 'stream' }, now - 60_000)]
+    expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'stream' })
+  })
+
+  it('discards one that has aged out rather than showing it faded', () => {
+    // An expired measurement describes a service that may no longer exist, and
+    // the user cannot tell a stale dot from a current one.
+    const scans = [scanOf({ a: 'stream' }, now - SCAN_TTL_MS - 1)]
+    expect(freshScan(scans, 'tv:tt1', now)).toBeNull()
+  })
+
+  it('returns null for a title that has never been scanned', () => {
+    expect(freshScan([scanOf({}, now)], 'movie:tt9', now)).toBeNull()
+  })
+})
+
+describe('recordScan', () => {
+  it('replaces the previous scan of the same title rather than merging it', () => {
+    // A merged row would show this morning's "working" beside just now's
+    // "dead", a state that was never true at any single moment.
+    const first = { titleKey: 'tv:tt1', at: 1, verdicts: { a: 'stream' as const } }
+    const second = { titleKey: 'tv:tt1', at: 2, verdicts: { b: 'dead' as const } }
+    expect(recordScan([first], second)).toEqual([second])
+  })
+
+  it('keeps scans of other titles', () => {
+    const other = { titleKey: 'movie:tt2', at: 1, verdicts: {} }
+    const next = recordScan([other], { titleKey: 'tv:tt1', at: 2, verdicts: {} })
+    expect(next.map((s) => s.titleKey)).toEqual(['movie:tt2', 'tv:tt1'])
+  })
+
+  it('drops the oldest once full', () => {
+    let scans: ProviderScan[] = []
+    for (let i = 0; i < MAX_SCANS + 5; i += 1) {
+      scans = recordScan(scans, { titleKey: `tv:tt${i}`, at: i, verdicts: {} })
+    }
+    expect(scans).toHaveLength(MAX_SCANS)
+    expect(scans[0]?.titleKey).toBe('tv:tt5')
+  })
+})
+
+describe('pruneScans', () => {
+  it('keeps the fresh and drops the expired', () => {
+    const now = 1_700_000_000_000
+    const scans = [
+      { titleKey: 'fresh', at: now - 1_000, verdicts: {} },
+      { titleKey: 'stale', at: now - SCAN_TTL_MS - 1, verdicts: {} },
+    ]
+    expect(pruneScans(scans, now).map((s) => s.titleKey)).toEqual(['fresh'])
+  })
+})
+
+describe('scanProgress', () => {
+  it('counts settled providers and the ones that streamed', () => {
+    const progress = scanProgress({ a: 'stream', b: 'dead', c: 'stream' }, 5)
+    expect(progress).toEqual({ done: 3, total: 5, working: 2 })
+  })
+
+  it('reports nothing done for a scan that has not started', () => {
+    expect(scanProgress({}, 4)).toEqual({ done: 0, total: 4, working: 0 })
+  })
+})

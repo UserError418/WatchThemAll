@@ -18,6 +18,8 @@ import type {
   PlayerContext,
   PlayerSuggestion,
   SkipOffer,
+  ProviderScan,
+  ProviderScanProgress,
   TitleProviderState,
   TitleRef,
   WtaChromeApi,
@@ -101,6 +103,14 @@ const api: WtaChromeApi = {
    */
   outcomes: (media: TitleRef): Promise<TitleProviderState> =>
     ipcRenderer.invoke(CH.providersOutcomes, media) as Promise<TitleProviderState>,
+  scan: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
+    ipcRenderer.invoke(CH.providersScan, media, episode ?? null) as Promise<ProviderScan>,
+  cancelScan: (): Promise<void> => ipcRenderer.invoke(CH.providersScanCancel) as Promise<void>,
+  onProviderScan: (cb: (progress: ProviderScanProgress) => void): (() => void) => {
+    const listener = (_e: unknown, progress: ProviderScanProgress): void => cb(progress)
+    ipcRenderer.on(EV.providerScan, listener)
+    return () => ipcRenderer.removeListener(EV.providerScan, listener)
+  },
 
   /** Stop the countdown and stay on the current source. */
   dismissSuggestion: (): Promise<void> =>

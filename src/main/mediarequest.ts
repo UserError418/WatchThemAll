@@ -1,0 +1,53 @@
+/**
+ * Is this request the stream?
+ *
+ * One definition, because there are now four places that ask and every copy so
+ * far has drifted. `streamprobe.ts` owned it and could not share it — that file
+ * imports Electron, so neither the phone nor a plain Node script can reach it —
+ * and the copies that grew up around that are a matter of record:
+ *
+ *   - `streamextract.ts` had its own weaker version, which tested the URL and
+ *     Chromium's `resourceType` but never the response's `Content-Type`. The
+ *     result was two measurements of the same thing disagreeing: `streamprobe`
+ *     reported Videasy streaming ten times out of ten while the extractor
+ *     reported no media at all.
+ *   - `scripts/android-provider-probe.py` carries a transcription of these two
+ *     regexes with a comment asking whoever edits one to remember the other.
+ *
+ * So this file has no imports at all, which is the point: the desktop probe,
+ * the phone's scan and anything else that has to recognise a stream can all
+ * take the same answer from here.
+ *
+ * ## The three signals, and why none of them is enough alone
+ *
+ * `resourceType === 'media'` is whatever Chromium itself recognises as a video
+ * or audio load. Broadest and cheapest, and it misses the most important case:
+ * an HLS manifest fetched by hls.js over XHR is typed `xhr`, not `media`.
+ *
+ * The URL pattern catches those — until a provider serves its manifest from an
+ * extensionless proxy path, which several do (`…/pl/H4sIAAAA…`,
+ * `…/v1/proxy?data=…`). Then the URL says nothing.
+ *
+ * The MIME type is the one that settles those cases, and it is only available
+ * on the *response*. A caller that has only the request must expect misses.
+ */
+
+/**
+ * HLS and DASH cover essentially every embed provider in this space; the
+ * MP4/WebM cases are the few that serve progressive files. `/segment` and
+ * `/manifest` catch the extensionless proxy paths that name themselves.
+ */
+export const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm)(\?|$)|\/segment|\/manifest/i
+
+export const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|video\/|audio\/)/i
+
+/**
+ * Is this request the media, by any of the three signals available?
+ *
+ * `mime` is empty at request time, and `resourceType` is unavailable anywhere
+ * but Electron — both are optional so a caller holding only a URL, which is all
+ * the Android capture buffer records, can still ask.
+ */
+export function isMediaRequest(url: string, resourceType = '', mime = ''): boolean {
+  return resourceType === 'media' || MEDIA_PATTERN.test(url) || MEDIA_MIME.test(mime)
+}

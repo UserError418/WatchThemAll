@@ -493,6 +493,21 @@ export interface StoreShape {
    * they had put it.
    */
   providerOrder: string[]
+  /**
+   * The most recent background scan of each title, newest last.
+   *
+   * Deliberately **not** a synced collection, and that is the whole design
+   * decision. A scan measures what this device's network could reach at one
+   * moment; it is not a fact about the title the way a watchlist entry or a
+   * recorded play is. Syncing it would let a phone on a hotel wifi mark six
+   * providers dead on the desktop at home, which is exactly backwards — and
+   * because `mergeDocuments` spreads `...local` first, a field that is in
+   * neither `COLLECTIONS` nor `PREFERENCE_KEYS` survives a merge untouched
+   * rather than being dropped.
+   *
+   * Pruned on load: see `SCAN_TTL_MS`.
+   */
+  providerScans: ProviderScan[]
   settings: Settings
 }
 
@@ -557,6 +572,43 @@ export interface StreamOutcomeRecord {
   outcome: 'stream' | 'failed'
   /** Epoch ms. */
   at: number
+}
+
+/**
+ * What a background scan measured for one provider on one title.
+ *
+ * Distinct from `TitleOutcome` because the two are different kinds of claim and
+ * collapsing them would lose the distinction that makes the feature safe.
+ * An outcome is *history* — this source played this show for you — and it never
+ * expires. A verdict is a *measurement*, taken at a known moment on this
+ * device's network, and it goes stale in hours.
+ *
+ * Three values rather than two, because the errors are not symmetric. A source
+ * marked dead is one the user will never pick, so a false negative silently
+ * removes a working provider, while a false positive costs one click. Probes do
+ * produce false negatives — a bot challenge, a slow CDN, a backend mid-restart
+ * — so "alive but nothing streamed" gets its own amber verdict meaning *try
+ * this by hand* rather than being rounded down to red.
+ *
+ * Absent is the meaningful fourth state, as it is for outcomes: never scanned
+ * is not the same as scanned and found wanting.
+ */
+export type ProbeVerdict =
+  /** Media was actually fetched. The only signal a loading-but-dead page cannot fake. */
+  | 'stream'
+  /** Reachable, but no media followed within the budget. Worth a manual try. */
+  | 'unsure'
+  /** No template, no route to the host, or a page that made no real requests. */
+  | 'dead'
+
+/** One completed scan: every enabled provider, measured at one moment. */
+export interface ProviderScan {
+  /** `tv:tt0903747` or `movie:tt0137523` — `outcomes.titleKey`. */
+  titleKey: string
+  /** Epoch ms the scan finished. Staleness is judged from this. */
+  at: number
+  /** Keyed by provider id. Absent means the scan never reached it. */
+  verdicts: Record<string, ProbeVerdict>
 }
 
 export interface Settings {

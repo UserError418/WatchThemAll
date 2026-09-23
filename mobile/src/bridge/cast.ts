@@ -36,7 +36,7 @@ import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle, isPlaylist, isWholeVideoFile } from '@main/hlsrewrite'
 
 /** One request the player made, as the native side recorded it. */
-interface Candidate {
+export interface Candidate {
   url: string
   headers: Record<string, string>
   atMs: number
@@ -86,6 +86,31 @@ interface CastNative {
 }
 
 const Cast = registerPlugin<CastNative>('Cast')
+
+/**
+ * The native media-capture buffer, shared with the provider scan.
+ *
+ * `MediaCapture` on the Java side records every request that looks like it
+ * could be a stream, from every frame including a cross-origin one, because
+ * `shouldInterceptRequest` is the only hook a WebView offers. Casting reads it
+ * to find a URL to hand the television; the scan reads it to answer a
+ * different question — did *anything* stream at all.
+ *
+ * Exported rather than re-registered in `scan.ts` so there is one definition of
+ * the native interface. Two `registerPlugin` calls would work and would be two
+ * copies of a contract with Java to keep in step.
+ *
+ * **It is one buffer with no frame attribution**, which is what forces the scan
+ * to be sequential and to stop playback while it runs. See `scan.ts`.
+ */
+export const capture = {
+  async list(): Promise<Candidate[]> {
+    return (await Cast.candidates()).candidates
+  },
+  clear(): Promise<void> {
+    return Cast.clearCandidates()
+  },
+}
 
 /**
  * How much of a candidate to read while deciding what it is.

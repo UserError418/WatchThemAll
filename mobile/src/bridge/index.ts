@@ -44,6 +44,8 @@ import type {
   RowRequest,
   TailoredRequest,
   TailoredRow,
+  ProviderScan,
+  ProviderScanProgress,
   TitleProviderState,
   TitleRef,
   WtaApi,
@@ -62,7 +64,6 @@ import {
 import { buildPlayUrl } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
-  automaticOrder,
   defaultProviderOrder,
   lastWorkingForTitle,
   mediaKey,
@@ -71,6 +72,7 @@ import {
   titleKey,
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
+import { freshScan, pruneScans, recordScan, scanAwareOrder, scanEpisode } from '@main/providerscan'
 import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
@@ -81,6 +83,7 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
+import { createScanRunner } from './scan'
 import { preferencesCatalogStore } from './catalogstore'
 import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
@@ -139,6 +142,7 @@ export async function createBridge(): Promise<WtaApi> {
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
   const playerPointerTop = new Signal<boolean>()
+  const providerScan = new Signal<ProviderScanProgress>()
   const syncStatus = new Signal<SyncStatus>()
 
   /**
@@ -969,12 +973,63 @@ export async function createBridge(): Promise<WtaApi> {
     void CapacitorApp.exitApp()
   })
 
+  /**
+   * Order the enabled providers for one request.
+   *
+   * `scanAwareOrder` rather than `automaticOrder`, matching the desktop: it
+   * degrades to exactly that function when nothing has been scanned, and folds
+   * in the measurement when something has. Both apps must rank identically —
+   * the source picker's dots are drawn from the same ranking, and the renderer
+   * that draws them is shared.
+   */
   const orderedForRequest = (req: PlayRequest): Provider[] => {
-    const { streamOutcomes, favouriteProviderIds } = store.read()
-    return automaticOrder(enabledProviders(), outcomesForTitle(streamOutcomes, titleKey(req)), {
+    const { streamOutcomes, favouriteProviderIds, providerScans } = store.read()
+    const key = titleKey(req)
+    return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
+      scan: freshScan(providerScans, key),
     })
+  }
+
+  /**
+   * Trying every provider, one at a time, with playback stopped.
+   *
+   * Both constraints come from there being a single native capture buffer with
+   * no frame attribution — see `scan.ts`. `suspendPlayback` reuses the
+   * surface's `blank`/`restore`, which casting added for the same reason:
+   * something else needs the network to itself.
+   */
+  const scanRunner = createScanRunner({
+    providers: enabledProviders,
+    suspendPlayback: () => surface.blank(),
+    resumePlayback: () => surface.restore(),
+    onProgress: (payload) => providerScan.emit(payload),
+  })
+
+  /**
+   * Run a scan and write down what it found.
+   *
+   * One function because both the detail view's picker and the player's source
+   * menu start scans, and two copies would be two chances to forget the store
+   * write — which would leave the dots correct until the app restarted.
+   */
+  const runProviderScan = async (
+    media: TitleRef,
+    episode?: { season: number; episode: number } | null,
+  ): Promise<ProviderScan> => {
+    const key = titleKey(media)
+    // Never probe a TV title without an episode — see `scanEpisode`.
+    const target = scanEpisode(media.type, episode)
+    const result = await scanRunner.run(key, {
+      imdbId: media.imdbId,
+      tmdbId: media.tmdbId,
+      type: media.type,
+      season: target?.season ?? null,
+      episode: target?.episode ?? null,
+    })
+    store.setProviderScans(recordScan(pruneScans(store.read().providerScans), result))
+    return result
   }
 
   /**
@@ -995,12 +1050,16 @@ export async function createBridge(): Promise<WtaApi> {
     switchProvider: playerSwitchProvider,
     reload: playerReload,
     season: (tmdbId, season) => tmdb.season(tmdbId, season),
+    scan: (media, episode) => runProviderScan(media, episode),
+    cancelScan: async () => scanRunner.cancel(),
+    subscribeScan: (cb) => providerScan.subscribe(cb),
     outcomes: async (media) => {
-      const { streamOutcomes } = store.read()
+      const { streamOutcomes, providerScans } = store.read()
       const key = titleKey(media)
       return {
         outcomes: outcomesForTitle(streamOutcomes, key),
         lastUsed: lastWorkingForTitle(streamOutcomes, key),
+        scan: freshScan(providerScans, key),
       }
     },
     /**
@@ -1127,13 +1186,16 @@ export async function createBridge(): Promise<WtaApi> {
     providers: {
       list: async () => allProviders(),
       outcomes: async (media: TitleRef): Promise<TitleProviderState> => {
-        const { streamOutcomes } = store.read()
+        const { streamOutcomes, providerScans } = store.read()
         const key = titleKey(media)
         return {
           outcomes: outcomesForTitle(streamOutcomes, key),
           lastUsed: lastWorkingForTitle(streamOutcomes, key),
+          scan: freshScan(providerScans, key),
         }
       },
+      scan: (media, episode) => runProviderScan(media, episode),
+      cancelScan: async () => scanRunner.cancel(),
     },
 
     releases: {
@@ -1404,6 +1466,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerState: (cb) => playerState.subscribe(cb),
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
+      providerScan: (cb) => providerScan.subscribe(cb),
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),
     },

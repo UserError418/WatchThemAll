@@ -17,11 +17,12 @@
   import type {
     PlayerContext,
     PlayerSuggestion,
-    TitleOutcome,
+    ProbeVerdict,
     TitleProviderState,
   CastDevice,
   CastStatus,
 } from '@shared/ipc'
+  import { providerDot } from '@shared/scanrank'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
   import { clock } from './lib/format'
@@ -115,7 +116,54 @@
    * *after* a source has just disappointed them: the point is to pick the next
    * one without guessing.
    */
-  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null })
+  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null, scan: null })
+
+  /* ── Testing every source ─────────────────────────────────────────────────
+   *
+   * The same scan the detail view offers, reached from the menu people
+   * actually open when a source has just failed them. It is one run either way
+   * — the bridge owns it — so starting it here and watching it from there, or
+   * the reverse, both work.
+   *
+   * Local state rather than the app's `scan.svelte.ts` store: that store talks
+   * to `window.wta`, and this document only has `window.wtaChrome`.
+   */
+  let scanVerdicts = $state<Record<string, ProbeVerdict>>({})
+  let scanning = $state(false)
+  let scanDone = $state(0)
+  let scanTotal = $state(0)
+  let scanCurrent = $state<string | null>(null)
+
+  $effect(() =>
+    api?.onProviderScan((progress) => {
+      scanVerdicts = progress.verdicts
+      scanDone = progress.done
+      scanTotal = progress.total
+      scanCurrent = progress.providerName
+      scanning = !progress.finished
+    }),
+  )
+
+  /** Live run first, falling back to whatever was stored for this title. */
+  const verdicts = $derived<Record<string, ProbeVerdict>>(
+    Object.keys(scanVerdicts).length > 0 ? scanVerdicts : (sourceState.scan?.verdicts ?? {}),
+  )
+
+  async function toggleScan(): Promise<void> {
+    if (context === null) return
+    if (scanning) {
+      await api.cancelScan()
+      return
+    }
+    const media = { type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId }
+    const episode =
+      context.season !== null && context.episode !== null
+        ? { season: context.season, episode: context.episode }
+        : null
+    await api.scan(media, episode)
+    // Re-read so the dots and the stored scan describe one moment.
+    sourceState = await api.outcomes(media)
+  }
 
   /* ── Casting ──────────────────────────────────────────────────────────────
    *
@@ -382,10 +430,18 @@
   }
 
 
-  /** Colour and tooltip together, so they cannot drift apart. */
-  const OUTCOME_META: Record<TitleOutcome, { colour: string; title: string }> = {
-    worked: { colour: '#34d399', title: 'Has played this title for you' },
-    failed: { colour: '#fb5c76', title: 'Tried, and could not play this title' },
+  /**
+   * The app's colour tokens, as literals.
+   *
+   * This document is mounted on its own and has no access to the token sheet,
+   * so the values are copied. `providerDot` returns a *tone* rather than a
+   * colour precisely so that this copy stays in one place instead of being
+   * spread through the markup.
+   */
+  const TONE: Record<'good' | 'warn' | 'bad', string> = {
+    good: '#34d399',
+    warn: '#fbbf24',
+    bad: '#fb5c76',
   }
   /** `--resume` from the app's tokens; this document has no stylesheet to read. */
   const RESUME_COLOUR = '#5b9dfa'
@@ -411,7 +467,7 @@
       .catch(() => {
         // No record is a fair answer: every dot is simply blank, which is what
         // "never tried" looks like anyway.
-        sourceState = { outcomes: {}, lastUsed: null }
+        sourceState = { outcomes: {}, lastUsed: null, scan: null }
       })
   }
 
@@ -1013,7 +1069,8 @@
       <div class="panel sources">
         {#each context?.providers ?? [] as provider (provider.id)}
           {@const resume = provider.id === sourceState.lastUsed}
-          {@const outcome = sourceState.outcomes[provider.id]}
+          {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
+          {@const testing = scanning && scanCurrent === provider.name}
           <button
             class="source"
             class:playing={provider.id === context?.providerId}
@@ -1029,25 +1086,36 @@
             -->
             {#if resume}
               <span class="dot" style:background={RESUME_COLOUR} title={RESUME_TITLE}></span>
-            {:else if outcome}
-              <span
-                class="dot"
-                style:background={OUTCOME_META[outcome].colour}
-                title={OUTCOME_META[outcome].title}
-              ></span>
+            {:else if dot.tone}
+              <span class="dot" style:background={TONE[dot.tone]} title={dot.hint}></span>
             {:else}
-              <span class="dot none" title="Not tried for this title yet"></span>
+              <span class="dot none" title={dot.hint}></span>
             {/if}
             <span class="name">{provider.name}</span>
             {#if provider.id === context?.providerId}
               <span class="tag">Playing</span>
             {:else if resume}
               <span class="tag resume">resume</span>
-            {:else if outcome === 'failed'}
-              <span class="tag bad">no stream</span>
+            {:else if testing}
+              <span class="tag">testing…</span>
+            {:else if dot.label}
+              <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}</span>
             {/if}
           </button>
         {/each}
+
+        <!--
+          Offered at the foot of the list, for the same reason as in the detail
+          view: the list is what the user opened this menu for, and the button
+          is what to do when the list has nothing useful in it.
+        -->
+        <button class="source test" class:playing={scanning} onclick={toggleScan}>
+          <span class="dot none"></span>
+          <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+          {#if scanning}
+            <span class="tag">{scanCurrent ?? '…'} {scanDone + 1}/{scanTotal}</span>
+          {/if}
+        </button>
       </div>
     {/if}
   </div>

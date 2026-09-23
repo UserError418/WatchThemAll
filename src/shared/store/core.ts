@@ -29,7 +29,7 @@
  * `read()` several times per keystroke.
  */
 
-import type { Settings } from '../types'
+import type { ProviderScan, Settings } from '../types'
 import {
   COLLECTION_KEYS,
   PREFERENCE_KEYS,
@@ -109,6 +109,7 @@ export function emptyDocument(deviceId = newDeviceId()): StoreDocument {
     knownProviderIds: [],
     favouriteProviderIds: [],
     providerOrder: [],
+    providerScans: [],
     settings: { ...DEFAULT_SETTINGS },
   }
 }
@@ -400,6 +401,25 @@ export class StoreCore {
   /** Change some settings fields, leaving the rest alone. */
   patchSettings(changes: Partial<Settings>): void {
     this.setPreference('settings', { ...this.doc.settings, ...changes })
+  }
+
+  /**
+   * Replace the stored provider scans.
+   *
+   * Its own method because `providerScans` is a third kind of field, and the
+   * two existing writers would both be wrong for it. `collection()` is for
+   * records that merge across devices; `setPreference` stamps
+   * `preferenceUpdatedAt`, which exists so a sync can decide whose copy of a
+   * *setting* is newer. A scan is neither — it is a device-local measurement of
+   * what this machine's network could reach, and `applyPatch` ignores the field
+   * for exactly that reason. Stamping it would tell the sync engine to carry a
+   * hotel wifi's verdicts home.
+   *
+   * See the field's note in `StoreShape` for why that is the wrong direction.
+   */
+  setProviderScans(scans: ProviderScan[]): void {
+    this.doc.providerScans = scans
+    this.changed()
   }
 
   /**
