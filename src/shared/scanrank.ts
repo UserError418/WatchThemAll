@@ -108,11 +108,22 @@ export function providerDot(
     case 2:
       return {
         tone: 'warn',
-        // Deliberately not "broken". This is the verdict that exists so a bot
-        // challenge or a slow CDN does not condemn a working provider, and the
-        // wording has to leave the user willing to try it.
-        hint: 'Reachable, but no stream appeared while testing — may still work',
-        label: 'untested',
+        /*
+         * Not "broken", and not "untested" either.
+         *
+         * This verdict exists so that a bot challenge or a slow CDN does not
+         * condemn a working provider, so the wording has to leave the user
+         * willing to click it. It said "untested", which was worse than vague:
+         * the user had just pressed "Test all sources", so it read as a claim
+         * that the test had skipped the source — and it collided with the
+         * genuine never-tested state, which is the blank dot below. One word
+         * for two opposite meanings.
+         *
+         * What actually happened is that the source answered and no stream
+         * followed, which for the user means: try it if the green ones fail.
+         */
+        hint: 'Tested — the source answered but no stream appeared. It may still work',
+        label: 'may work',
       }
     case 4:
       return { tone: 'bad', hint: 'Tried, and could not play this title', label: 'no stream' }
