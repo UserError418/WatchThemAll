@@ -34,6 +34,10 @@ ones you point it at and keeps the part that matters: your library.
   notification on the day.
 - **Providers you control.** Enable, disable and reorder them. Automatic mode
   learns which one worked for which show and leads with that.
+- **Test every source for a title.** One button tries each provider in the
+  background and marks the ones that actually stream what you're about to
+  watch, so you pick from what works instead of finding out one by one.
+  Automatic uses the same result.
 - **Automatic failover.** If a source stalls, the app moves to the next one on
   a five-second countdown you can cancel.
 - **Skip intros** using community-maintained timestamps, shown only when the

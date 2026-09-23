@@ -146,35 +146,30 @@ now settle on *leaving* a provider:
 
 ### Testing every source, with one capture buffer
 
-"Test all sources" loads each enabled provider in turn and asks whether it
-actually fetched a stream. The desktop answers that with a hidden
-`BrowserWindow` per provider on its own session; here the signal comes from the
-hook casting already uses — `shouldInterceptRequest` on the app's
-`WebViewClient`, which fires for every subresource of every frame, cross-origin
-included, and lands in `MediaCapture`.
+"Test all sources" loads each enabled provider in turn and reports whether it
+fetched a stream. The signal is the hook casting uses:
+`shouldInterceptRequest` on the app's `WebViewClient` fires for every
+subresource of every frame, cross-origin included, and lands in `MediaCapture`.
 
-That buffer records a URL and *not* which frame asked for it, because
-`shouldInterceptRequest` is never told. Three things follow, and all of them are
-load-bearing rather than tidiness:
+That buffer records a URL without recording which frame asked for it, because
+`shouldInterceptRequest` is not told. Three rules follow, and none is optional:
 
-- **One provider at a time.** Two in flight would put their requests in one
-  undifferentiated pile and both would be credited with whatever either fetched.
+- **One provider at a time.** Two in flight share one undifferentiated pile of
+  requests, and both get credited with whatever either fetched.
 - **Playback stops for the duration.** A player streaming in the background
-  fills the buffer several times a second, and every provider the scan touched
-  would come back green. `PlayerSurface.blank()`/`restore()` — added for
-  casting, which needs the network to itself for the same reason — is what
-  suspends it.
+  fills the buffer several times a second, which turns every provider the scan
+  touches green. `PlayerSurface.blank()`/`restore()` suspends it, the same pair
+  casting uses when it needs the network to itself.
 - **Six seconds of settling between providers.** An HLS player keeps pulling
-  segments well after its document is gone, which is long enough for a dead
-  provider to be credited with its predecessor's stream. The number comes from
-  `scripts/android-provider-probe.py`, which found it the hard way.
+  segments after its document is gone, long enough for a dead provider to be
+  credited with its predecessor's stream.
 
-**The probe surface is visible, and it has to be.** Several providers resolve no
-stream until something clicks, and the only way to click inside a cross-origin
-iframe here is a real touch at real coordinates — `ScanPlugin.tap` dispatching a
+**The probe surface is visible because it has to be.** Several providers resolve
+no stream until something clicks, and a cross-origin iframe can only be clicked
+by a real touch at real coordinates — `ScanPlugin.tap` dispatches a
 `MotionEvent` to the WebView, which hit-tests it against its own DOM regardless
-of origin. A touch has to land somewhere, so an off-screen or zero-sized frame
-cannot be tapped, and any provider needing a tap would be reported dead.
+of origin. A touch needs somewhere to land, so an off-screen or zero-sized frame
+cannot be tapped and any provider wanting one would be reported dead.
 
 ### The chrome bar does not auto-hide
 
