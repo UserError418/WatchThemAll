@@ -107,6 +107,79 @@ export const CANARIES: ProbeSubject[] = [
 ]
 
 /**
+ * Canaries that can tell the *right* title from *a* title.
+ *
+ * The set above answers "does this provider serve anything", and is built for
+ * that: every series is asked for at S01E01, which is exactly the one request
+ * a wrong template still gets right. A provider that ignores the season and
+ * episode serves S01E01 whatever it is asked for; one that reads a TMDB id as
+ * an IMDB id, or a series id as a film id, serves some other programme — and
+ * both play, so both score as working.
+ *
+ * These are chosen so the wrong answer is a different *length*, which is the
+ * one fact about what played that the probe can read. Each series canary is a
+ * late episode that runs far longer than its show's pilot:
+ *
+ * | title                      | asked for | pilot  |
+ * |----------------------------|-----------|--------|
+ * | Stranger Things S04E09     | 143 min   | 48 min |
+ * | Game of Thrones S08E03     | 82 min    | 62 min |
+ *
+ * so an ignored episode number fails the runtime check rather than passing it.
+ * Runtimes are TMDB's own, looked up rather than remembered — an invented
+ * number would condemn providers over a guess.
+ *
+ * Two anime canaries, for two different failures:
+ *
+ * - **One Piece** shares its name with a live-action adaptation that runs
+ *   twice as long. A backend that looks titles up by name rather than by id
+ *   serves the live-action episode for the anime's id — measured on the
+ *   peakstorm backend behind Videasy — and only the length gives it away.
+ * - **Frieren** is there for coverage: whether the provider serves anime
+ *   through its TV endpoint at all. Every episode of it runs about the same,
+ *   so which episode played still needs a person looking at the picture.
+ */
+export const CONTENT_CANARIES: ProbeSubject[] = [
+  {
+    imdbId: 'tt4574334',
+    tmdbId: 66732,
+    type: 'tv',
+    season: 4,
+    episode: 9,
+    label: 'Stranger Things S04E09',
+    runtimeMinutes: 143,
+  },
+  {
+    imdbId: 'tt0944947',
+    tmdbId: 1399,
+    type: 'tv',
+    season: 8,
+    episode: 3,
+    label: 'Game of Thrones S08E03',
+    runtimeMinutes: 82,
+  },
+  { imdbId: 'tt0137523', tmdbId: 550, type: 'movie', label: 'Fight Club', runtimeMinutes: 139 },
+  {
+    imdbId: 'tt0388629',
+    tmdbId: 37854,
+    type: 'tv',
+    season: 1,
+    episode: 5,
+    label: 'One Piece (anime) S01E05',
+    runtimeMinutes: 25,
+  },
+  {
+    imdbId: 'tt22248376',
+    tmdbId: 209867,
+    type: 'tv',
+    season: 1,
+    episode: 5,
+    label: 'Frieren S01E05',
+    runtimeMinutes: 25,
+  },
+]
+
+/**
  * A title that fails on *every* provider is evidence about the title.
  *
  * The canaries carry hand-written TMDB and IMDB ids, and one mistyped id makes
@@ -175,7 +248,20 @@ interface CliOptions {
   fast: boolean
   verbose: boolean
   only: string[]
-  timeoutMs: number
+  /**
+   * Per-title budget. Null means the mode's own default, because the modes
+   * need different ones: the network probe calls it at the first manifest,
+   * while the UI probe has to wait for a picture that moves. A single shared
+   * default silently gave the UI probe the network probe's twelve seconds.
+   */
+  timeoutMs: number | null
+  /**
+   * Which titles to ask for. `--canaries content` swaps in the set that can
+   * tell a wrong template from a right one; see `CONTENT_CANARIES`.
+   */
+  canaries: ProbeSubject[]
+  /** UI probe only: write a screenshot of each title that plays into this directory. */
+  evidence: string | null
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -185,8 +271,10 @@ function parseArgs(argv: string[]): CliOptions {
     fast: false,
     verbose: false,
     only: [],
-    timeoutMs: 12_000,
+    timeoutMs: null,
     titles: null,
+    canaries: CANARIES,
+    evidence: null,
   }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -195,9 +283,15 @@ function parseArgs(argv: string[]): CliOptions {
     else if (arg === '--catalog') options.catalog = argv[++i] ?? null
     else if (arg === '--fast') options.fast = true
     else if (arg === '--verbose') options.verbose = true
-    else if (arg === '--timeout') options.timeoutMs = Number(argv[++i]) || options.timeoutMs
+    else if (arg === '--timeout') options.timeoutMs = Number(argv[++i]) || null
+    else if (arg === '--canaries') {
+      const set = argv[++i]
+      if (set === 'content') options.canaries = CONTENT_CANARIES
+      else if (set !== 'default') throw new Error(`--canaries takes "default" or "content", not "${set}"`)
+    }
     else if (arg === '--only') options.only.push(...(argv[++i] ?? '').split(','))
     else if (arg === '--titles') options.titles = Number(argv[++i]) || null
+    else if (arg === '--evidence') options.evidence = argv[++i] ?? null
   }
 
   return options
@@ -218,7 +312,7 @@ export async function runProbeCli(providers: Provider[], argv: string[]): Promis
     ? catalogue.filter((p) => options.only.includes(p.id))
     : catalogue
 
-  console.log(`\nProbing ${targets.length} provider(s) against ${CANARIES.length} canaries.`)
+  console.log(`\nProbing ${targets.length} provider(s) against ${options.canaries.length} canaries.`)
   console.log('A verdict of "stream" means a media manifest or segment was actually requested.\n')
 
   /**
@@ -242,12 +336,12 @@ export async function runProbeCli(providers: Provider[], argv: string[]): Promis
     const marks: string[] = []
     const detail: string[] = []
 
-    for (const subject of CANARIES) {
+    for (const subject of options.canaries) {
       // Progress on stderr so a long run shows life without polluting the
       // report on stdout, which is what gets redirected to a file.
       process.stderr.write(`  … ${provider.id} / ${subject.label}\n`)
       const result = await probeStream(provider, subject, {
-        timeoutMs: options.timeoutMs,
+        timeoutMs: options.timeoutMs ?? 12_000,
         verbose: options.verbose,
         frameUrl,
       })
@@ -267,7 +361,7 @@ export async function runProbeCli(providers: Provider[], argv: string[]): Promis
      * deliberately forgives gaps — a provider missing one show is normal, and
      * the fallback chain exists precisely to cover that.
      */
-    // Not `slice(-CANARIES.length)`: `--fast` stops early, so the number of
+    // Not `slice(-options.canaries.length)`: `--fast` stops early, so the number of
     // results this provider contributed is however many marks it produced.
     const mine = results.slice(-marks.length)
     const streamed = mine.filter((r) => r.verdict === 'stream')
@@ -436,7 +530,7 @@ export async function runExtractCli(providers: Provider[], argv: string[]): Prom
   const results: ExtractResult[] = []
   for (const provider of targets) {
     process.stderr.write(`  … ${provider.id}\n`)
-    const result = await extractStream(provider, subject, options.timeoutMs, options.verbose)
+    const result = await extractStream(provider, subject, options.timeoutMs ?? 12_000, options.verbose)
     results.push(result)
 
     const bits = [
@@ -481,6 +575,7 @@ export async function runExtractCli(providers: Provider[], argv: string[]): Prom
  *
  *   npm run probe:ui
  *   npm run probe:ui -- --only videasy --timeout 45000
+ *   npm run probe:ui -- --canaries content --catalog candidates.json --evidence /tmp/shots
  */
 export async function runUiProbeCli(providers: Provider[], argv: string[]): Promise<void> {
   const options = parseArgs(argv)
@@ -489,7 +584,7 @@ export async function runUiProbeCli(providers: Provider[], argv: string[]): Prom
     ? catalogue.filter((p) => options.only.includes(p.id))
     : catalogue
 
-  const subjects = CANARIES.slice(0, Math.max(1, options.titles ?? CANARIES.length))
+  const subjects = options.canaries.slice(0, Math.max(1, options.titles ?? options.canaries.length))
 
   console.log(`\nPlaying ${subjects.length} titles on ${targets.length} provider(s), for real.`)
   console.log('A tick means the video reported a position that advanced.\n')
@@ -538,6 +633,7 @@ export async function runUiProbeCli(providers: Provider[], argv: string[]): Prom
         frameUrl,
         dirname,
         timeoutMs: options.timeoutMs ?? 30_000,
+        evidenceDir: options.evidence ?? undefined,
       })
       results.push(result)
       every.push(result)
@@ -546,7 +642,15 @@ export async function runUiProbeCli(providers: Provider[], argv: string[]): Prom
       const mark = result.played ? (result.runtime === 'implausible' ? '⚠' : '✓') : '·'
       marks.push(mark)
       const seconds = Math.round((Date.now() - startedAt) / 1000)
-      progress(`      ${mark} ${subject.label.padEnd(28)} ${String(seconds).padStart(3)}s`)
+      // The delivered length on every line that played, not only the wrong
+      // ones: "143m of 143m" is the evidence that a template is right, and a
+      // bare tick is only evidence that something played.
+      const length = result.played
+        ? `${Math.round(result.duration / 60)}m of ${subject.runtimeMinutes ?? '?'}m`
+        : (result.reason ?? '')
+      progress(`      ${mark} ${subject.label.padEnd(28)} ${String(seconds).padStart(3)}s  ${length}`)
+      for (const frame of result.evidence?.frames ?? []) progress(`          ${frame.slice(0, 150)}`)
+      if (result.evidence?.screenshot) progress(`          ${result.evidence.screenshot}`)
     }
 
     const summary = score(provider.id, results)

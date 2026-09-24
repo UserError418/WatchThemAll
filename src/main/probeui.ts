@@ -27,7 +27,9 @@
  * given a single candidate, so it can only succeed by playing.
  */
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, webContents, type Session } from 'electron'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Provider } from '@shared/types'
 import type { PlayRequest } from '@shared/ipc'
 import { createInlinePlayer } from './playerview'
@@ -56,6 +58,23 @@ export interface UiProbeResult {
    */
   runtime: RuntimeVerdict
   runtimeReason: string
+  /** What was on screen, when `evidenceDir` asked for it. Null otherwise. */
+  evidence: UiProbeEvidence | null
+}
+
+/**
+ * What a person needs to judge whether the right title played.
+ *
+ * The runtime check catches a wrong *length* and nothing else. Two episodes of
+ * one series run the same length, and so do two films, so the last word on
+ * "is this the right thing" belongs to someone looking at it. This is what
+ * they look at.
+ */
+export interface UiProbeEvidence {
+  /** Each frame's document title and the start of its visible text. */
+  frames: string[]
+  /** Path of a screenshot taken part-way into the title, or null. */
+  screenshot: string | null
 }
 
 export interface UiProbeOptions {
@@ -68,6 +87,11 @@ export interface UiProbeOptions {
   timeoutMs?: number
   /** Polling interval for the position. */
   sampleMs?: number
+  /**
+   * Where to write a screenshot of each title that plays. Absent means none
+   * are taken, which is the default because each one costs several seconds.
+   */
+  evidenceDir?: string
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
@@ -107,6 +131,7 @@ export async function probeThroughPlayer(options: UiProbeOptions): Promise<UiPro
     reason: null,
     runtime: 'unknown',
     runtimeReason: 'not reached',
+    evidence: null,
   }
 
   const context = requestFor(subject, provider.id)
@@ -201,6 +226,17 @@ export async function probeThroughPlayer(options: UiProbeOptions): Promise<UiPro
       }
     }
 
+    if (result.played && options.evidenceDir) {
+      result = {
+        ...result,
+        evidence: await collectEvidence(
+          player.session,
+          options.evidenceDir,
+          `${provider.id}--${subject.label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
+        ),
+      }
+    }
+
     if (!result.played) {
       const exhausted = player.exhausted.map((e) => e.reason).join('; ')
       result = { ...base, reason: exhausted || outcomeReason || 'no advancing position' }
@@ -211,6 +247,86 @@ export async function probeThroughPlayer(options: UiProbeOptions): Promise<UiPro
   }
 
   return result
+}
+
+/** Whatever a promise resolves to, or `fallback` if it takes longer than `ms`. */
+function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url
+  } catch {
+    return url
+  }
+}
+
+/** A frame's title and the start of its visible text, on one line. */
+const DESCRIBE_FRAME = `(() => {
+  const title = document.title || ''
+  const text = ((document.body && document.body.innerText) || '').replace(/\\s+/g, ' ').trim()
+  return title || text ? title + ' | ' + text.slice(0, 240) : ''
+})()`
+
+/**
+ * Jump the video 40% in, muted.
+ *
+ * Past the cold open, the recap and the title sequence, which are the parts
+ * most alike between one episode and the next — the frame worth looking at is
+ * one only this episode contains.
+ */
+const SEEK_INTO_TITLE = `(() => {
+  const video = document.querySelector('video')
+  if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return false
+  video.muted = true
+  video.currentTime = video.duration * 0.4
+  void video.play().catch(() => {})
+  return true
+})()`
+
+/**
+ * Read every frame's text and photograph the picture part-way in.
+ *
+ * Found by session rather than handed over, so that `playerview` does not
+ * grow an accessor for its view that only a probe would ever call. The
+ * player's partition is unique to it, so the match is exact.
+ *
+ * Every step is time-boxed. A page busy enough to stall `executeJavaScript`
+ * costs this result its evidence, never the run its progress.
+ */
+async function collectEvidence(
+  session: Session,
+  dir: string,
+  name: string,
+): Promise<UiProbeEvidence> {
+  const contents = webContents
+    .getAllWebContents()
+    .find((candidate) => !candidate.isDestroyed() && candidate.session === session)
+  if (!contents) return { frames: [], screenshot: null }
+
+  const frames: string[] = []
+  for (const frame of contents.mainFrame.framesInSubtree) {
+    const text = String(await within<unknown>(frame.executeJavaScript(DESCRIBE_FRAME), 1_500, ''))
+    if (text) frames.push(`${hostOf(frame.url)} :: ${text}`)
+  }
+
+  for (const frame of contents.mainFrame.framesInSubtree) {
+    await within(frame.executeJavaScript(SEEK_INTO_TITLE), 1_500, false)
+  }
+  // Long enough for a seek to buffer and paint on a slow provider.
+  await sleep(6_000)
+
+  const image = await within(contents.capturePage(), 5_000, null)
+  if (!image || image.isEmpty()) return { frames, screenshot: null }
+
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, `${name}.png`)
+  await writeFile(path, image.toPNG())
+  return { frames, screenshot: path }
 }
 
 /** One provider's score over a catalogue of titles. */
