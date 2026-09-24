@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-13",
+  "updatedAt": "2026-09-24",
   "providers": [
     {
       "id": "vidlux",
@@ -39,7 +39,8 @@
         "urlTemplate": "{rootUrl}movie/{imdb}"
       },
       "tier": "core",
-      "note": "Served every canary. Its landing page is a 655-byte shell, which looks broken to anything that only checks the document."
+      "note": "Played the right title and episode on every content check, anime included. Serves the VidSpark player, the same backend as VidSrc PM. Its landing page is a 655-byte shell, which looks broken to anything that only checks the document.",
+      "group": "vidspark"
     },
     {
       "id": "cinemaos",
@@ -59,13 +60,13 @@
       "name": "ScreenScape",
       "rootUrl": "https://screenscape.me/embed",
       "tv": {
-        "urlTemplate": "{rootUrl}?type=tv&imdb={imdb}&s={season}&e={episode}"
+        "urlTemplate": "{rootUrl}?type=tv&imdb={imdb}&s={season}&e={episode}&lan=eng"
       },
       "movie": {
-        "urlTemplate": "{rootUrl}?type=movie&imdb={imdb}"
+        "urlTemplate": "{rootUrl}?type=movie&imdb={imdb}&lan=eng"
       },
-      "tier": "extras",
-      "note": "Fast when it has the title (1.2s) but served only two of four canaries. A coverage gap, not a fault — good as a fallback."
+      "tier": "core",
+      "note": "Played the right title and episode on every content check, anime included. Asks for English audio explicitly: without lan=eng it picks a Hindi dub whenever one exists. Season and episode must be s= and e= — season= and episode= are silently ignored."
     },
     {
       "id": "moviesapi",
@@ -110,8 +111,8 @@
     },
     {
       "id": "vidsrc-me-su",
-      "name": "VidSrc (.su mirror)",
-      "rootUrl": "https://vidsrcme.su/embed/",
+      "name": "VidSrc (.sh)",
+      "rootUrl": "https://vidsrc.sh/embed/",
       "tv": {
         "urlTemplate": "{rootUrl}tv?imdb={imdb}&season={season}&episode={episode}"
       },
@@ -121,22 +122,22 @@
       "tier": "extras",
       "group": "vidsrc",
       "resumeParam": "startAt",
-      "note": "Byte-identical player to vidsrcme.ru, down to the asset version string. Kept as a spare domain rather than a second choice — when one of these dies the other is usually still up."
+      "note": "The same player as vidsrcme.ru, byte for byte, on the domain the family now calls its main one — vidsrcme.su redirects here. Played the right title and episode on every content check, anime included. A spare door onto the VidSrc backend rather than a second source."
     },
     {
       "id": "vidsrc-pm",
       "name": "VidSrc PM",
       "rootUrl": "https://vidsrc.pm/embed/",
       "tv": {
-        "urlTemplate": "{rootUrl}tv/{imdb}/{season}/{episode}"
+        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
       },
       "movie": {
-        "urlTemplate": "{rootUrl}movie/{imdb}"
+        "urlTemplate": "{rootUrl}movie/{tmdb}"
       },
       "tier": "extras",
-      "group": "vidsrc",
+      "group": "vidspark",
       "resumeParam": "startAt",
-      "note": "Same player family, different path shape. Streams only after a click on the page, which is why a probe that does not synthesise one records it as dead."
+      "note": "Not part of the VidSrc family despite the name: it serves the VidSpark player, the same one as VidFlix, down to identical stream lengths. Needs TMDB ids — an IMDB id on a series reaches its backend as a TMDB id and finds nothing. Films and series play; anime did not."
     },
     {
       "id": "videasy",
@@ -198,13 +199,13 @@
       "name": "111Movies",
       "rootUrl": "https://player.vidlove.cc/",
       "tv": {
-        "urlTemplate": "{rootUrl}tv/{tmdb}/{season}/{episode}"
+        "urlTemplate": "{rootUrl}embed/tv/{tmdb}/{season}/{episode}"
       },
       "movie": {
-        "urlTemplate": "{rootUrl}movie/{tmdb}"
+        "urlTemplate": "{rootUrl}embed/movie/{tmdb}"
       },
-      "tier": "extras",
-      "note": "Verified streaming for films. Redirects from 111movies.com to player.vidlove.cc, which is what the catalogue names."
+      "tier": "core",
+      "note": "Played the right title and episode on every content check, anime included, and names both in its own controls. Its player lives under /embed/; the bare /movie/ and /tv/ paths are its \"Video Not Found\" page. TMDB ids only — an IMDB id on a series is rejected."
     }
   ]
 }
