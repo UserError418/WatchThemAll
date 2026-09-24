@@ -68,32 +68,74 @@ Only the last two rows are unambiguous, and only they are grounds for deletion.
 
 ## What actually picks the provider
 
-Not the probe. `src/main/outcomes.ts` records, per attempt, whether a provider
-reached playback for that title on that machine. `automaticOrder()` then applies
-three rules in order:
+Not the catalogue probe. Two facts about the title in hand decide it:
+`src/main/outcomes.ts` records, per attempt, whether a provider reached playback
+for that title on that machine, and **Test all sources** measures every provider
+against it on demand. `scanAwareOrder()` in `src/main/providerscan.ts` sorts by
+those facts, in tiers:
 
-1. **The user's own provider order**, dragged in the Providers panel. The
-   baseline list, not a tiebreak.
-2. **Narrowed to sources known to have played this title**, when any have. This
-   matches the green dots in the source picker, so the list the user sees and the
-   list Automatic walks cannot disagree. Everything else is demoted behind it
-   rather than dropped, so a chain still has somewhere to go if the known-good
-   source is down.
-3. **Favourites lead each segment**, in the user's order.
+1. measured streaming by a test in the last six hours
+2. has played this title before
+3. answered a test, but no stream appeared
+4. nothing known either way
+5. tried before and never produced a stream
+6. measured dead by a test in the last six hours
 
-Real playback on a real machine outranks any synthetic measurement, which is what
-makes the anti-automation problem survivable: a provider the probe cannot measure
-gets measured by being used.
+Within a tier, **favourites lead**, then **the user's own provider order** from
+the Providers panel decides. A measurement moves a provider between tiers; it
+never reorders providers the user has placed relative to each other.
 
-This replaced a scored ranking — tiered TTLs, a Wilson score over recorded
-attempts, additive boosts. It ordered better on paper and was impossible to
-predict from outside; a single lucky play by a non-favourite could outrank a
-starred provider permanently, which reads to a user as the favourite setting
-being broken. A rule a user can state themselves beats a better rule they cannot,
-because they are the one who has to trust it.
+The dots in both source pickers are coloured by the same function the tiers come
+from, `providerRank` in `src/shared/scanrank.ts`, so a green row is always one
+Automatic reaches for before any row that is not green.
 
-The source a title last streamed on is still recorded. It is now shown — a blue
-dot and a "resume" label in both source pickers — rather than acted on.
+A fresh test outranks history in both directions, because it is the more recent
+fact about a service that changes daily. Without one, real playback on the
+user's own machine is what decides, which is what makes the anti-automation
+problem survivable: a provider no probe can measure gets measured by being used.
+
+The rule is deliberately one a user can state themselves. A scored ranking —
+decaying weights, confidence intervals over recorded attempts — can order better
+on paper and still read as broken, because nobody can predict it from outside,
+and the user is the one who has to trust it.
+
+The source a title last streamed on is recorded too. It is shown — a blue dot
+and a "resume" label in both source pickers — rather than acted on.
+
+## Checking that the right title plays
+
+A stream playing is not the same as the right title playing. A provider can pass
+every check above while serving something else entirely, and the two ways that
+happens are both template mistakes that still produce video:
+
+- **The wrong kind of id.** Most providers read a bare number as a TMDB id for
+  the path's media type, so a series id on a film path is some unrelated film.
+  SuperEmbed reads a bare number as an IMDB id unless the URL also says
+  `tmdb=1`. A template has to use the id type the provider documents, not one
+  that happens to load.
+- **An ignored season or episode.** A provider that does not read them serves
+  the pilot for every episode, which is exactly what a canary set made of pilots
+  cannot notice.
+
+A third comes from providers themselves: a backend that looks titles up by
+*name* serves a same-named title instead. *One Piece* the anime and *One Piece*
+the live-action series share a name and differ in length, and one backend in
+this space serves the live-action episode for the anime's id.
+
+`--canaries content` swaps in titles chosen so that each of these shows up as a
+wrong *length*: late episodes that run far longer than their show's pilot, and
+the anime *One Piece*. `--evidence DIR` also records every frame's visible text,
+which usually names the title and episode, and a screenshot taken 40% into the
+title, which is the part least alike between one episode and the next.
+
+```bash
+npm run probe:ui -- --canaries content --catalog candidates.json \
+  --timeout 45000 --evidence /tmp/shots
+```
+
+Every line reports the delivered length against TMDB's, as in `142m of 143m`. A
+mismatch is flagged; a match is still only evidence about length, so look at the
+screenshot before trusting a template.
 
 ## Mirror groups
 
@@ -113,7 +155,9 @@ provider's media actually came from and reports entries that share one.
 1. Write it into a candidate file: `id`, `name`, `rootUrl`, and a `movie` and/or
    `tv` `urlTemplate` using `{rootUrl}` `{imdb}` `{tmdb}` `{season}` `{episode}`.
 2. `npm run probe:providers -- --catalog that-file.json --fast --timeout 35000`
-3. Anything that streams goes in. Anything `unreachable`, `empty` or `blocked`
+   to see whether it streams at all, then the content check above to see
+   whether it streams the right thing.
+3. Anything that streams the right title goes in. Anything `unreachable`, `empty` or `blocked`
    does not. `no-media` is a judgement call — check by hand whether the page is
    fighting the probe.
 4. Add it to `src/main/providers.json` **and** `catalog/providers.json` with a
