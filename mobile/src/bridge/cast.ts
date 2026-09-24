@@ -110,7 +110,25 @@ export const capture = {
   clear(): Promise<void> {
     return Cast.clearCandidates()
   },
+  /**
+   * Fetch the start of one captured request, replaying its headers.
+   *
+   * For the scan, which sometimes has to ask what a URL *is* because its shape
+   * says nothing — see `isMediaResponse`. Small on purpose: the answer is in
+   * the type and the first line, and the candidate may well be a segment
+   * several megabytes long.
+   */
+  peek(candidate: Candidate): Promise<{ status: number; contentType: string; body: string }> {
+    return Cast.fetchText({
+      url: candidate.url,
+      headers: replayable(candidate.headers),
+      limitBytes: PEEK_LIMIT_BYTES,
+    })
+  },
 }
+
+/** Enough for a playlist's first lines and a response type; see `capture.peek`. */
+const PEEK_LIMIT_BYTES = 16 * 1024
 
 /**
  * How much of a candidate to read while deciding what it is.

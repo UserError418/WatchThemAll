@@ -21,8 +21,8 @@
  * frame asked, because `shouldInterceptRequest` is not told. Everything awkward
  * about this file follows from that:
  *
- * 1. **Providers are measured one at a time.** The desktop runs two at once and
- *    could run more; here two providers in flight would put their requests in
+ * 1. **Providers are measured one at a time.** The desktop runs six at once;
+ *    here two providers in flight would put their requests in
  *    one undifferentiated pile and both would be credited with whatever either
  *    of them fetched.
  *
@@ -58,10 +58,10 @@
 import { registerPlugin } from '@capacitor/core'
 import type { Provider } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
-import { isMediaRequest } from '@main/mediarequest'
+import { isMediaRequest, isMediaResponse } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import type { PlayRequest } from '@shared/ipc'
-import { capture } from './cast'
+import { capture, type Candidate } from './cast'
 
 interface ScanNative {
   /** A real touch at a point in the WebView. See `ScanPlugin`. */
@@ -73,12 +73,14 @@ const Scan = registerPlugin<ScanNative>('Scan')
 /**
  * How long to give one provider before calling it.
  *
- * Longer than the desktop's twelve seconds, and deliberately. The desktop runs
- * two probes at once and can afford a tight budget because a slow provider only
- * costs half a slot; here every second is on the critical path, but a phone is
- * also on a slower network and behind more radio latency. Fifteen was measured
- * as the point past which no provider in the shipped catalogue had ever
- * produced its first media request.
+ * Shorter than the desktop's eighteen, and that is measured rather than
+ * forgotten. The desktop's budget is set by 111Movies, which takes up to 15.3
+ * seconds there to make a request the desktop recognises. On the phone the
+ * same provider was recognised in 3.4 seconds for a series and 8.1 for a film,
+ * because peeking at its opaque requests finds its first playlist long before
+ * anything else would give it away, and ScreenScape in under three. Every
+ * second here is on the critical path of a one-at-a-time scan, so it is not
+ * padded to match a number that belongs to the other platform.
  */
 const PROBE_MS = 15_000
 
@@ -104,6 +106,18 @@ const POLL_MS = 500
  * had clicked.
  */
 const TAP_AT_MS = [1_500, 5_000, 9_000]
+
+/**
+ * How many captured requests to fetch, when their URLs say nothing.
+ *
+ * Per poll, so a provider that is streaming is recognised within a second or
+ * two of its first opaque request; per provider, so one that never streams
+ * costs a dozen small fetches rather than one for everything its page asked
+ * for. Measured: 111Movies' first opaque request that answers as a playlist
+ * arrives among its first few.
+ */
+const PEEKS_PER_POLL = 2
+const PEEKS_PER_PROVIDER = 12
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
 
@@ -272,6 +286,34 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
 }
 
 /**
+ * Fetch a few captured requests and ask what they turned out to be.
+ *
+ * The URL test is free and covers most providers; this covers the ones that
+ * stream through opaque proxy paths, which the desktop recognises from the
+ * response type and the phone never sees a response for. Newest first, since
+ * once a player is streaming its latest requests are playlists and segments
+ * rather than the page's own API calls.
+ */
+async function peekForMedia(candidates: Candidate[], peeked: Set<string>): Promise<boolean> {
+  const fresh = candidates
+    .filter((candidate) => !peeked.has(candidate.url))
+    .sort((a, b) => b.atMs - a.atMs)
+    .slice(0, Math.min(PEEKS_PER_POLL, PEEKS_PER_PROVIDER - peeked.size))
+
+  for (const candidate of fresh) {
+    peeked.add(candidate.url)
+    try {
+      const response = await capture.peek(candidate)
+      const ok = response.status === 200 || response.status === 206
+      if (ok && isMediaResponse(response.contentType, response.body)) return true
+    } catch {
+      // Expired, unreachable or refused. The next candidate may still answer.
+    }
+  }
+  return false
+}
+
+/**
  * Load one provider and decide what happened.
  *
  * The capture buffer is emptied first, which is what makes "what is in it now"
@@ -297,6 +339,7 @@ async function probeOne(
   const startedAt = Date.now()
   let tapped = 0
   let sawAnything = false
+  const peeked = new Set<string>()
 
   while (Date.now() - startedAt < PROBE_MS) {
     await sleep(POLL_MS)
@@ -313,6 +356,7 @@ async function probeOne(
     const candidates = await capture.list().catch(() => [])
     if (candidates.length > 0) sawAnything = true
     if (candidates.some((candidate) => isMediaRequest(candidate.url))) return 'stream'
+    if (await peekForMedia(candidates, peeked)) return 'stream'
   }
 
   return sawAnything ? 'unsure' : 'dead'

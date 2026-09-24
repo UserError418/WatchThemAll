@@ -34,10 +34,16 @@
 
 /**
  * HLS and DASH cover essentially every embed provider in this space; the
- * MP4/WebM cases are the few that serve progressive files. `/segment` and
+ * MP4/WebM/MKV cases are the few that serve progressive files. `/segment` and
  * `/manifest` catch the extensionless proxy paths that name themselves.
+ *
+ * MKV is here because ScreenScape serves whole films as `.mkv`
+ * (`…/movies/1999/fightclub.mkv`). The desktop never needed the extension —
+ * the response's `video/…` type caught it — but the phone's capture buffer
+ * holds only URLs, so without it the phone's scan watched ScreenScape play and
+ * reported that nothing had streamed.
  */
-export const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm)(\?|$)|\/segment|\/manifest/i
+export const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm|mkv)(\?|$)|\/segment|\/manifest/i
 
 export const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|video\/|audio\/)/i
 
@@ -50,4 +56,23 @@ export const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+x
  */
 export function isMediaRequest(url: string, resourceType = '', mime = ''): boolean {
   return resourceType === 'media' || MEDIA_PATTERN.test(url) || MEDIA_MIME.test(mime)
+}
+
+/**
+ * Is this *response* the media, from its type and its first bytes?
+ *
+ * For callers that can fetch a request but were never told its type — the
+ * phone, whose capture buffer holds URLs and request headers and nothing from
+ * the response. Some providers stream through nothing but opaque proxy paths:
+ * 111Movies fetches every playlist and segment as `…/api?d=<token>`, so the
+ * URL test above can never recognise it, while one fetch of the same URL
+ * answers `application/vnd.apple.mpegurl` and `#EXTM3U`.
+ *
+ * The body check is there for providers that lie about the type. It is a
+ * playlist's own opening line, so it is exact; segments are not sniffed by
+ * content, because a segment disguised as `text/html` arrives alongside a
+ * playlist that is not.
+ */
+export function isMediaResponse(contentType: string, body: string): boolean {
+  return MEDIA_MIME.test(contentType.trim()) || body.trimStart().startsWith('#EXTM3U')
 }

@@ -164,6 +164,15 @@ That buffer records a URL without recording which frame asked for it, because
   segments after its document is gone, long enough for a dead provider to be
   credited with its predecessor's stream.
 
+**A URL is not always enough to recognise a stream.** The buffer holds requests,
+never responses, so the desktop's strongest signal — the response's content
+type — is missing. Most providers name their media (`.m3u8`, `.mp4`, `.mkv`),
+and the scan matches those for free. Some stream through opaque proxy paths
+instead, such as `…/api?d=<token>` for every playlist and segment. For those
+the scan fetches the newest few captured requests with their original headers,
+a dozen at most per provider, and reads the content type and first line, which
+is how the cast feature already decides what it can hand a television.
+
 **The probe surface is visible because it has to be.** Several providers resolve
 no stream until something clicks, and a cross-origin iframe can only be clicked
 by a real touch at real coordinates — `ScanPlugin.tap` dispatches a
