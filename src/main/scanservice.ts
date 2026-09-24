@@ -97,7 +97,7 @@ export interface ScanServiceOptions {
   frameUrl: (providerUrl: string) => string
   /** Pushed after every provider settles, and once more at the end. */
   onProgress: (progress: ProviderScanProgress) => void
-  /** Per-provider budget. The default matches the CLI probe's. */
+  /** Per-provider budget, from navigation start. See the default below. */
   timeoutMs?: number
   /** How many providers to measure at once. See the header for the measurements. */
   concurrency?: number
@@ -119,7 +119,24 @@ export interface ScanService {
 }
 
 export function createScanService(options: ScanServiceOptions): ScanService {
-  const timeoutMs = options.timeoutMs ?? 12_000
+  /**
+   * Eighteen seconds, set by the slowest working provider rather than by the
+   * typical one.
+   *
+   * It was twelve, the CLI probe's figure, until 111Movies' series pages were
+   * measured at 12.0–15.3 seconds to their first media request across twelve
+   * runs (its films: 7.5–9.1). Its player walks half a dozen sources in turn
+   * before one streams, with or without the ad blocker. At twelve, "Test all
+   * sources" marked it red on every series while it played each of them in the
+   * app — the one mistake this feature cannot afford, since a red source is one
+   * the user stops trying. Eighteen leaves the slowest run a fifth to spare,
+   * because six probes at once only make it slower.
+   *
+   * The budget is a ceiling, so a provider that streams sooner still finishes
+   * sooner; what the extra seconds cost is the wait on providers that never
+   * stream at all.
+   */
+  const timeoutMs = options.timeoutMs ?? 18_000
   /**
    * Six, measured rather than chosen — see the table in the header. Wider is
    * not faster and is less accurate; narrower is three times slower for the
