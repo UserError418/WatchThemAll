@@ -1,6 +1,6 @@
 {
   "name": "watchthemall",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Desktop client for navigating video embed providers, with a TMDB browse surface and episode release tracking.",
   "main": "out/main/index.js",
   "scripts": {
