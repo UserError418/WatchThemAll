@@ -56,17 +56,31 @@ export function clickCentre(contents: WebContents, width: number, height: number
   contents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
 }
 
+/**
+ * How long one frame gets to answer the play script.
+ *
+ * The script itself returns at once, so anything slower is a frame that will
+ * never answer at all: one whose renderer Chromium has just killed, or a page
+ * spinning its main thread. `executeJavaScript` does not reject for either —
+ * its promise simply never settles — and the caller that awaits it stops with
+ * it. SuperEmbed held the UI probe on its first title for eighteen minutes
+ * while Chromium terminated one of its renderers every forty seconds; with this
+ * limit in place the same renderer terminations happen and the run moves on.
+ */
+const FRAME_ANSWER_MS = 2_000
+
 /** Run the play script in every frame of the subtree. */
 export async function clickPlayInFrames(contents: WebContents): Promise<void> {
   if (contents.isDestroyed()) return
   // A frame can be gone by the time its turn comes. That is ordinary here, and
   // one detached frame must not abandon the rest of the subtree.
   for (const frame of contents.mainFrame.framesInSubtree) {
-    try {
-      await frame.executeJavaScript(PRESS_PLAY_SCRIPT, true)
-    } catch {
-      /* frame detached or navigated away */
-    }
+    await Promise.race([
+      frame.executeJavaScript(PRESS_PLAY_SCRIPT, true).catch(() => {
+        /* frame detached or navigated away */
+      }),
+      new Promise((resolve) => setTimeout(resolve, FRAME_ANSWER_MS)),
+    ])
   }
 }
 
