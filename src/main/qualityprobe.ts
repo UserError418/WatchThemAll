@@ -63,8 +63,8 @@ const SCAN_VIDEO_WAIT_MS = 4_000
  *   reads the picture, so every reading is available to compare.
  * - `scan` — for "Test all sources". Stops where the scan always stopped, at
  *   the first media request: the master is normally that request, so it is
- *   already captured. It reads the picture only when no playlist was seen,
- *   which is the one case where the picture is the answer.
+ *   already captured. It reads the picture only for a source that fetched a
+ *   whole file and no playlist, the one case where the picture is the answer.
  *
  * The scan must not linger. Six probes run at once, and a player left running
  * keeps downloading segments while the others are still trying to start —
@@ -269,8 +269,13 @@ export async function probeQuality(
         videos = await readVideos(contents)
         return
       }
-      const sawPlaylist = [...candidates.values()].some((c) => c.kind === 'playlist')
-      if (!sawPlaylist) videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
+      // Only a single file makes the picture the answer, so only then is it
+      // worth waiting for. Waiting whenever no playlist was seen would add the
+      // full wait to every dead source, which has no picture to wait for.
+      const kinds = [...candidates.values()].map((c) => c.kind)
+      if (kinds.includes('whole-file') && !kinds.includes('playlist')) {
+        videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
+      }
     },
   })
 
