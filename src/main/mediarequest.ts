@@ -63,7 +63,62 @@ export const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+x
  * the Android capture buffer records, can still ask.
  */
 export function isMediaRequest(url: string, resourceType = '', mime = ''): boolean {
+  // Subtitles first: a `<track>` loads its file as resource type `media`, so
+  // without this MoviesAPI's `…/subs/…/en.vtt` counted as its stream — and
+  // timed it — on three titles out of three.
+  if (SUBTITLE_URL.test(url) || SUBTITLE_MIME.test(mime)) return false
   return resourceType === 'media' || MEDIA_PATTERN.test(url) || MEDIA_MIME.test(mime)
+}
+
+const SUBTITLE_URL = /\.(vtt|srt|ass|ssa)(\?|$)/i
+const SUBTITLE_MIME = /^text\/vtt|^application\/x-subrip/i
+
+/** A whole video file by its name, as opposed to a playlist or a segment. */
+export const WHOLE_FILE_URL = /\.(mp4|mkv|webm)(\?|$)/i
+
+/**
+ * Below this, a whole file is an ad or a placeholder, not a programme.
+ *
+ * The smallest real one in the catalogue is an anime episode of twenty-odd
+ * minutes, which runs to tens of megabytes even at low quality; a pre-roll ad
+ * is a few hundred kilobytes to a few megabytes.
+ */
+export const MIN_WHOLE_FILE_BYTES = 8 * 1024 * 1024
+
+/**
+ * A response that looked like a whole video and is not one.
+ *
+ * VidRock's player loads `vidrock.net/demo-video.mp4` into a `<video>` before
+ * anything else, and Chromium receives 887 bytes of `text/html` for it. The
+ * name says `.mp4` and the resource type says `media`, so it counted as a
+ * stream: the scan timed VidRock at 0.7 s from it, and on a title where
+ * nothing else loaded, painted VidRock green for streaming a web page.
+ *
+ * Only for a media element loading a whole file by name — `.mp4`, `.mkv`,
+ * `.webm` with resource type `media`. Segments arrive by XHR and are small by
+ * design, and an HLS playlist is legitimately served as `text/html` by some
+ * providers, so neither is judged by this.
+ *
+ * `totalBytes` is the whole file's size — from `Content-Range` on the 206 a
+ * media element's first request gets — or null when the response did not say.
+ */
+export function isFalseWholeFile(
+  url: string,
+  resourceType: string,
+  mime: string,
+  totalBytes: number | null,
+): boolean {
+  if (resourceType !== 'media' || !WHOLE_FILE_URL.test(url)) return false
+  if (/^text\/html/i.test(mime.trim())) return true
+  return totalBytes !== null && totalBytes < MIN_WHOLE_FILE_BYTES
+}
+
+/** A response's full size from its headers: `Content-Range`'s total, else a 200's `Content-Length`. */
+export function totalBytesOf(status: number, contentRange: string, contentLength: string): number | null {
+  const total = /\/(\d+)\s*$/.exec(contentRange)
+  if (total) return Number(total[1])
+  const length = Number(contentLength)
+  return status === 200 && contentLength !== '' && Number.isFinite(length) ? length : null
 }
 
 /**

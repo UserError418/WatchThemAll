@@ -29,7 +29,7 @@ import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
 import { renderTemplate } from './providers'
 import { isSameOrigin } from './sameorigin'
-import { isMediaRequest } from './mediarequest'
+import { isFalseWholeFile, isMediaRequest, totalBytesOf } from './mediarequest'
 
 /** What the probe concluded, worst last so a sort puts good providers first. */
 export type StreamVerdict =
@@ -146,6 +146,8 @@ export interface ProbeResponse {
   statusCode: number
   resourceType: string
   mime: string
+  /** The whole resource's size, when the response said; see `totalBytesOf`. */
+  totalBytes: number | null
   /** What Chromium sent for it, `Cookie` included. Empty if the send was not seen. */
   headers: Record<string, string>
 }
@@ -378,14 +380,22 @@ async function runProbe(
   probeSession.webRequest.onCompleted(filter, (details) => {
     base.requestCount += 1
 
-    const mime = String(details.responseHeaders?.['content-type'] ?? details.responseHeaders?.['Content-Type'] ?? '')
-    const looksLikeMedia = isMediaRequest(details.url, details.resourceType, mime)
+    const header = (name: string): string => {
+      const entry = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === name)
+      return String(entry?.[1]?.[0] ?? '')
+    }
+    const mime = header('content-type')
+    const totalBytes = totalBytesOf(details.statusCode, header('content-range'), header('content-length'))
+    const looksLikeMedia =
+      isMediaRequest(details.url, details.resourceType, mime) &&
+      !isFalseWholeFile(details.url, details.resourceType, mime, totalBytes)
 
     onResponse?.({
       url: details.url,
       statusCode: details.statusCode,
       resourceType: details.resourceType,
       mime,
+      totalBytes,
       headers: sentHeaders.get(details.url) ?? {},
     })
 

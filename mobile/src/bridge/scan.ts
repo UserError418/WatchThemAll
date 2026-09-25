@@ -58,7 +58,7 @@
 import { registerPlugin } from '@capacitor/core'
 import type { Provider } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
-import { isMediaRequest, isMediaResponse } from '@main/mediarequest'
+import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import type { PlayRequest } from '@shared/ipc'
 import { capture, type Candidate } from './cast'
@@ -309,6 +309,35 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
 }
 
 /**
+ * Whether any whole file named in the buffer really is a video.
+ *
+ * The desktop judges a `.mp4` by the response it got; the phone has only the
+ * URL, and a URL can lie. VidRock's player loads `…/demo-video.mp4` first on
+ * every title, and it is 887 bytes of HTML — counted on the name alone, it made
+ * VidRock stream on titles where nothing else loaded. So a whole file counts
+ * once one fetch of it answers with something that is not a web page.
+ */
+async function confirmWholeFiles(
+  named: Candidate[],
+  peeked: Set<string>,
+  bodies: Map<string, string>,
+): Promise<boolean> {
+  const files = named.filter((candidate) => WHOLE_FILE_URL.test(candidate.url) && !peeked.has(candidate.url))
+  for (const candidate of files.slice(0, PEEKS_PER_POLL)) {
+    peeked.add(candidate.url)
+    try {
+      const response = await capture.peek(candidate)
+      const ok = response.status === 200 || response.status === 206
+      if (ok) bodies.set(candidate.url, response.body)
+      if (ok && !/^text\/html/i.test(response.contentType.trim())) return true
+    } catch {
+      // Unreachable or refused: not proof of anything, so not a stream yet.
+    }
+  }
+  return false
+}
+
+/**
  * Fetch a few captured requests and ask what they turned out to be.
  *
  * The URL test is free and covers most providers; this covers the ones that
@@ -388,8 +417,11 @@ async function probeOne(
     // Timed to the poll that noticed it, so it can read up to one poll interval
     // (half a second) later than the moment itself. The desktop times the
     // request directly, so the two platforms' figures are close, not equal.
+    // A whole file by name must prove it is one; see `confirmWholeFiles`.
+    const named = candidates.filter((candidate) => isMediaRequest(candidate.url))
     const streaming =
-      candidates.some((candidate) => isMediaRequest(candidate.url)) ||
+      named.some((candidate) => !WHOLE_FILE_URL.test(candidate.url)) ||
+      (await confirmWholeFiles(named, peeked, bodies)) ||
       (await peekForMedia(candidates, peeked, bodies))
     if (streaming) {
       // Timed before the quality read, which is ours and not the provider's.
