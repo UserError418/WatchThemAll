@@ -1,25 +1,84 @@
 import { describe, expect, it } from 'vitest'
 import {
-  excludedTmdbIds,
-  genreWeights,
-  hasEnoughSignal,
-  MIN_SIGNAL,
-  SEED_LIMIT,
-  seedTitles,
+  avoidedConcepts,
+  centred,
+  conceptAffinity,
+  conceptOf,
+  engagementByTitle,
+  genresFor,
+  investment,
+  IMPLICIT,
+  IMPLICIT_CAP,
+  MIN_PAIR_TITLES,
+  ownedTitles,
+  ratingScale,
+  SCALE_PRIOR,
   titleAffinity,
-  WEIGHTS,
+  titleVerdicts,
+  type TasteStore,
 } from './taste'
-import type { StoreShape, Synced, TitleRating, WatchedEntry, WatchlistEntry } from '@shared/types'
+import type {
+  HistoryEntry,
+  MediaType,
+  RatingValue,
+  Synced,
+  TitleRating,
+  WatchedEntry,
+  WatchlistEntry,
+} from '@shared/types'
 import { stamp } from '@shared/store/core'
-import { valueOfLegacy } from '@shared/rating'
+import { legacyRatingOf } from '@shared/rating'
 
-type Profile = Pick<StoreShape, 'ratings' | 'watched' | 'watchlist'>
+/* ── Fixtures ────────────────────────────────────────────────────────────── */
 
-function profile(over: Partial<Profile> = {}): Profile {
-  return { ratings: [], watched: [], watchlist: [], ...over }
+const NOW = Date.UTC(2026, 8, 25)
+const DAY = 86_400_000
+
+function store(over: Partial<TasteStore> = {}): TasteStore {
+  return { ratings: [], watched: [], watchlist: [], history: [], trackers: [], ...over }
 }
 
-function watchlist(tmdbId: number, genreIds: number[]): Synced<WatchlistEntry> {
+function rated(
+  tmdbId: number,
+  value: RatingValue,
+  opts: { season?: number | null; coarse?: boolean; type?: MediaType; genreIds?: number[] } = {},
+): Synced<TitleRating> {
+  const season = opts.season ?? null
+  const type = opts.type ?? 'tv'
+  return stamp({
+    key: season === null ? `${type}:${tmdbId}` : `${type}:${tmdbId}:s${season}`,
+    tmdbId,
+    type,
+    season,
+    value,
+    coarse: opts.coarse ?? false,
+    rating: legacyRatingOf(value),
+    genreIds: opts.genreIds ?? [18],
+    at: 0,
+  })
+}
+
+function watched(
+  tmdbId: number,
+  opts: { season?: number | null; type?: MediaType; source?: 'user' | 'mal'; addedAt?: number; genreIds?: number[] } = {},
+): Synced<WatchedEntry> {
+  return stamp({
+    id: `s${tmdbId}-${opts.season ?? 'all'}`,
+    tmdbId,
+    type: opts.type ?? 'tv',
+    season: opts.season ?? null,
+    title: `title ${tmdbId}`,
+    posterPath: null,
+    imdbId: null,
+    genreIds: opts.genreIds ?? [18],
+    addedAt: opts.addedAt ?? 0,
+    rating: 0,
+    source: opts.source ?? 'user',
+    malId: null,
+  })
+}
+
+function saved(tmdbId: number, marks: Record<string, number> = {}): Synced<WatchlistEntry> {
   return stamp({
     id: `w${tmdbId}`,
     tmdbId,
@@ -30,8 +89,8 @@ function watchlist(tmdbId: number, genreIds: number[]): Synced<WatchlistEntry> {
     lastSeason: 1,
     lastEpisode: 1,
     watchedEpisodes: [],
-    episodeMarks: {},
-    genreIds,
+    episodeMarks: Object.fromEntries(Object.entries(marks).map(([k, at]) => [k, { watched: true, at }])),
+    genreIds: [18],
     episodeCount: null,
     rating: 0,
     addedAt: 0,
@@ -39,257 +98,241 @@ function watchlist(tmdbId: number, genreIds: number[]): Synced<WatchlistEntry> {
   })
 }
 
-function watched(tmdbId: number, genreIds: number[]): Synced<WatchedEntry> {
+function played(tmdbId: number, minutes: number, watchedAt: number, type: MediaType = 'tv'): Synced<HistoryEntry> {
   return stamp({
-    id: `s${tmdbId}`,
+    id: `h${tmdbId}-${watchedAt}`,
     tmdbId,
-    type: 'tv',
-    season: null,
+    type,
     title: `title ${tmdbId}`,
     posterPath: null,
-    imdbId: null,
-    genreIds,
-    addedAt: 0,
-    rating: 0,
-    source: 'user',
-    malId: null,
+    season: 1,
+    episode: 1,
+    watchedAt,
+    playedMs: minutes * 60_000,
   })
 }
 
-function seasonSeen(tmdbId: number, season: number): Synced<WatchedEntry> {
-  return stamp({ ...watched(tmdbId, []), id: `s${tmdbId}-${season}`, season })
+function scoreOf(s: TasteStore, tmdbId: number, type: MediaType = 'tv'): number | undefined {
+  return titleAffinity(s, NOW).find((t) => t.tmdbId === tmdbId && t.type === type)?.score
 }
 
-function rating(tmdbId: number, genreIds: number[], value: 'like' | 'dislike'): Synced<TitleRating> {
-  return stamp({ key: `tv:${tmdbId}`, tmdbId, type: 'tv', season: null,
-    value: valueOfLegacy(value), coarse: true, rating: value, genreIds, at: 0 })
-}
+/* ── Verdicts ────────────────────────────────────────────────────────────── */
 
-describe('genreWeights', () => {
-  it('is empty for a fresh install', () => {
-    expect(genreWeights(profile())).toEqual([])
+describe('titleVerdicts', () => {
+  it('prefers a rating chosen on the scale over converted thumbs for the same title', () => {
+    const v = titleVerdicts([
+      rated(1, 8, { coarse: true }),
+      rated(1, 6, { season: 3 }),
+    ])
+    expect(v.get('tv:1')).toEqual({ value: 6, coarse: false })
   })
 
-  it('ranks a stated opinion above a saved intention', () => {
-    const result = genreWeights(
-      profile({
-        // Four watchlist entries in genre 1 against one like in genre 2.
-        watchlist: [1, 2, 3, 4].map((id) => watchlist(id, [1])),
-        ratings: [rating(9, [2], 'like')],
-      }),
-    )
-
-    // Deliberate: no amount of watchlist padding should outrank a handful of
-    // stated opinions, but four to one is enough to win.
-    expect(result[0]?.genreId).toBe(1)
-    expect(result.find((g) => g.genreId === 2)?.weight).toBe(WEIGHTS.like)
+  it("prefers the user's whole-title rating over a mean of the seasons", () => {
+    const v = titleVerdicts([rated(1, 9), rated(1, 5, { season: 1 }), rated(1, 5, { season: 2 })])
+    expect(v.get('tv:1')?.value).toBe(9)
   })
 
-  it('lets one dislike cancel one like', () => {
-    const result = genreWeights(
-      profile({ ratings: [rating(1, [7], 'like'), rating(2, [7], 'dislike')] }),
-    )
-
-    // Net zero, and zero is not positive, so the genre drops out entirely.
-    expect(result.find((g) => g.genreId === 7)).toBeUndefined()
+  it('averages the seasons when there is no whole-title rating', () => {
+    const v = titleVerdicts([rated(1, 9, { season: 1 }), rated(1, 6, { season: 2 })])
+    expect(v.get('tv:1')?.value).toBe(7.5)
   })
 
-  it('drops a genre the user actively dislikes, rather than ranking it last', () => {
-    // There is no "show me less of this" surface to spend a negative on.
-    const result = genreWeights(
-      profile({
-        watchlist: [watchlist(1, [5])],
-        ratings: [rating(2, [5], 'dislike')],
-      }),
-    )
-
-    expect(result).toEqual([])
+  it('still reads a record an old build wrote, as a converted thumb', () => {
+    const legacy = { ...rated(1, 8), value: undefined, rating: 'dislike' } as unknown as TitleRating
+    expect(titleVerdicts([legacy]).get('tv:1')).toEqual({ value: 4, coarse: true })
   })
 
-  it('weights a finished title above a saved one', () => {
-    const result = genreWeights(
-      profile({ watched: [watched(1, [3])], watchlist: [watchlist(2, [4])] }),
-    )
-
-    expect(result.map((g) => g.genreId)).toEqual([3, 4])
-  })
-
-  it('accumulates a genre across every source', () => {
-    const result = genreWeights(
-      profile({
-        watchlist: [watchlist(1, [10])],
-        watched: [watched(2, [10])],
-        ratings: [rating(3, [10], 'like')],
-      }),
-    )
-
-    expect(result[0]).toEqual({
-      genreId: 10,
-      weight: WEIGHTS.watchlist + WEIGHTS.watched + WEIGHTS.like,
-    })
-  })
-
-  it('survives an entry written before genreIds existed', () => {
-    // Migration backfills these, but a store read mid-upgrade can still hand
-    // us an entry without them, and iterating undefined throws.
-    const broken = { ...watchlist(1, []), genreIds: undefined as unknown as number[] }
-
-    expect(() => genreWeights(profile({ watchlist: [broken] }))).not.toThrow()
-  })
-
-  it('orders ties deterministically', () => {
-    // Otherwise the row reshuffles between renders for no visible reason.
-    const a = genreWeights(profile({ watchlist: [watchlist(1, [8, 2, 5])] }))
-    const b = genreWeights(profile({ watchlist: [watchlist(1, [5, 8, 2])] }))
-
-    expect(a).toEqual(b)
-    expect(a.map((g) => g.genreId)).toEqual([2, 5, 8])
+  it('keeps a film and a series with the same TMDB number apart', () => {
+    const v = titleVerdicts([rated(7, 9, { type: 'movie' }), rated(7, 3)])
+    expect(v.get('movie:7')?.value).toBe(9)
+    expect(v.get('tv:7')?.value).toBe(3)
   })
 })
 
-describe('excludedTmdbIds', () => {
-  it('excludes everything already saved, seen, or judged', () => {
-    const ids = excludedTmdbIds(
-      profile({
-        watchlist: [watchlist(1, [])],
-        watched: [watched(2, [])],
-        ratings: [rating(3, [], 'like')],
-      }),
-    )
+/* ── The user's scale ────────────────────────────────────────────────────── */
 
-    expect(ids.sort()).toEqual([1, 2, 3])
+describe('ratingScale', () => {
+  it('is the prior for someone who has rated nothing', () => {
+    expect(ratingScale(new Map())).toEqual({ mean: SCALE_PRIOR.mean, spread: SCALE_PRIOR.spread })
   })
 
-  it('drops the zero id used by unresolved imports', () => {
-    // A MAL entry that has not been matched to TMDB yet carries tmdbId 0.
-    // Excluding "0" would exclude nothing and cost a comparison per candidate.
-    expect(excludedTmdbIds(profile({ watched: [watched(0, [])] }))).toEqual([])
+  it('moves towards the user with every rating, without three ratings defining it', () => {
+    const three = titleVerdicts([rated(1, 9), rated(2, 9), rated(3, 9)])
+    const fifty = titleVerdicts(Array.from({ length: 50 }, (_, i) => rated(i + 1, 9)))
+    const few = ratingScale(three).mean
+    const many = ratingScale(fifty).mean
+    expect(few).toBeGreaterThan(SCALE_PRIOR.mean)
+    expect(few).toBeLessThan(8)
+    expect(many).toBeGreaterThan(8.7)
+  })
+
+  it('caps how far one outlier can count', () => {
+    expect(centred(1, { mean: 9, spread: 0.5 })).toBe(-2.5)
   })
 })
 
-describe('hasEnoughSignal', () => {
-  it('is false below the threshold', () => {
-    // "Because you watch Drama" from two saved titles is a guess in the costume
-    // of a recommendation.
-    expect(hasEnoughSignal(profile({ watchlist: [watchlist(1, [1])] }))).toBe(false)
+/* ── Engagement ──────────────────────────────────────────────────────────── */
+
+describe('engagementByTitle', () => {
+  it('adds up hours per title and type', () => {
+    const e = engagementByTitle(store({
+      history: [played(1, 30, NOW), played(1, 90, NOW), played(1, 60, NOW, 'movie')],
+    }))
+    expect(e.get('tv:1')?.hours).toBe(2)
+    expect(e.get('movie:1')?.hours).toBe(1)
   })
 
-  it('is true once any mix of sources reaches it', () => {
-    expect(
-      hasEnoughSignal(
-        profile({
-          watchlist: Array.from({ length: MIN_SIGNAL }, (_, i) => watchlist(i + 1, [1])),
-        }),
-      ),
-    ).toBe(true)
+  it("does not date a watch by an import's addedAt", () => {
+    const e = engagementByTitle(store({
+      watched: [watched(1, { source: 'mal', addedAt: NOW }), watched(2, { source: 'user', addedAt: NOW })],
+    }))
+    expect(e.get('tv:1')?.lastActive).toBe(0)
+    expect(e.get('tv:2')?.lastActive).toBe(NOW)
+  })
+
+  it('counts seasons and ticked-off episodes', () => {
+    const e = engagementByTitle(store({
+      watched: [watched(1, { season: 1 }), watched(1, { season: 2 })],
+      watchlist: [saved(1, { '3:1': NOW, '3:2': NOW })],
+    }))
+    expect(e.get('tv:1')).toMatchObject({ seasons: 2, episodes: 2, onWatchlist: true, lastActive: NOW })
+  })
+})
+
+describe('investment', () => {
+  const base = { seasons: 0, hours: 0, episodes: 0, onWatchlist: false, tracked: false, lastActive: 0 }
+
+  it('grows with watching, with diminishing returns, and is capped', () => {
+    const one = investment({ ...base, hours: 10 })
+    const four = investment({ ...base, hours: 40 })
+    expect(four).toBeGreaterThan(one)
+    expect(four).toBeLessThan(one * 4)
+    expect(investment({ ...base, hours: 10_000, seasons: 40 })).toBe(3)
+  })
+
+  it('does not count an episode twice when it was both played and ticked off', () => {
+    const played = investment({ ...base, hours: 6.6 })
+    const both = investment({ ...base, hours: 6.6, episodes: 10 })
+    expect(both).toBe(played)
   })
 })
 
 /* ── Affinity ────────────────────────────────────────────────────────────── */
 
-function play(tmdbId: number, playedMs: number, id = `h${tmdbId}-${playedMs}`) {
-  return stamp({
-    id,
-    tmdbId,
-    type: 'tv' as const,
-    title: `title ${tmdbId}`,
-    posterPath: null,
-    season: 1,
-    episode: 1,
-    watchedAt: 0,
-    playedMs,
-  })
-}
-
-function affinityStore(over: Partial<Parameters<typeof titleAffinity>[0]> = {}) {
-  return { ratings: [], watched: [], watchlist: [], history: [], ...over } as Parameters<
-    typeof titleAffinity
-  >[0]
-}
-
 describe('titleAffinity', () => {
-  it('ranks a stated like above a mere watchlist entry', () => {
-    const ranked = titleAffinity(
-      affinityStore({
-        watchlist: [watchlist(1, [18]), watchlist(2, [18])],
-        ratings: [rating(2, [18], 'like')],
-      }),
-    )
-
-    expect(ranked[0]?.tmdbId).toBe(2)
+  it('reads the same number differently for a generous and a harsh rater', () => {
+    // The whole reason for centring: a 7 is a disappointment from someone who
+    // gives everything a 9, and praise from someone who gives everything a 4.
+    const filler = (value: RatingValue) => Array.from({ length: 20 }, (_, i) => rated(100 + i, value))
+    const generous = store({ ratings: [...filler(9), rated(1, 7)] })
+    const harsh = store({ ratings: [...filler(4), rated(1, 7)] })
+    expect(scoreOf(generous, 1)).toBeLessThan(0)
+    expect(scoreOf(harsh, 1)).toBeGreaterThan(0)
   })
 
-  /**
-   * The signal the store has always recorded and nothing read. Saving a title
-   * is an intention and rating one is a claim; sitting through eleven hours of
-   * something is a fact.
-   */
-  it('lets time actually invested outrank an untouched saved title', () => {
-    const ranked = titleAffinity(
-      affinityStore({
-        watchlist: [watchlist(1, [18]), watchlist(2, [18])],
-        history: [play(2, 11 * 3_600_000)],
-      }),
-    )
-
-    expect(ranked[0]?.tmdbId).toBe(2)
-    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score)
+  it('ranks a 10 above a 9 above an 8 — the scale reaches the profile', () => {
+    const s = store({ ratings: [rated(1, 8), rated(2, 10), rated(3, 9), rated(4, 5), rated(5, 6)] })
+    const order = titleAffinity(s, NOW).map((t) => t.tmdbId)
+    expect(order.indexOf(2)).toBeLessThan(order.indexOf(3))
+    expect(order.indexOf(3)).toBeLessThan(order.indexOf(1))
   })
 
-  /**
-   * A 90-hour comfort show must not become the entire profile. Hours are
-   * damped, so ten times the watching is not ten times the weight.
-   */
-  it('damps hours so one long series cannot swamp everything else', () => {
-    const modest = titleAffinity(
-      affinityStore({ watchlist: [watchlist(1, [18])], history: [play(1, 4 * 3_600_000)] }),
-    )[0]!.score
-    const enormous = titleAffinity(
-      affinityStore({ watchlist: [watchlist(1, [18])], history: [play(1, 400 * 3_600_000)] }),
-    )[0]!.score
-
-    // A hundred times the hours, nowhere near a hundred times the weight.
-    expect(enormous).toBeLessThan(modest * 12)
+  it('amplifies a liked title the user put hours into', () => {
+    const ratings = [rated(1, 9), rated(2, 9), rated(3, 5), rated(4, 6)]
+    const s = store({ ratings, history: [played(1, 600, NOW)] })
+    expect(scoreOf(s, 1)).toBeGreaterThan(scoreOf(s, 2)!)
   })
 
-  /** Asking "what is like this?" about something disliked discredits the row. */
-  it('keeps disliked titles out entirely rather than ranking them last', () => {
-    const ranked = titleAffinity(
-      affinityStore({ watchlist: [watchlist(7, [18])], ratings: [rating(7, [18], 'dislike')] }),
-    )
-
-    expect(ranked.map((t) => t.tmdbId)).not.toContain(7)
+  it('softens a dislike of something the user sat through', () => {
+    const ratings = [rated(1, 3), rated(2, 3), rated(3, 9), rated(4, 8)]
+    const s = store({ ratings, history: [played(1, 600, NOW)] })
+    expect(scoreOf(s, 1)).toBeLessThan(0)
+    expect(scoreOf(s, 1)).toBeGreaterThan(scoreOf(s, 2)!)
   })
 
-  /**
-   * The acceptance criterion for this change: recommendations have to move when
-   * the history moves. A profile that returns the same order regardless of what
-   * was watched is the static behaviour this replaced.
-   */
-  it('produces a different ordering for a different history', () => {
-    const base = { watchlist: [watchlist(1, [18]), watchlist(2, [18]), watchlist(3, [18])] }
-
-    const likesOne = titleAffinity(affinityStore({ ...base, history: [play(1, 20 * 3_600_000)] }))
-    const likesThree = titleAffinity(affinityStore({ ...base, history: [play(3, 20 * 3_600_000)] }))
-
-    expect(likesOne.map((t) => t.tmdbId)).not.toEqual(likesThree.map((t) => t.tmdbId))
-    expect(likesOne[0]?.tmdbId).toBe(1)
-    expect(likesThree[0]?.tmdbId).toBe(3)
+  it('never lets behaviour alone outrank a strong explicit rating', () => {
+    const s = store({
+      ratings: [rated(1, 10), rated(2, 5), rated(3, 6), rated(4, 7)],
+      watched: Array.from({ length: 20 }, (_, i) => watched(9, { season: i + 1 })),
+      history: [played(9, 6000, NOW)],
+      trackers: [stamp({ id: 't9', tmdbId: 9, title: 'x', posterPath: null, status: '', nextEpisode: null, lastNotified: null, addedAt: 0, lastChecked: 0 })],
+    })
+    expect(scoreOf(s, 9)).toBeLessThanOrEqual(IMPLICIT_CAP)
+    expect(scoreOf(s, 1)).toBeGreaterThan(scoreOf(s, 9)!)
   })
 
-  it('counts several watched seasons as a bigger claim than one', () => {
-    const oneSeason = titleAffinity(affinityStore({ watched: [seasonSeen(1, 1)] }))[0]!.score
-    const three = titleAffinity(
-      affinityStore({ watched: [seasonSeen(1, 1), seasonSeen(1, 2), seasonSeen(1, 3)] }),
-    )[0]!.score
+  it('counts a started-and-abandoned title against its kind', () => {
+    const s = store({ history: [played(1, 10, NOW - 30 * DAY)] })
+    expect(scoreOf(s, 1)).toBe(IMPLICIT.abandoned)
+  })
 
-    expect(three).toBeGreaterThan(oneSeason)
+  it('does not call a failed source, or a show started this week, abandoned', () => {
+    const s = store({ history: [played(1, 1, NOW - 30 * DAY), played(2, 10, NOW - 2 * DAY)] })
+    expect(scoreOf(s, 1)).toBeGreaterThanOrEqual(0)
+    expect(scoreOf(s, 2)).toBeGreaterThan(0)
+  })
+
+  it('produces a different ordering from a different history', () => {
+    // The acceptance test from CYCLE-3 §6: not that the function returns
+    // something, but that what it returns follows the history.
+    const ratings = [rated(1, 8), rated(2, 8), rated(3, 5)]
+    const a = titleAffinity(store({ ratings, history: [played(1, 900, NOW)] }), NOW)
+    const b = titleAffinity(store({ ratings, history: [played(2, 900, NOW)] }), NOW)
+    expect(a[0]?.tmdbId).toBe(1)
+    expect(b[0]?.tmdbId).toBe(2)
   })
 })
 
-describe('seedTitles', () => {
-  it('takes only the strongest few, since each one costs a request', () => {
-    const many = Array.from({ length: 20 }, (_, i) => watchlist(i + 1, [18]))
-    expect(seedTitles(affinityStore({ watchlist: many })).length).toBe(SEED_LIMIT)
+/* ── Genres ──────────────────────────────────────────────────────────────── */
+
+describe('genre concepts', () => {
+  it("folds a film's Action and a series' Action & Adventure into one concept", () => {
+    expect(conceptOf(28)).toBe(10759)
+    expect(conceptOf(12)).toBe(10759)
+    expect(conceptOf(10759)).toBe(10759)
+    expect(conceptOf(18)).toBe(18)
+  })
+
+  it('asks each catalogue in its own genre ids, or not at all', () => {
+    expect(genresFor(10765, 'movie')).toEqual([878, 14])
+    expect(genresFor(10765, 'tv')).toEqual([10765])
+    expect(genresFor(27, 'tv')).toBeNull() // Horror: films only
+    expect(genresFor(10764, 'movie')).toBeNull() // Reality: series only
+  })
+})
+
+describe('conceptAffinity', () => {
+  it('only proposes a pair once enough liked titles share it', () => {
+    const titles = (n: number) =>
+      titleAffinity(store({
+        ratings: [
+          ...Array.from({ length: n }, (_, i) => rated(i + 1, 9, { genreIds: [16, 10759] })),
+          rated(900, 4, { genreIds: [18] }),
+        ],
+      }), NOW)
+    expect(conceptAffinity(titles(MIN_PAIR_TITLES - 1)).pairs).toEqual([])
+    expect(conceptAffinity(titles(MIN_PAIR_TITLES)).pairs[0]?.concepts).toEqual([16, 10759])
+  })
+
+  it('names a genre the user has clearly turned against', () => {
+    const t = titleAffinity(store({
+      ratings: [
+        ...Array.from({ length: 4 }, (_, i) => rated(i + 1, 2, { genreIds: [10749] })),
+        ...Array.from({ length: 4 }, (_, i) => rated(i + 10, 9, { genreIds: [16] })),
+      ],
+    }), NOW)
+    expect(avoidedConcepts(conceptAffinity(t).singles)).toEqual([10749])
+  })
+})
+
+describe('ownedTitles', () => {
+  it('covers every collection, keyed by type', () => {
+    const owned = ownedTitles(store({
+      ratings: [rated(1, 8)],
+      watched: [watched(2)],
+      watchlist: [saved(3)],
+      history: [played(4, 5, NOW, 'movie')],
+    }))
+    expect([...owned].sort()).toEqual(['movie:4', 'tv:1', 'tv:2', 'tv:3'])
   })
 })

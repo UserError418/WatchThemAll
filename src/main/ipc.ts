@@ -20,7 +20,8 @@ import type {
   GenreRowRequest,
   PlayRequest,
   RowRequest,
-  TailoredRequest,
+  ForYouPlanRequest,
+  ForYouRowRequest,
   ProviderScan,
   TitleProviderState,
   TitleRef,
@@ -39,7 +40,7 @@ import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { buildTailoredRow } from './tailored'
+import { forYouPlan, forYouRow, type ForYouNetwork } from './foryou'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -159,18 +160,22 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(CH.tmdbRow, (_e, req: RowRequest | GenreRowRequest | DiscoverRequest) => tmdb.row(req))
   /**
-   * The tailored Browse row.
+   * The personalised Browse rows.
    *
-   * Main decides the contents, not the renderer: the taste profile is derived
-   * from the store, and the store is here. Having the renderer assemble genre
-   * ids to send back would put the recommendation in the surface that draws it,
-   * where the next surface wanting the same thing has to reimplement it.
+   * Main decides what they are and what goes in them, not the renderer: the
+   * taste profile is derived from the store, and the store is here. The
+   * renderer only asks for the plan and then for each planned row's pages.
    */
-  ipcMain.handle(CH.tmdbTailored, (_e, req: TailoredRequest) =>
-    buildTailoredRow(store.read(), req.page, {
-      recommendations: tmdb.recommendations,
-      discoverByGenres: tmdb.discoverByGenres,
-    }),
+  const forYouNet: ForYouNetwork = {
+    recommendations: tmdb.recommendations,
+    discover: tmdb.discover,
+    genres: tmdb.genres,
+  }
+  ipcMain.handle(CH.tmdbForYouPlan, (_e, req: ForYouPlanRequest) =>
+    forYouPlan(store.read(), req.seed, forYouNet),
+  )
+  ipcMain.handle(CH.tmdbForYouRow, (_e, req: ForYouRowRequest) =>
+    forYouRow(store.read(), req, forYouNet),
   )
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))

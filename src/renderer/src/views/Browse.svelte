@@ -1,23 +1,41 @@
+<script module lang="ts">
+  /**
+   * Which of the user's favourites this app session's "Because you…" rows are
+   * about.
+   *
+   * Module scope, so it is chosen once per launch rather than once per visit to
+   * the tab: switching to Watchlist and back should not reshuffle the page the
+   * user was halfway down, while the next launch should show a different one.
+   */
+  const SESSION_SEED = Math.floor(Math.random() * 2 ** 31)
+</script>
+
 <script lang="ts">
   /**
    * The Browse surface: a hero, then rows.
    *
-   * Row composition is personalised without a separate recommendation engine.
-   * The fixed rows are always present; genre rows are ordered by the user's own
-   * taste profile, which is derived from data already in memory rather than by
-   * querying TMDB for every saved title.
+   * Two kinds of row, in a deliberate order. The personalised rows — Top picks,
+   * "Because you watched ‹Title›", and genre shelves chosen by the user's taste
+   * — are planned by main from the store, because that is where the taste
+   * profile lives (see `foryou.ts`). The fixed charts come after them: they
+   * answer "what is everyone watching", which is worth knowing and is not the
+   * question the top of a personal page should answer.
+   *
+   * Continue Watching and the Top 10 stay above both. They answer "what should
+   * I open" more directly than any recommendation, and the Top 10 is the row
+   * people scan first out of habit.
    *
    * Rows below the fold do not fetch until they are scrolled near — see
    * BrowseRow. That is what keeps first paint independent of how many rows the
-   * profile produces.
+   * plan produces.
    */
+  import { untrack } from 'svelte'
   import type { MediaSummary } from '@shared/types'
-  import type { GenreRowRequest, RowRequest } from '@shared/ipc'
+  import type { ForYouRow, RowRequest } from '@shared/ipc'
   import BrowseRow from '../components/BrowseRow.svelte'
   import ContinueRow from '../components/ContinueRow.svelte'
   import Hero from '../components/Hero.svelte'
   import Top10Row from '../components/Top10Row.svelte'
-  import TailoredRow from '../components/TailoredRow.svelte'
   import DiscoveryFeed from '../components/DiscoveryFeed.svelte'
   import { library } from '../lib/library.svelte'
   import { shown } from '../lib/shown.svelte'
@@ -28,19 +46,10 @@
 
   const { onselect }: Props = $props()
 
-  interface RowSpec {
-    key: string
-    title: string
-    request: RowRequest | GenreRowRequest
-    /** Personalised rows hide what the user already has; fixed rows do not. */
-    hideOwned?: boolean
-  }
-
-  let genreNames = $state<Map<number, string>>(new Map())
+  let plan = $state<ForYouRow[]>([])
   let heroFallback = $state<MediaSummary | null>(null)
 
   $effect(() => {
-    void loadGenreNames()
     void loadHeroFallback()
 
     /**
@@ -54,16 +63,45 @@
     return () => shown.reset()
   })
 
-  async function loadGenreNames(): Promise<void> {
+  /**
+   * Changes whenever the library does in a way the profile would notice.
+   *
+   * The collections are replaced, never mutated, on every write — so reading
+   * the references is enough to subscribe, and a rating changed from 7 to 9
+   * (same length, different contents) still registers.
+   */
+  const tasteVersion = $derived([library.ratings, library.watched, library.watchlist])
+
+  /**
+   * The plan is fetched on arrival and then left alone — rows that rearranged
+   * themselves whenever the user rated something would be a page that moves
+   * under the pointer. Two exceptions, both below.
+   */
+  let planned = false
+  $effect(() => {
+    void tasteVersion
+    // A new user with nothing to go on gets an empty plan. Their first few
+    // ratings are exactly when the rows should appear, so an empty plan is
+    // re-asked on every change until it is not empty.
+    //
+    // `plan` is read untracked: this effect must re-run when the *library*
+    // changes, not when the plan it just fetched arrives — an empty plan would
+    // otherwise re-request itself forever.
+    untrack(() => {
+      if (planned && plan.length > 0) return
+      planned = true
+      void loadPlan()
+    })
+  })
+
+  async function loadPlan(): Promise<void> {
     try {
-      const [tv, movie] = await Promise.all([
-        window.wta.tmdb.genres('tv'),
-        window.wta.tmdb.genres('movie'),
-      ])
-      genreNames = new Map([...tv, ...movie].map((g) => [g.id, g.name]))
+      const result = await window.wta.tmdb.forYouPlan({ seed: SESSION_SEED })
+      plan = result.rows
     } catch (err) {
-      // Genre rows simply do not appear; the fixed rows still do.
-      console.error('[browse] could not load genre names:', err)
+      // The fixed rows still render; a page without personal rows is a worse
+      // page, not a broken one.
+      console.error('[browse] could not plan the personal rows:', err)
     }
   }
 
@@ -78,37 +116,15 @@
     }
   }
 
-  const fixedRows: RowSpec[] = [
+  const forYou = (row: ForYouRow) => (page: number) => window.wta.tmdb.forYouRow({ row, page })
+  const chart = (request: RowRequest) => (page: number) => window.wta.tmdb.row({ ...request, page })
+
+  const charts: Array<{ key: string; title: string; request: RowRequest }> = [
     { key: 'onTheAir', title: 'On The Air', request: { row: 'onTheAir', page: 0 } },
     { key: 'topRated', title: 'Top Rated Series', request: { row: 'topRated', page: 0 } },
     { key: 'popularMovies', title: 'Popular Films', request: { row: 'popularMovies', page: 0 } },
     { key: 'upcoming', title: 'Coming Soon', request: { row: 'upcoming', page: 0 } },
   ]
-
-  /**
-   * Up to four genre rows. The first is labelled as a recommendation because it
-   * is one; the rest are plain genre rows so the surface does not read as if
-   * every shelf were personalised.
-   */
-  const genreRows = $derived.by<RowSpec[]>(() => {
-    if (genreNames.size === 0) return []
-    const ids = library.topGenreIds().filter((id) => genreNames.has(id))
-    if (ids.length === 0) return []
-
-    return ids.slice(0, 4).map((genreId, index) => ({
-      key: `genre-${genreId}`,
-      title: index === 0 ? `Because you watch ${genreNames.get(genreId)}` : genreNames.get(genreId)!,
-      request: { genreId, type: 'tv' as const, page: 0 },
-      hideOwned: true,
-    }))
-  })
-
-  /**
-   * The personalised rows come first among the plain rows, but below Continue
-   * Watching and the Top 10 — both of which answer "what should I open" more
-   * directly than a genre shelf does.
-   */
-  const rows = $derived([...genreRows, ...fixedRows])
 </script>
 
 <div class="browse">
@@ -116,22 +132,24 @@
   <!-- Above every TMDB row: what the user was already in the middle of. -->
   <ContinueRow {onselect} />
   <Top10Row title="Top 10 Series This Week" request={{ row: 'trending', page: 0 }} eager {onselect} />
-  <!--
-    The only row on this page derived from what this user has actually watched
-    and rated. Above the genre shelves because it answers "what should I open"
-    more directly than any of them, and below the Top 10 because that is the
-    row people scan first out of habit. Renders nothing until there is enough
-    history to say something worth saying — see TailoredRow.
-  -->
-  <TailoredRow {genreNames} {onselect} />
-  {#each rows as row, index (row.key)}
-    <BrowseRow
-      title={row.title}
-      request={row.request}
-      hideOwned={row.hideOwned ?? false}
-      eager={index < 1}
-      {onselect}
-    />
+
+  {#each plan as row, index (row.key)}
+    {#if row.kind === 'topPicks'}
+      <!--
+        The one row that follows the library live. Re-created when the taste
+        changes, so rating something from the detail view is reflected here
+        without reloading the page — the other rows keep their place.
+      -->
+      {#key tasteVersion}
+        <BrowseRow title={row.title} load={forYou(row)} hideOwned eager={index === 0} {onselect} />
+      {/key}
+    {:else}
+      <BrowseRow title={row.title} load={forYou(row)} hideOwned eager={index === 0} {onselect} />
+    {/if}
+  {/each}
+
+  {#each charts as row (row.key)}
+    <BrowseRow title={row.title} load={chart(row.request)} {onselect} />
   {/each}
 
   <!-- Past the curated shelves, the catalogue itself. -->

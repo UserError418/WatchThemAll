@@ -1,6 +1,8 @@
 <script lang="ts">
   /**
-   * A row backed by a paginated TMDB endpoint.
+   * A row backed by a paginated source — a TMDB chart, or a personalised row
+   * main planned. The row does not know which: it is handed a `load` function
+   * and asks it for pages.
    *
    * Two things the original got wrong and this fixes:
    *
@@ -13,7 +15,7 @@
    * its engine was rebuilt stateless on every request.
    */
   import type { MediaSummary } from '@shared/types'
-  import type { GenreRowRequest, RowRequest } from '@shared/ipc'
+  import type { Paged } from '@shared/ipc'
   import TitleCard from './TitleCard.svelte'
   import RowShell from './RowShell.svelte'
   import { library } from '../lib/library.svelte'
@@ -21,7 +23,8 @@
 
   interface Props {
     title: string
-    request: RowRequest | GenreRowRequest
+    /** Fetch one page, 1-based. */
+    load: (page: number) => Promise<Paged<MediaSummary>>
     onselect?: (media: MediaSummary) => void
     /**
      * Hide titles already in the library. Set on the personalised rows: a shelf
@@ -35,7 +38,17 @@
     eager?: boolean
   }
 
-  const { title, request, onselect, hideOwned = false, eager = false }: Props = $props()
+  const { title, load, onselect, hideOwned = false, eager = false }: Props = $props()
+
+  /**
+   * A title's identity within the row.
+   *
+   * Type and id together, never the id alone: TMDB numbers films and series
+   * separately, and a personalised shelf mixes both — keyed by id, a film and a
+   * series that share a number would de-duplicate each other away, and as a
+   * keyed `{#each}` would make Svelte throw on the duplicate key.
+   */
+  const keyOf = (m: MediaSummary): string => `${m.type}:${m.tmdbId}`
 
   let items = $state<MediaSummary[]>([])
   let page = $state(0)
@@ -68,11 +81,11 @@
     loading = true
     error = null
     try {
-      const next = await window.wta.tmdb.row({ ...request, page: page + 1 })
+      const next = await load(page + 1)
       // De-duplicate: TMDB's paginated endpoints repeat an entry across pages
       // when the underlying ranking shifts between requests.
-      const seen = new Set(items.map((i) => i.tmdbId))
-      items = [...items, ...next.items.filter((i) => !seen.has(i.tmdbId))]
+      const seen = new Set(items.map(keyOf))
+      items = [...items, ...next.items.filter((i) => !seen.has(keyOf(i)))]
       page = next.page
       totalPages = next.totalPages
 
@@ -105,7 +118,7 @@
   onnearEnd={loadNextPage}
   onretry={loadNextPage}
 >
-  {#each visible as media, index (media.tmdbId)}
+  {#each visible as media, index (keyOf(media))}
     <!--
       Edge cards grow inward. The track is a horizontal scroll container, so a
       card expanding past either end is clipped rather than overflowing.

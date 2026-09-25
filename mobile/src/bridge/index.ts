@@ -42,8 +42,8 @@ import type {
   PlayerState,
   PlayerSuggestion,
   RowRequest,
-  TailoredRequest,
-  TailoredRow,
+  ForYouPlanRequest,
+  ForYouRowRequest,
   ProviderScan,
   ProviderScanProgress,
   TitleProviderState,
@@ -89,7 +89,7 @@ import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
-import { buildTailoredRow } from '@main/tailored'
+import { forYouPlan, forYouRow, type ForYouNetwork } from '@main/foryou'
 import { backfillScores } from '@main/scorebackfill'
 import { runSeasonSplit, tmdbIdentify } from '@main/seasonsplit'
 import {
@@ -1148,6 +1148,13 @@ export async function createBridge(): Promise<WtaApi> {
     })
   })()
 
+  /** The network the personalised Browse rows are built over. See `foryou.ts`. */
+  const forYouNet: ForYouNetwork = {
+    recommendations: tmdb.recommendations,
+    discover: tmdb.discover,
+    genres: tmdb.genres,
+  }
+
   return {
     store: {
       read: async () => store.read(),
@@ -1161,17 +1168,13 @@ export async function createBridge(): Promise<WtaApi> {
         tmdb.row(req) as Promise<Paged<MediaSummary>>,
 
       /**
-       * The tailored row, assembled here rather than in the renderer.
-       *
-       * Same reasoning as on desktop: it is derived from the store, and having
-       * the surface that draws it assemble the genre ids means the next surface
-       * wanting the same thing reimplements the taste model.
+       * The personalised rows, planned and filled here rather than in the
+       * renderer — the same two calls the desktop's IPC handlers make, over
+       * the same store document, so the two platforms cannot disagree about
+       * what a user's Browse page is.
        */
-      tailored: (req: TailoredRequest): Promise<TailoredRow> =>
-        buildTailoredRow(store.read(), req.page, {
-          recommendations: tmdb.recommendations,
-          discoverByGenres: tmdb.discoverByGenres,
-        }),
+      forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, forYouNet),
+      forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, forYouNet),
 
       search: (query: string, page: number) => tmdb.search(query, page),
       detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),

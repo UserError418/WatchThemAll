@@ -1079,40 +1079,6 @@ class Library {
     this.settings = { ...this.settings, skipIntro: on }
     void this.persist({ settings: this.settings })
   }
-
-  /* ── Taste profile ──────────────────────────────────────────────────── */
-
-  /**
-   * Genre ids the user watches most, best first.
-   *
-   * Derived entirely from what is already in memory. The original's equivalent
-   * made ~31 sequential HTTP requests to rebuild the same profile on every
-   * dashboard load, which is why it took seconds to appear.
-   */
-  topGenreIds(): number[] {
-    // Plain records rather than Maps: these are local accumulators discarded on
-    // return, so they are deliberately not the reactive collections Svelte
-    // provides for state.
-    const weights: Record<number, number> = {}
-    const genresOf: Record<number, number[]> = {}
-    for (const entry of this.watchlist) genresOf[entry.tmdbId] = entry.genreIds
-
-    const credit = (tmdbId: number, weight: number): void => {
-      for (const genreId of genresOf[tmdbId] ?? []) {
-        weights[genreId] = (weights[genreId] ?? 0) + weight
-      }
-    }
-
-    // Watching counts for more than saving, and recent history for more than
-    // old — a genre binged last week should outrank one saved a year ago.
-    for (const entry of this.watchlist) credit(entry.tmdbId, 2)
-    for (const tracker of this.trackers) credit(tracker.tmdbId, 2)
-    this.history.slice(0, 60).forEach((entry, index) => credit(entry.tmdbId, index < 20 ? 3 : 1))
-
-    return Object.entries(weights)
-      .sort((a, b) => b[1] - a[1])
-      .map(([id]) => Number(id))
-  }
 }
 
 export const library = new Library()

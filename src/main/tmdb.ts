@@ -192,20 +192,27 @@ function isDiscoverRow(
 }
 
 /**
- * Titles matching any of several genres.
+ * `/discover` for one catalogue, filtered by genre in both directions.
  *
- * `with_genres` joined by `|` is TMDB's OR; a comma would be AND, which for a
- * three-genre profile returns almost nothing. A vote floor keeps the row from
- * filling with titles that match the genres and nothing else.
+ * The genre strings are passed through in TMDB's own syntax — `,` is AND and
+ * `|` is OR — because the personalised shelves need both, and a structured
+ * parameter here would just be that syntax spelled differently. They are built
+ * from genre numbers in `foryou.ts`, never from anything the user typed.
+ *
+ * The vote floor keeps a shelf from filling with titles that match the genres
+ * and nothing else; at 80 it still admits the long tail of a niche genre, which
+ * a higher floor empties.
  */
-export async function discoverByGenres(
+export async function discover(
   type: MediaType,
-  genreIds: number[],
+  withGenres: string,
+  withoutGenres: string,
   page: number,
 ): Promise<Paged<MediaSummary>> {
-  if (genreIds.length === 0) return { items: [], page, totalPages: 0 }
+  if (!withGenres) return { items: [], page, totalPages: 0 }
   const res = await get<TmdbPage>(`/discover/${type}`, {
-    with_genres: genreIds.join('|'),
+    with_genres: withGenres,
+    ...(withoutGenres ? { without_genres: withoutGenres } : {}),
     sort_by: 'popularity.desc',
     'vote_count.gte': 80,
     include_adult: 'false',
@@ -217,7 +224,7 @@ export async function discoverByGenres(
 /**
  * What TMDB thinks is like this title.
  *
- * The content-based half of the tailored row. `/recommendations` is computed
+ * The backbone of Top picks and the "Because you watched" rows. `/recommendations` is computed
  * from what people actually watch together as well as from metadata, so it
  * answers a question genre filtering cannot: two series can share every genre
  * tag and have nothing else in common, and `/discover` cannot tell them apart.
