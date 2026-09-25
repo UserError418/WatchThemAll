@@ -121,21 +121,6 @@ streaming sources; the provider list is not crowd-sourced.
 - [`docs/PRIVACY.md`](docs/PRIVACY.md) — what the app sends, and what it stores
 - [`mobile/README.md`](mobile/README.md) — the Android app
 
-## What is not in this repository
-
-Two things are maintained but deliberately unpublished, and the source refers
-to them in passing:
-
-- **`scripts/`** — the build, deploy, release and provisioning tooling, plus
-  the development harness that drives a running app over the DevTools
-  protocol. Some of it installs onto a named machine over SSH. The practical
-  consequence is that **`npm run apk` will not work in a clone**, because it
-  points at `scripts/build-apk.sh`. Every other script in `package.json` —
-  `dev`, `build`, `lint`, `typecheck`, `test` — is self-contained and works.
-- **The long-form design documents.** Comments in the source occasionally cite
-  them by name. Treat those as a pointer to reasoning that is not public
-  rather than to a file you are expected to find.
-
 ## Licence
 
 [MIT](LICENSE).
