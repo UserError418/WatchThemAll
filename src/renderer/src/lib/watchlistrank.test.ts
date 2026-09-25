@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { HistoryEntry } from '@shared/types'
+import { resumeTarget, type EpisodeRef } from '@shared/progress'
 import {
   activityOf,
   furthestWatched,
@@ -364,5 +365,54 @@ describe('resumeAnchor', () => {
       lastEpisode: null,
     }
     expect(resumeAnchor(entry)).toEqual({ season: 2, episode: 4 })
+  })
+})
+
+/**
+ * The anchor and the target together, as the detail view's Resume button
+ * uses them.
+ *
+ * The case that shipped: The Office, last opened in the player at S01E04,
+ * with S1–S2 and most of S3 ticked off by hand. The detail view read the
+ * stored pair instead of the anchor and offered "Resume S02E01" — a season
+ * the user had finished.
+ */
+describe('resuming a series marked by hand', () => {
+  const watched = [
+    ...Array.from({ length: 6 }, (_, i) => `1:${i + 1}`),
+    ...Array.from({ length: 22 }, (_, i) => `2:${i + 1}`),
+    ...Array.from({ length: 23 }, (_, i) => `3:${i + 1}`),
+  ]
+  const entry = {
+    ...series({ tmdbId: 2316, title: 'The Office', episodeMarks: marks(NOW, ...watched) }),
+    lastSeason: 1,
+    lastEpisode: 4,
+  }
+  const isWatched = (s: number, e: number): boolean => watched.includes(`${s}:${e}`)
+  const listing = (season: number, count: number): EpisodeRef[] =>
+    Array.from({ length: count }, (_, i) => ({ season, episode: i + 1 }))
+
+  it('picks up after the last marked episode, not after the last one played', () => {
+    const anchor = resumeAnchor(entry)
+    const target = resumeTarget({
+      episodes: listing(3, 25),
+      lastSeason: anchor.season,
+      lastEpisode: anchor.episode,
+      seasonCount: 9,
+      isWatched,
+    })
+    expect(target).toEqual({ season: 3, episode: 24 })
+  })
+
+  it('moves on to the next season when the marked one is finished', () => {
+    const anchor = resumeAnchor(entry)
+    const target = resumeTarget({
+      episodes: listing(3, 23),
+      lastSeason: anchor.season,
+      lastEpisode: anchor.episode,
+      seasonCount: 9,
+      isWatched,
+    })
+    expect(target).toEqual({ season: 4, episode: 1 })
   })
 })

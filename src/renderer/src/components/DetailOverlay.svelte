@@ -9,7 +9,7 @@
    * Only the selected season's episodes are fetched. A long-running series has
    * twenty seasons and the user is looking at one of them.
    */
-  import type { Episode, MediaDetail, MediaSummary, Season } from '@shared/types'
+  import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
@@ -19,7 +19,8 @@
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
-  import { resumeTarget } from '@shared/progress'
+  import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
+  import { resumeAnchor } from '../lib/watchlistrank'
   import Score from './Score.svelte'
   import { seasonScore } from '@shared/score'
 
@@ -48,6 +49,11 @@
 
   let detail = $state<MediaDetail | null>(null)
   let season = $state<Season | null>(null)
+  /**
+   * The season the user's position is in, which need not be the one on screen.
+   * See `resumeAt` — "Resume" must not change its answer with the season picker.
+   */
+  let resumeSeason = $state<Season | null>(null)
   let selectedSeason = $state(1)
   let loadingDetail = $state(true)
   let loadingSeason = $state(false)
@@ -111,6 +117,7 @@
     degraded = false
     detail = null
     season = null
+    resumeSeason = null
 
     if (opened.tmdbId === 0) {
       try {
@@ -132,8 +139,8 @@
       if (!degraded) {
         error = 'This title has no IMDB id, so no provider can play it.'
       }
-      manualSeason = entry?.lastSeason ?? 1
-      manualEpisode = entry?.lastEpisode ?? 1
+      manualSeason = anchor.season
+      manualEpisode = anchor.episode
       loadingDetail = false
       return
     }
@@ -159,9 +166,16 @@
       library.setRating(tmdbId, result.rating)
 
       if (type === 'tv' && result.seasonCount > 0) {
-        // Resume where the user left off rather than always at season one.
-        selectedSeason = Math.min(entry?.lastSeason ?? 1, result.seasonCount)
+        // Open where the user is rather than always at season one: first the
+        // season their position is in, which is what `resumeAt` needs...
+        selectedSeason = Math.min(anchor.season, result.seasonCount)
         await loadSeason(selectedSeason)
+        // ...then, if that season is finished and Resume moves on to the next,
+        // that one — so the row the button names is the one on screen.
+        if (resumeAt.season !== selectedSeason) {
+          selectedSeason = resumeAt.season
+          await loadSeason(selectedSeason)
+        }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not load this title'
@@ -173,7 +187,9 @@
   async function loadSeason(number: number): Promise<void> {
     loadingSeason = true
     try {
-      season = await window.wta.tmdb.season(subject.tmdbId, number)
+      const loaded = await window.wta.tmdb.season(subject.tmdbId, number)
+      season = loaded
+      if (loaded?.season === anchor.season) resumeSeason = loaded
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not load this season'
     } finally {
@@ -255,7 +271,7 @@
    */
   const playable = $derived(detail ?? { ...subject, imdbId: subject.imdbId ?? null })
 
-  async function play(episode: Episode | null): Promise<void> {
+  async function play(episode: (EpisodeRef & { runtime?: number | null }) | null): Promise<void> {
     playError = null
 
     const result = await window.wta.play({
@@ -290,24 +306,66 @@
   }
 
   /**
+   * Where the user is in this series: the further of the episode last played
+   * and the episode last marked watched.
+   *
+   * The same anchor the watchlist card uses, so the two agree. Reading
+   * `lastSeason`/`lastEpisode` alone is what this view used to do, and those
+   * move only when an episode is opened in the app's own player — so a series
+   * with seasons ticked off by hand kept offering to resume from before them.
+   */
+  const anchor = $derived<EpisodeRef>(entry ? resumeAnchor(entry) : { season: 1, episode: 1 })
+
+  /**
    * Where this series picks up.
    *
-   * Derived rather than read straight off the entry: `lastSeason`/`lastEpisode`
-   * are the last episode *started*, which is very often one that was then
-   * finished — and a finished episode is not a place to resume. See
-   * `shared/progress.ts` for the rule and for the write race it sidesteps.
+   * Derived rather than read straight off the entry: the anchor is very often
+   * an episode that was then finished — and a finished episode is not a place
+   * to resume. See `shared/progress.ts` for the rule and for the write race it
+   * sidesteps.
+   *
+   * Worked out from the anchor's own season, `resumeSeason`, never from the
+   * season on screen. Otherwise the button changed its answer as the user
+   * browsed: `resumeTarget` only trusts a listing of the anchor's season, and
+   * given any other it falls back to the anchor itself.
    */
   const resumeAt = $derived(
     resumeTarget({
-      episodes: season?.episodes ?? [],
-      lastSeason: entry?.lastSeason ?? 1,
-      lastEpisode: entry?.lastEpisode ?? 1,
+      episodes: resumeSeason?.season === anchor.season ? resumeSeason.episodes : [],
+      lastSeason: anchor.season,
+      lastEpisode: anchor.episode,
       seasonCount: detail?.seasonCount ?? 1,
       isWatched: (s, e) => library.isWatched(subject.tmdbId, s, e),
     }),
   )
 
-  /** Resume from the derived position, or the first episode if there is none. */
+  /**
+   * Keeps `resumeSeason` on the anchor's season when the anchor moves.
+   *
+   * It moves when the user ticks or clears episodes, and "Clear season" can
+   * move it back into a season nobody has loaded. The initial load needs none
+   * of this — `loadSeason` fills `resumeSeason` in when it fetches the
+   * anchor's season — hence the early return while that fetch is in flight.
+   */
+  $effect(() => {
+    if (detail?.type !== 'tv') return
+    const wanted = anchor.season
+    if (resumeSeason?.season === wanted) return
+    if (loadingSeason && selectedSeason === wanted) return
+
+    const tmdbId = subject.tmdbId
+    window.wta.tmdb.season(tmdbId, wanted).then(
+      (loaded) => {
+        if (loaded && subject.tmdbId === tmdbId && anchor.season === wanted) resumeSeason = loaded
+      },
+      () => {
+        // Without the listing, `resumeTarget` stays on the anchor episode
+        // itself: not the best answer, but never a wrong one.
+      },
+    )
+  })
+
+  /** Play exactly the episode the button names. */
   function resume(): void {
     if (playable.type === 'movie') {
       void play(null)
@@ -315,14 +373,10 @@
     }
     if (degraded) {
       // No episode list to resume from — use the numbers the user picked.
-      void play({ season: manualSeason, episode: manualEpisode } as Episode)
+      void play({ season: manualSeason, episode: manualEpisode })
       return
     }
-    const target =
-      season?.episodes.find(
-        (e) => e.season === resumeAt.season && e.episode === resumeAt.episode,
-      ) ?? season?.episodes[0]
-    void play(target ?? null)
+    void play(episodeToPlay(resumeAt, [resumeSeason?.episodes ?? [], season?.episodes ?? []]))
   }
 
   /** What pressing "+ Watched" will actually file, in words. */
@@ -613,7 +667,7 @@
             </label>
             <button
               class="manual-play"
-              onclick={() => play({ season: manualSeason, episode: manualEpisode } as Episode)}
+              onclick={() => play({ season: manualSeason, episode: manualEpisode })}
             >
               ▶ Play {episodeCode(manualSeason, manualEpisode)}
             </button>

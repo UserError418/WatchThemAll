@@ -74,3 +74,23 @@ export function resumeTarget(args: ResumeTargetArgs): EpisodeRef {
 
   return here
 }
+
+/**
+ * What to hand the player for a resume target: the listed episode when a
+ * loaded season has it, the bare position otherwise.
+ *
+ * Never a *different* episode. The detail view used to fall back to the first
+ * episode of whichever season was on screen, so a button reading "Resume
+ * S02E01" played S01E01. A bare position plays just as well — providers need
+ * only the numbers — and loses nothing but the episode's own runtime.
+ */
+export function episodeToPlay<T extends EpisodeRef>(
+  target: EpisodeRef,
+  listings: ReadonlyArray<readonly T[]>,
+): T | EpisodeRef {
+  for (const listing of listings) {
+    const found = listing.find((e) => e.season === target.season && e.episode === target.episode)
+    if (found) return found
+  }
+  return { season: target.season, episode: target.episode }
+}

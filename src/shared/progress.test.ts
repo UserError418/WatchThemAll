@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resumeTarget, type EpisodeRef } from './progress'
+import { episodeToPlay, resumeTarget, type EpisodeRef } from './progress'
 
 /** One season of ten, which is what most of these need. */
 function season(number: number, count = 10): EpisodeRef[] {
@@ -127,5 +127,32 @@ describe('resumeTarget', () => {
         isWatched: watched('1:1'),
       }),
     ).toEqual({ season: 1, episode: 2 })
+  })
+})
+
+describe('episodeToPlay', () => {
+  const withRuntime = (s: number, count: number) =>
+    Array.from({ length: count }, (_, i) => ({ season: s, episode: i + 1, runtime: 20 + i }))
+
+  it('returns the listed episode, so its own runtime goes with it', () => {
+    expect(episodeToPlay({ season: 3, episode: 2 }, [withRuntime(3, 5)])).toEqual({
+      season: 3,
+      episode: 2,
+      runtime: 21,
+    })
+  })
+
+  it('looks through every listing it is given', () => {
+    const found = episodeToPlay({ season: 3, episode: 1 }, [withRuntime(1, 6), withRuntime(3, 5)])
+    expect(found).toEqual({ season: 3, episode: 1, runtime: 20 })
+  })
+
+  it('never substitutes a different episode for one it cannot find', () => {
+    // The shipped bug: target S02E01, only season 1 on screen, and the first
+    // episode on screen played instead of the one the button named.
+    expect(episodeToPlay({ season: 2, episode: 1 }, [withRuntime(1, 6)])).toEqual({
+      season: 2,
+      episode: 1,
+    })
   })
 })
