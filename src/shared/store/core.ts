@@ -506,7 +506,6 @@ export class StoreCore {
   }
 }
 
-/** The document with every tombstone filtered out of every collection. */
 /**
  * `next`, plus every deletion in `current` that `next` does not mention.
  *
@@ -571,6 +570,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return left.every(([field, value]) => field in other && deepEqual(value, other[field]))
 }
 
+/** The document with every tombstone filtered out of every collection. */
 function buildView(doc: StoreDocument): StoreView {
   const view = { ...doc }
   for (const key of COLLECTION_KEYS) {
