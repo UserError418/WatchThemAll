@@ -32,6 +32,7 @@ vi.mock('./qualityprobe', () => ({
       playlists: [],
       wholeFiles: [],
       video: null,
+      sniffed: [],
       judgement: {
         outcome: best === null ? 'unreadable' : 'ladder',
         best,

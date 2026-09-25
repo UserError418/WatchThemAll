@@ -35,6 +35,7 @@ import type { WebContents } from 'electron'
 import type { Provider } from '@shared/types'
 import { probeStream, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
+import { isFalseWholeFile, WHOLE_FILE_URL } from './mediarequest'
 import { checkRuntime } from './runtimecheck'
 import { judgeQuality, readLadder, type LadderKind, type QualityJudgement, type Rendition } from '@shared/streamquality'
 
@@ -127,14 +128,14 @@ export interface QualityProbeResult {
   wholeFiles: string[]
   /** The `<video>` judged to be the title — the longest one with a picture. */
   video: VideoReading | null
+  /** Measure mode only: what each frame's player said about quality, raw. */
+  sniffed: FrameSniff[]
   judgement: QualityJudgement
 }
 
 /** A playlist by what it says it is, before anyone has read it. */
 const PLAYLIST_MIME = /mpegurl|dash\+xml/i
 const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)/i
-/** A whole video file. `.mp4` is also used for fMP4 segments; `judgeQuality` lets a playlist outrank it. */
-const WHOLE_FILE_URL = /\.(mp4|mkv|webm)(\?|$)/i
 /** Types an opaque proxy serves a playlist under, where only reading it will tell. */
 const OPAQUE_MIME = /^(text\/plain|application\/octet-stream)?\s*(;|$)/i
 /** Things that are certainly not a playlist, whatever type they were served under. */
@@ -147,6 +148,8 @@ function candidateOf(response: ProbeResponse): Candidate | null {
   if (response.statusCode >= 400) return null
   if (PLAYLIST_MIME.test(response.mime) || PLAYLIST_URL.test(response.url)) return 'playlist'
   if (NOT_A_PLAYLIST.test(response.url)) return null
+  if (isFalseWholeFile(response.url, response.resourceType, response.mime, response.totalBytes)) return null
+  // `.mp4` also names fMP4 segments; `judgeQuality` lets a playlist outrank them.
   if (WHOLE_FILE_URL.test(response.url) || response.resourceType === 'media') return 'whole-file'
   // Several providers proxy their playlists through extensionless paths served
   // as plain text or octet-stream. Only asking for one again can tell.
@@ -172,6 +175,94 @@ const READ_VIDEOS_SCRIPT = `(() => {
   try { walk(document) } catch {}
   return found.map((v) => ({ width: v.videoWidth, height: v.videoHeight, duration: v.duration }))
 })()`
+
+/**
+ * Everything a frame's player says about quality, raw.
+ *
+ * Run in the page's own JavaScript world, because that is where the players
+ * keep what they know: hls.js holds its levels on the instance, JW Player
+ * answers `getQualityLevels()`, video.js has `qualityLevels()`, and a player
+ * that draws a quality menu has usually drawn it already, hidden until the
+ * gear is clicked. Three kinds of evidence, each a short string:
+ *
+ * - `api` — a player object's own list of renditions
+ * - `menu` — an element whose own text is a quality ("1080p", "4K"), with
+ *   where it sits, hidden or not
+ * - `attr` — an attribute naming a quality or resolution
+ *
+ * Deliberately raw: this is a survey, and the rules that turn it into a number
+ * are written against what real players turned out to expose.
+ */
+const SNIFF_SCRIPT = `(() => {
+  const out = { api: [], menu: [], attr: [] }
+  const add = (list, text) => { if (list.length < 30) list.push(String(text).slice(0, 160)) }
+  const heights = (levels) => {
+    try { return JSON.stringify(Array.from(levels, (l) => l && (l.height ?? l.label ?? l.name ?? l.bitrate ?? null))) } catch { return '?' }
+  }
+  const tryLevels = (label, value) => {
+    try {
+      if (!value || typeof value !== 'object') return
+      if (Array.isArray(value.levels) && value.levels.length) add(out.api, label + '.levels ' + heights(value.levels))
+      if (value.hls && Array.isArray(value.hls.levels)) add(out.api, label + '.hls.levels ' + heights(value.hls.levels))
+      if (typeof value.getQualityLevels === 'function') add(out.api, label + '.getQualityLevels ' + heights(value.getQualityLevels() || []))
+      if (typeof value.qualityLevels === 'function') { const q = value.qualityLevels(); if (q && q.length) add(out.api, label + '.qualityLevels ' + heights(Array.from({ length: q.length }, (_, i) => q[i]))) }
+      if (value.qualities && value.qualities.length) add(out.api, label + '.qualities ' + heights(Array.from(value.qualities)))
+      if (Array.isArray(value.quality) && value.quality.length) add(out.api, label + '.quality ' + heights(value.quality))
+      if (typeof value.getVariantTracks === 'function') add(out.api, label + '.getVariantTracks ' + heights(value.getVariantTracks()))
+    } catch {}
+  }
+  try { if (typeof window.jwplayer === 'function') tryLevels('jwplayer()', window.jwplayer()) } catch {}
+  try { if (window.videojs && window.videojs.getPlayers) for (const [id, p] of Object.entries(window.videojs.getPlayers())) tryLevels('videojs:' + id, p) } catch {}
+  try { if (window.Artplayer && window.Artplayer.instances) window.Artplayer.instances.forEach((a, i) => tryLevels('Artplayer#' + i, a)) } catch {}
+  try { for (const key of Object.keys(window)) { if (key.length < 40) tryLevels('window.' + key, window[key]) } } catch {}
+
+  const QUALITY = /^\\s*(?:(2160|1440|1080|720|576|540|480|360|240)\\s?p(?:60|50)?|4K|UHD|FHD|Full HD|HD|SD|Auto(?:\\s*\\(\\d+p\\))?)\\s*$/i
+  const where = (el) => {
+    const parts = []
+    for (let node = el; node && parts.length < 4; node = node.parentElement || (node.getRootNode && node.getRootNode().host)) {
+      const cls = typeof node.className === 'string' ? node.className.trim().split(/\\s+/).slice(0, 2).join('.') : ''
+      parts.push(node.tagName.toLowerCase() + (cls ? '.' + cls : ''))
+    }
+    return parts.join('<')
+  }
+  const walk = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.tagName === 'VIDEO') tryLevels('video', el), Object.keys(el).forEach((k) => tryLevels('video.' + k, el[k]))
+      if (el.tagName === 'MEDIA-PLAYER' || el.tagName === 'MEDIA-CONTROLLER') tryLevels(el.tagName.toLowerCase(), el)
+      const own = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+      if (own && own.length <= 16 && QUALITY.test(own)) add(out.menu, own + ' @ ' + where(el) + (el.offsetParent === null ? ' (hidden)' : ''))
+      for (const attr of el.attributes) {
+        if (/quality|resolution|level|height|label/i.test(attr.name) && /\\d{3,4}|4k|hd/i.test(attr.value)) add(out.attr, attr.name + '=' + attr.value + ' @ ' + where(el))
+      }
+      if (el.shadowRoot) walk(el.shadowRoot)
+    }
+  }
+  try { walk(document) } catch {}
+  return out
+})()`
+
+/** One frame's raw sniff, for the survey. */
+export interface FrameSniff {
+  frame: string
+  api: string[]
+  menu: string[]
+  attr: string[]
+}
+
+/** The sniff script in every frame, keeping only frames that said something. */
+async function sniffFrames(contents: WebContents): Promise<FrameSniff[]> {
+  const found: FrameSniff[] = []
+  for (const frame of contents.mainFrame.framesInSubtree) {
+    const answer = (await Promise.race([
+      frame.executeJavaScript(SNIFF_SCRIPT, true).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), FRAME_ANSWER_MS)),
+    ])) as Omit<FrameSniff, 'frame'> | null
+    if (!answer) continue
+    if (answer.api.length + answer.menu.length + answer.attr.length === 0) continue
+    found.push({ frame: frame.url.slice(0, 100), ...answer })
+  }
+  return found
+}
 
 /** Every `<video>` in every frame that answers in time. */
 async function readVideos(contents: WebContents): Promise<VideoReading[]> {
@@ -252,7 +343,9 @@ export async function probeQuality(
   },
 ): Promise<QualityProbeResult> {
   const candidates = new Map<string, { kind: Candidate; headers: Record<string, string> }>()
+  let playlists: PlaylistReading[] | null = null
   let videos: VideoReading[] = []
+  let sniffed: FrameSniff[] = []
 
   const result = await probeStream(provider, subject, {
     timeoutMs: options.timeoutMs,
@@ -264,23 +357,68 @@ export async function probeQuality(
       if (!kind || candidates.has(response.url)) return
       candidates.set(response.url, { kind, headers: replayableHeaders(response.headers) })
     },
+    /**
+     * Read the playlists while the page is still alive — their tokens are at
+     * their freshest — and then decide whether the picture is worth waiting for.
+     */
     inspect: async (contents) => {
+      playlists = await readPlaylists(candidates)
       if (options.mode === 'measure') {
         videos = await readVideos(contents)
+        sniffed = await sniffFrames(contents)
         return
       }
-      // Only a single file makes the picture the answer, so only then is it
-      // worth waiting for. Waiting whenever no playlist was seen would add the
-      // full wait to every dead source, which has no picture to wait for.
-      const kinds = [...candidates.values()].map((c) => c.kind)
-      if (kinds.includes('whole-file') && !kinds.includes('playlist')) {
-        videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
-      }
+      // A ladder settles it. Without one, the picture is the answer for a single
+      // file or a single rendition, so wait for it — but only where something
+      // streamed: a dead source has no picture, and waiting on one would add
+      // the full wait to every dead source in the scan.
+      const ladder = playlists.some((p) => p.renditions.length > 0)
+      const streamed = playlists.length > 0 || [...candidates.values()].some((c) => c.kind === 'whole-file')
+      if (!ladder && streamed) videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
     },
   })
 
-  // Certain playlists before possible ones, so a page's early API calls cannot
-  // use up the cap ahead of the manifests.
+  // The page may have gone before `inspect` ran: the watchdog, or a crash.
+  const read = playlists ?? (await readPlaylists(candidates))
+
+  const wholeFiles = [...candidates.entries()]
+    .filter(([, c]) => c.kind === 'whole-file')
+    .map(([url]) => url.slice(0, 160))
+
+  const video = titleVideo(videos)
+  const judgement = judgeQuality({
+    streamed: result.verdict === 'stream',
+    playlists: read.map((p) => ({ status: p.status, ladder: { kind: p.kind, renditions: p.renditions } })),
+    wholeFiles: wholeFiles.length,
+    video: video ? { rendition: { width: video.width, height: video.height }, runtime: trustInPicture(video, subject) } : null,
+  })
+
+  return {
+    providerId: provider.id,
+    providerName: provider.name,
+    subject: subject.label,
+    verdict: result.verdict,
+    timeToMediaMs: result.timeToMediaMs,
+    mediaSamples: result.mediaSamples,
+    playlists: read,
+    wholeFiles,
+    video,
+    sniffed,
+    judgement,
+  }
+}
+
+/**
+ * Ask for every captured playlist again and read what comes back.
+ *
+ * Certain playlists before possible ones, so a page's early API calls cannot
+ * use up the cap ahead of the manifests. An opaque candidate that turns out not
+ * to be a manifest was never a playlist, and is dropped rather than counted as
+ * a sealed one.
+ */
+async function readPlaylists(
+  candidates: Map<string, { kind: Candidate; headers: Record<string, string> }>,
+): Promise<PlaylistReading[]> {
   const entries = [...candidates.entries()]
   const toRead = [
     ...entries.filter(([, c]) => c.kind === 'playlist'),
@@ -293,38 +431,23 @@ export async function probeQuality(
     const answer = answers[index]
     if (!answer) continue
     const ladder = readLadder(answer.body)
-    // An opaque candidate that turned out not to be a manifest was never a
-    // playlist, and must not be counted as a sealed one either.
     if (candidate.kind === 'maybe-playlist' && ladder.kind === 'unknown') continue
     playlists.push({ url, status: answer.status, kind: ladder.kind, renditions: ladder.renditions })
   }
+  return playlists
+}
 
-  const wholeFiles = entries
-    .filter(([, c]) => c.kind === 'whole-file')
-    .map(([url]) => url.slice(0, 160))
-
-  const video = titleVideo(videos)
-  const runtime = video
-    ? checkRuntime({ deliveredSeconds: video.duration, expectedMinutes: subject.runtimeMinutes ?? null }).verdict
-    : 'unknown'
-
-  const judgement = judgeQuality({
-    streamed: result.verdict === 'stream',
-    playlists: playlists.map((p) => ({ status: p.status, ladder: { kind: p.kind, renditions: p.renditions } })),
-    wholeFiles: wholeFiles.length,
-    video: video ? { rendition: { width: video.width, height: video.height }, runtime } : null,
-  })
-
-  return {
-    providerId: provider.id,
-    providerName: provider.name,
-    subject: subject.label,
-    verdict: result.verdict,
-    timeToMediaMs: result.timeToMediaMs,
-    mediaSamples: result.mediaSamples,
-    playlists,
-    wholeFiles,
-    video,
-    judgement,
-  }
+/**
+ * Whether the picture is the title, and so whether its size may be believed.
+ *
+ * By its length against TMDB's runtime; and when TMDB gives none, by being at
+ * least ten minutes long, which no ad or placeholder is and every episode is.
+ */
+function trustInPicture(video: VideoReading, subject: ProbeSubject): 'plausible' | 'implausible' | 'unknown' {
+  const verdict = checkRuntime({
+    deliveredSeconds: video.duration,
+    expectedMinutes: subject.runtimeMinutes ?? null,
+  }).verdict
+  if (verdict !== 'unknown') return verdict
+  return Number.isFinite(video.duration) && video.duration < 600 ? 'implausible' : 'unknown'
 }

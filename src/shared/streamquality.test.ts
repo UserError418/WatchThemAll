@@ -196,15 +196,59 @@ describe('judgeQuality', () => {
     expect(judged).toMatchObject({ outcome: 'single-file', best: null, playing: null, decoy: true })
   })
 
-  it('calls HLS without sizes unlabelled rather than guessing from what plays', () => {
+  it('reads HLS with no master at all off its picture, since it has one rendition', () => {
+    // 111Movies: one media playlist per title, never a master.
     const media = '#EXTM3U\n#EXTINF:6.0,\nseg.ts\n'
     const judged = judgeQuality({
       streamed: true,
       playlists: [{ status: 200, ladder: ladderOf(media) }],
       wholeFiles: 0,
+      video: video(1920, 800),
+    })
+    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080 })
+  })
+
+  it('does not read a master without sizes off its picture: there are other renditions', () => {
+    const master = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=9\nb.m3u8\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(master) }],
+      wholeFiles: 0,
       video: video(1280, 720),
     })
     expect(judged).toMatchObject({ outcome: 'unlabelled', best: null, playing: 720 })
+  })
+
+  it('leaves HLS without a master unknown when the picture is not the title', () => {
+    const media = '#EXTM3U\n#EXTINF:6.0,\nseg.ts\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(media) }],
+      wholeFiles: 0,
+      video: video(360, 640, 'implausible'),
+    })
+    expect(judged).toMatchObject({ outcome: 'unlabelled', best: null, decoy: true })
+  })
+
+  it("takes the player's own list over the picture, and the ladder over both", () => {
+    const media = '#EXTM3U\n#EXTINF:6.0,\nseg.ts\n'
+    const fromPlayer = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(media) }],
+      wholeFiles: 0,
+      video: video(1280, 720),
+      player: 1080,
+    })
+    expect(fromPlayer).toMatchObject({ outcome: 'player', best: 1080 })
+
+    const fromLadder = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(MASTER) }],
+      wholeFiles: 0,
+      video: null,
+      player: 2160,
+    })
+    expect(fromLadder).toMatchObject({ outcome: 'ladder', best: 1080 })
   })
 
   it('calls playlists that would not answer again sealed', () => {

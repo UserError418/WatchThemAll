@@ -717,7 +717,9 @@ export async function runQualityCli(providers: Provider[], argv: string[]): Prom
   const subjects = options.canaries.slice(0, Math.max(1, options.titles ?? options.canaries.length))
 
   console.log(`\nReading the best quality of ${targets.length} provider(s) on ${subjects.length} titles.`)
-  console.log('L ladder · F one file · U HLS naming no sizes · S sealed · ? unreadable · - no stream\n')
+  console.log(
+    'L ladder · P player\'s own list · F one file · R one rendition · U HLS naming no sizes · S sealed · ? unreadable · - no stream\n',
+  )
 
   const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
   const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl)
@@ -759,7 +761,9 @@ export async function runQualityCli(providers: Provider[], argv: string[]): Prom
 
 const QUALITY_MARK: Record<QualityOutcome, string> = {
   ladder: 'L',
+  player: 'P',
   'single-file': 'F',
+  'single-rendition': 'R',
   unlabelled: 'U',
   sealed: 'S',
   unreadable: '?',

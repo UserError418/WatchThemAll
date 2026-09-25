@@ -157,11 +157,14 @@ function sorted(renditions: Rendition[]): Rendition[] {
  * What one probe of one source could say about its quality.
  *
  * - `ladder` — a manifest listed its renditions, so the best is known.
+ * - `player` — the player's own list of qualities, read from its API or from
+ *   its quality menu, hidden or not.
  * - `single-file` — the source served one whole file. There is only one
  *   rendition, so the picture the page decoded *is* the best it offers.
- * - `unlabelled` — HLS that names no sizes: a media playlist whose master was
- *   never seen, or a master without `RESOLUTION`. What plays is known at best;
- *   what else is on offer is not.
+ * - `single-rendition` — HLS without a master: the page fetched media playlists
+ *   and never a list of renditions, so there is one, and the picture is it.
+ * - `unlabelled` — HLS that names no sizes and cannot be pinned down: a master
+ *   without `RESOLUTION`, or no playlist or picture to go on.
  * - `sealed` — playlists went by, but none answered when asked for again.
  * - `unreadable` — it streamed, but through nothing this can read: segments
  *   only, a blob, a transport with no playlist in the clear.
@@ -169,7 +172,9 @@ function sorted(renditions: Rendition[]): Rendition[] {
  */
 export type QualityOutcome =
   | 'ladder'
+  | 'player'
   | 'single-file'
+  | 'single-rendition'
   | 'unlabelled'
   | 'sealed'
   | 'unreadable'
@@ -187,6 +192,8 @@ export interface QualityEvidence {
    * size.
    */
   video: { rendition: Rendition; runtime: 'plausible' | 'implausible' | 'unknown' } | null
+  /** The best class the player itself lists, from its API or its menu; null if it said nothing. */
+  player?: number | null
 }
 
 export interface QualityJudgement {
@@ -232,9 +239,18 @@ export function judgeQuality(evidence: QualityEvidence): QualityJudgement {
     .filter((best): best is number => best !== null)
   if (offered.length > 0) return verdict('ladder', Math.max(...offered))
 
-  const hls = answered.some((p) => p.ladder.kind === 'hls-media' || p.ladder.kind === 'hls-master')
-  if (evidence.wholeFiles > 0 && !hls) return verdict('single-file', playing)
-  if (hls) return verdict('unlabelled', null)
+  // The player's own list outranks the picture for the same reason the ladder
+  // does: an adaptive player decodes what suits it, not the best it has.
+  const player = evidence.player ?? null
+  if (player !== null) return verdict('player', Math.max(player, playing ?? 0))
+
+  const masters = answered.some((p) => p.ladder.kind === 'hls-master')
+  const media = answered.some((p) => p.ladder.kind === 'hls-media')
+  if (evidence.wholeFiles > 0 && !masters && !media) return verdict('single-file', playing)
+  // Every playlist a media playlist, and the page's whole traffic watched from
+  // the first request: there was no master, so there is one rendition.
+  if (media && !masters && playing !== null) return verdict('single-rendition', playing)
+  if (masters || media) return verdict('unlabelled', null)
   if (evidence.playlists.length > answered.length) return verdict('sealed', null)
   return verdict('unreadable', null)
 }
