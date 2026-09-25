@@ -30,8 +30,19 @@
    * source is also a green one, and "this is where you were" is what the user
    * is looking for when they open this list mid-series. Everything below blue
    * is decided by `providerDot`, which is derived from `providerRank` — the
-   * same function that orders Automatic's fallback chain, so the list reads top
-   * to bottom in the order the app will actually try.
+   * same function that orders Automatic's fallback chain.
+   *
+   * ## The order of the rows
+   *
+   * Automatic's own order, sent by main with the dots (`state.order`): working
+   * sources at the top, "may work" in the middle, dead ones at the bottom, and
+   * within each group the user's favourites and then their provider order. So
+   * the list reads top to bottom in the order the app will actually try.
+   *
+   * The rows do not move while a test is running. The order is re-read when it
+   * finishes, so the dots fill in where the user is looking and the list
+   * re-sorts once, at the end, rather than shuffling under the pointer.
+   * A source that streamed also shows how long it took to start.
    *
    * ## Testing every source
    *
@@ -45,10 +56,11 @@
    * yesterday may work today, and the user's judgement has to be able to
    * override ours — so a red row stays clickable.
    */
+  import { flip } from 'svelte/animate'
   import type { ProbeVerdict, TitleProviderState, TitleRef } from '@shared/ipc'
-  import { providerDot } from '@shared/scanrank'
+  import { formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
-  import { menuIn, menuOut } from '../lib/motion'
+  import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
 
   interface Props {
@@ -71,7 +83,12 @@
   const { selected, media, episode = null, onselect }: Props = $props()
 
   let open = $state(false)
-  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null, scan: null })
+  let sourceState = $state<TitleProviderState>({
+    outcomes: {},
+    lastUsed: null,
+    scan: null,
+    order: [],
+  })
 
   /**
    * The verdicts to draw, live run preferred over the stored one.
@@ -84,6 +101,11 @@
    */
   const verdicts = $derived<Record<string, ProbeVerdict>>(
     scan.matches(media) ? scan.verdicts : (sourceState.scan?.verdicts ?? {}),
+  )
+
+  /** How long each streaming source took to start, from the same run as `verdicts`. */
+  const timings = $derived<Record<string, number>>(
+    scan.matches(media) ? scan.timings : (sourceState.scan?.timings ?? {}),
   )
 
   /** True while a scan of the title this picker is showing is running. */
@@ -129,6 +151,9 @@
   const enabled = $derived(
     library.orderedProviders.filter((p) => library.activeProviderIds.includes(p.id)),
   )
+
+  /** The rows, in Automatic's order. See "The order of the rows" above. */
+  const rows = $derived(inScanOrder(enabled, sourceState.order))
 
   const selectedName = $derived(
     selected ? (enabled.find((p) => p.id === selected)?.name ?? 'Automatic') : 'Automatic',
@@ -243,14 +268,17 @@
 
       <div class="divider"></div>
 
-      {#each enabled as provider (provider.id)}
+      {#each rows as provider (provider.id)}
         {@const resume = provider.id === sourceState.lastUsed}
         {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
         {@const testing = scanning && scan.current === provider.name}
+        {@const ms = verdicts[provider.id] === 'stream' ? timings[provider.id] : undefined}
+        {@const time = ms !== undefined ? ` · ${formatStreamTime(ms)}` : ''}
         <button
           class="item"
           class:active={selected === provider.id}
           onclick={() => choose(provider.id)}
+          animate:flip={{ duration: duration(DUR_MID) }}
         >
           <!--
             An empty slot, not a grey dot, when the provider has never been
@@ -266,13 +294,13 @@
           {/if}
           <span class="name">{provider.name}</span>
           {#if resume}
-            <span class="hint resume">resume</span>
+            <span class="hint resume">resume{time}</span>
           {:else if testing}
             <!-- The one being measured right now, so the list shows progress
                  moving down it rather than only a counter changing. -->
             <span class="hint testing">testing…</span>
           {:else if dot.label}
-            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}</span>
+            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
           {/if}
         </button>
       {/each}
@@ -400,9 +428,11 @@
     flex: 1;
   }
 
+  /* Never wraps: "works · 3.8 s" broken across two lines reads as two claims. */
   .hint {
     color: var(--text-tertiary);
     font-size: var(--text-xs);
+    white-space: nowrap;
   }
 
   .hint.bad {

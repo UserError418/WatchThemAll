@@ -11,7 +11,7 @@ import { app, BrowserWindow, ipcMain, Notification, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
-import type { PlayRequest } from '@shared/ipc'
+import type { PlayRequest, TitleRef } from '@shared/ipc'
 import { Store } from './store'
 import { registerIpc } from './ipc'
 import { createCastService } from './castservice'
@@ -578,7 +578,7 @@ function enabledProviders(): Provider[] {
  * fallback use the same measurement, so "Automatic" stops walking into sources
  * that were measured dead a minute ago.
  */
-function orderedForRequest(req: PlayRequest): Provider[] {
+function orderedForRequest(req: TitleRef): Provider[] {
   const { streamOutcomes, favouriteProviderIds, providerScans } = store.read()
   const key = titleKey(req)
   return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {

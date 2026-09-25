@@ -256,7 +256,19 @@ function providerScans(value: unknown): ProviderScan[] {
         if (PROBE_VERDICTS.has(verdict as ProbeVerdict)) verdicts[id] = verdict as ProbeVerdict
       }
     }
-    return [{ titleKey: scan.titleKey, at, verdicts }]
+
+    // Kept only where they can mean something: a finite, non-negative duration
+    // for a provider this scan says streamed. A timing beside any other verdict
+    // describes a moment that did not happen.
+    const timings: Record<string, number> = {}
+    if (scan.timings && typeof scan.timings === 'object') {
+      for (const [id, ms] of Object.entries(scan.timings as Record<string, unknown>)) {
+        if (verdicts[id] === 'stream' && typeof ms === 'number' && Number.isFinite(ms) && ms >= 0) {
+          timings[id] = ms
+        }
+      }
+    }
+    return [{ titleKey: scan.titleKey, at, verdicts, timings }]
   })
 }
 

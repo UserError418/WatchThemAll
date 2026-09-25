@@ -982,7 +982,7 @@ export async function createBridge(): Promise<WtaApi> {
    * the source picker's dots are drawn from the same ranking, and the renderer
    * that draws them is shared.
    */
-  const orderedForRequest = (req: PlayRequest): Provider[] => {
+  const orderedForRequest = (req: TitleRef): Provider[] => {
     const { streamOutcomes, favouriteProviderIds, providerScans } = store.read()
     const key = titleKey(req)
     return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
@@ -990,6 +990,25 @@ export async function createBridge(): Promise<WtaApi> {
       favouriteIds: favouriteProviderIds,
       scan: freshScan(providerScans, key),
     })
+  }
+
+  /**
+   * Everything a source picker draws for one title, including the order.
+   *
+   * One function for both surfaces that ask — the detail view's picker and the
+   * player chrome's source menu — which previously carried a copy each. The
+   * order comes from `orderedForRequest`, the function playback itself uses,
+   * so the rows read top to bottom in the order Automatic will try them.
+   */
+  const providerStateFor = (media: TitleRef): TitleProviderState => {
+    const { streamOutcomes, providerScans } = store.read()
+    const key = titleKey(media)
+    return {
+      outcomes: outcomesForTitle(streamOutcomes, key),
+      lastUsed: lastWorkingForTitle(streamOutcomes, key),
+      scan: freshScan(providerScans, key),
+      order: orderedForRequest(media).map((provider) => provider.id),
+    }
   }
 
   /**
@@ -1053,15 +1072,7 @@ export async function createBridge(): Promise<WtaApi> {
     scan: (media, episode) => runProviderScan(media, episode),
     cancelScan: async () => scanRunner.cancel(),
     subscribeScan: (cb) => providerScan.subscribe(cb),
-    outcomes: async (media) => {
-      const { streamOutcomes, providerScans } = store.read()
-      const key = titleKey(media)
-      return {
-        outcomes: outcomesForTitle(streamOutcomes, key),
-        lastUsed: lastWorkingForTitle(streamOutcomes, key),
-        scan: freshScan(providerScans, key),
-      }
-    },
+    outcomes: async (media) => providerStateFor(media),
     /**
      * The chrome gets the same cast bridge the main API uses, not a second one.
      *
@@ -1185,15 +1196,7 @@ export async function createBridge(): Promise<WtaApi> {
 
     providers: {
       list: async () => allProviders(),
-      outcomes: async (media: TitleRef): Promise<TitleProviderState> => {
-        const { streamOutcomes, providerScans } = store.read()
-        const key = titleKey(media)
-        return {
-          outcomes: outcomesForTitle(streamOutcomes, key),
-          lastUsed: lastWorkingForTitle(streamOutcomes, key),
-          scan: freshScan(providerScans, key),
-        }
-      },
+      outcomes: async (media: TitleRef): Promise<TitleProviderState> => providerStateFor(media),
       scan: (media, episode) => runProviderScan(media, episode),
       cancelScan: async () => scanRunner.cancel(),
     },

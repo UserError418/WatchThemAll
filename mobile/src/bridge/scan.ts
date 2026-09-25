@@ -225,6 +225,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
 
       const providers = options.providers()
       const verdicts: Record<string, ProbeVerdict> = {}
+      /** Milliseconds to the first recognised media, for streaming providers only. */
+      const timings: Record<string, number> = {}
       const total = providers.length
 
       const publish = (provider: Provider | null, finished: boolean): void => {
@@ -235,6 +237,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
+          timings: { ...timings },
           // Always false here. The re-check exists to undo starvation caused by
           // probing several providers at once, and this side cannot do that —
           // one capture buffer means one provider at a time, so nothing it
@@ -264,7 +267,9 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
             continue
           }
 
-          verdicts[provider.id] = await probeOne(surface, url)
+          const measured = await probeOne(surface, url)
+          verdicts[provider.id] = measured.verdict
+          if (measured.ms !== null) timings[provider.id] = measured.ms
           publish(provider, false)
 
           // Blank and settle *between* providers, so the next one starts
@@ -278,7 +283,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         if (token === mine) running = false
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings }
       publish(null, true)
       return scan
     },
@@ -332,7 +337,7 @@ async function peekForMedia(candidates: Candidate[], peeked: Set<string>): Promi
 async function probeOne(
   surface: ReturnType<typeof createProbeSurface>,
   url: string,
-): Promise<ProbeVerdict> {
+): Promise<{ verdict: ProbeVerdict; ms: number | null }> {
   await capture.clear()
   surface.load(url)
 
@@ -355,9 +360,14 @@ async function probeOne(
 
     const candidates = await capture.list().catch(() => [])
     if (candidates.length > 0) sawAnything = true
-    if (candidates.some((candidate) => isMediaRequest(candidate.url))) return 'stream'
-    if (await peekForMedia(candidates, peeked)) return 'stream'
+    // Timed to the poll that noticed it, so it can read up to one poll interval
+    // (half a second) later than the moment itself. The desktop times the
+    // request directly, so the two platforms' figures are close, not equal.
+    const streaming =
+      candidates.some((candidate) => isMediaRequest(candidate.url)) ||
+      (await peekForMedia(candidates, peeked))
+    if (streaming) return { verdict: 'stream', ms: Date.now() - startedAt }
   }
 
-  return sawAnything ? 'unsure' : 'dead'
+  return { verdict: sawAnything ? 'unsure' : 'dead', ms: null }
 }

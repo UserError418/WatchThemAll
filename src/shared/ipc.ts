@@ -408,6 +408,8 @@ export interface ProviderScanProgress {
   total: number
   /** Verdicts settled so far. */
   verdicts: Record<string, ProbeVerdict>
+  /** Milliseconds to the first media request, for each provider that streamed. See `ProviderScan.timings`. */
+  timings: Record<string, number>
   /**
    * The scan is re-checking a provider that looked dead.
    *
@@ -446,6 +448,17 @@ export interface TitleProviderState {
    * rather than shown faded, because the user cannot act on the difference.
    */
   scan: ProviderScan | null
+  /**
+   * The enabled providers' ids in the order Automatic would try them for this
+   * title: measured and proven sources first, dead ones last, favourites and
+   * then the user's own order within each.
+   *
+   * Computed where Automatic's order is computed, by the same function, rather
+   * than re-derived by each picker. The pickers list their rows in this order,
+   * so the list the user reads top to bottom *is* the fallback chain — two
+   * implementations of the ordering would agree until the day one changed.
+   */
+  order: string[]
 }
 
 /* ── MyAnimeList import ─────────────────────────────────────────────────── */

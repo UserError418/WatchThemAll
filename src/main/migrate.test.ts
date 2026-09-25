@@ -474,3 +474,38 @@ describe('a document that has been through migrate still merges correctly', () =
     expect(doc.watchlist[0]?.updatedAt).toBe(4_242)
   })
 })
+
+describe('stored provider scans', () => {
+  const scanned = (scan: Record<string, unknown>) =>
+    migrate({ ...emptyStore(), providerScans: [{ titleKey: 'tv:tt1', at: 1_000, ...scan }] })
+      .providerScans[0]
+
+  it('keeps the time a streaming provider took to start', () => {
+    const scan = scanned({ verdicts: { a: 'stream', b: 'dead' }, timings: { a: 3_800 } })
+    expect(scan?.timings).toEqual({ a: 3_800 })
+  })
+
+  it('drops a time beside any verdict but stream', () => {
+    // A timing next to "dead" describes a moment that did not happen, and
+    // would print as "no stream · 3.8 s".
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'dead', c: 'unsure' },
+      timings: { a: 2_000, b: 3_000, c: 4_000, gone: 5_000 },
+    })
+    expect(scan?.timings).toEqual({ a: 2_000 })
+  })
+
+  it('drops a time that is not a duration', () => {
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'stream', c: 'stream', d: 'stream' },
+      timings: { a: '3800', b: -1, c: Number.NaN, d: 1_500 },
+    })
+    expect(scan?.timings).toEqual({ d: 1_500 })
+  })
+
+  it('reads a scan saved before times were recorded as having none', () => {
+    const scan = scanned({ verdicts: { a: 'stream' } })
+    expect(scan?.verdicts).toEqual({ a: 'stream' })
+    expect(scan?.timings).toEqual({})
+  })
+})

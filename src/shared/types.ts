@@ -609,6 +609,15 @@ export interface ProviderScan {
   at: number
   /** Keyed by provider id. Absent means the scan never reached it. */
   verdicts: Record<string, ProbeVerdict>
+  /**
+   * How long each streaming provider took to fetch its first media request,
+   * in milliseconds from the start of its load. Only providers whose verdict
+   * is `stream` have one: for anything else there was no moment to time.
+   *
+   * Optional because scans stored before it existed have none, and a scan
+   * without timings is still a scan.
+   */
+  timings?: Record<string, number>
 }
 
 export interface Settings {

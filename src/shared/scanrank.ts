@@ -7,13 +7,16 @@
  *   - main orders the fallback chain with `providerRank`
  *   - the renderer colours each dot with `providerDot`
  *
- * Note what the agreement is and is not. The source pickers list providers in
- * the user's own drag order, not in rank order — the Providers panel is a
- * drag-to-reorder surface and resorting it under the user would be worse than
- * useless. What the dots do is tell them which of those rows Automatic will
- * actually reach for first. So the colour has to mean exactly what the ranking
- * does: a green row that Automatic skips, or a red one it picks, is the app
- * contradicting itself in the one place the user looks to predict it.
+ * The source pickers list their rows in Automatic's own order — main sends it
+ * with each title's provider state, see `TitleProviderState.order` — so green
+ * rows sit above amber ones and red ones sink to the bottom, favourites and
+ * then the user's order deciding within each. The Providers panel is the
+ * exception and stays in the user's drag order: it is a drag-to-reorder
+ * surface, and resorting it under the user would be worse than useless.
+ *
+ * So the colour has to mean exactly what the ranking does: a green row that
+ * Automatic skips, or a red one it picks, is the app contradicting itself in
+ * the one place the user looks to predict it.
  *
  * Two copies of the rule would hold until someone adjusted one of them, and the
  * failure would be silent. So the ordering lives here once, and the colour is
@@ -136,4 +139,37 @@ export function providerDot(
     default:
       return UNKNOWN
   }
+}
+
+/**
+ * `items` in the order `order` names them.
+ *
+ * For the source pickers, which hold providers in one order and are told
+ * Automatic's in another. Anything `order` does not mention keeps its relative
+ * place after everything it does: a provider enabled a moment ago, before the
+ * next state arrives, should still be listed rather than vanish.
+ */
+export function inScanOrder<T extends { id: string }>(items: readonly T[], order: readonly string[]): T[] {
+  const place = new Map(order.map((id, index) => [id, index]))
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort(
+      (a, b) =>
+        (place.get(a.item.id) ?? order.length) - (place.get(b.item.id) ?? order.length) ||
+        a.index - b.index,
+    )
+    .map((entry) => entry.item)
+}
+
+/**
+ * How long a source took to start streaming, for a label beside its name.
+ *
+ * Tenths under ten seconds, where the difference between 1.2 and 3.8 is the
+ * point; whole seconds above, where a tenth is noise. Never "0.0 s" — a
+ * measured stream took some time, and a zero reads like a missing value.
+ */
+export function formatStreamTime(ms: number): string {
+  // Rounded before the threshold test, or 9.96 s would print as "10.0 s".
+  const tenths = Math.round(Math.max(ms, 100) / 100) / 10
+  return tenths < 10 ? `${tenths.toFixed(1)} s` : `${Math.round(tenths)} s`
 }

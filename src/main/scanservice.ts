@@ -173,6 +173,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
       const providers = options.providers()
       const verdicts: Record<string, ProbeVerdict> = {}
+      /** Milliseconds to the first media request, kept for streaming providers only. */
+      const timings: Record<string, number> = {}
       const total = providers.length
 
       let confirming = false
@@ -184,15 +186,32 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
+          timings: { ...timings },
           confirming,
           finished,
           cancelled: finished && token !== mine,
         })
       }
 
-      const probe = async (provider: Provider): Promise<ProbeVerdict> => {
+      /**
+       * One measurement: the verdict, and how long the stream took to appear.
+       *
+       * The time is the probe's own `timeToMediaMs` — from the start of the
+       * load to the first media request — which is the moment the source
+       * stopped being a page and started being a stream. Measured under the
+       * fan-out's contention, so it is fair between providers of one scan
+       * rather than a figure for a quiet line.
+       */
+      const probe = async (provider: Provider): Promise<{ verdict: ProbeVerdict; ms: number | null }> => {
         const result = await probeStream(provider, subject, { timeoutMs, frameUrl: options.frameUrl })
-        return VERDICT[result.verdict]
+        const verdict = VERDICT[result.verdict]
+        return { verdict, ms: verdict === 'stream' ? result.timeToMediaMs : null }
+      }
+
+      const settle = (provider: Provider, measured: { verdict: ProbeVerdict; ms: number | null }): void => {
+        verdicts[provider.id] = measured.verdict
+        if (measured.ms !== null) timings[provider.id] = measured.ms
+        else delete timings[provider.id]
       }
 
       publish(providers[0] ?? null, false)
@@ -214,12 +233,12 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           if (!provider) return
 
           publish(provider, false)
-          const verdict = await probe(provider)
+          const measured = await probe(provider)
 
           // Checked again after the await: the user may have cancelled during
           // the probe, and a late write would corrupt the next run's verdicts.
           if (token !== mine) return
-          verdicts[provider.id] = verdict
+          settle(provider, measured)
           publish(provider, false)
         }
       }
@@ -246,14 +265,14 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         publish(provider, false)
         const second = await probe(provider)
         if (token !== mine) break
-        if (providerRank(undefined, second) < providerRank(undefined, verdicts[provider.id])) {
-          verdicts[provider.id] = second
+        if (providerRank(undefined, second.verdict) < providerRank(undefined, verdicts[provider.id])) {
+          settle(provider, second)
         }
         publish(provider, false)
       }
       confirming = false
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings }
       if (token === mine) running = false
       publish(null, true)
       return scan
