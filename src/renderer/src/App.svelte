@@ -443,11 +443,24 @@
       Three columns, outer two equal. That equality is what actually centres
       the search box: with a flex row it would sit wherever the brand and the
       action buttons left room, and it would move every time a tab badge
-      appeared. `minmax(0, 1fr)` rather than `1fr` so a long title in the left
-      column shrinks instead of pushing the centre off-axis.
+      appeared.
+
+      Equal only while both sides fit, though. The outer columns never shrink
+      below their content: when brand and tabs need more than their half, the
+      search box moves right of centre, and it only shrinks (to 160px at
+      least) when the row would otherwise not fit at all. The columns used to
+      be `minmax(0, 1fr)`, which let the tabs slide *under* the search box
+      instead. With History and Settings added and the count badges on, brand
+      and tabs need about 650px — a 1920px window gave them 624, so "Settings"
+      was partly covered on a full-HD screen, and at 1440 everything from
+      "Releases" on was. Measured after the change: centred from about 1950px
+      up, never overlapping from 1024px.
     */
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns:
+      minmax(max-content, 1fr)
+      minmax(160px, clamp(220px, 30vw, 560px))
+      minmax(max-content, 1fr);
     align-items: center;
     gap: var(--space-5);
     height: var(--nav-height);
@@ -550,9 +563,9 @@
     position: relative;
     display: flex;
     align-items: center;
-    /* Clamped rather than fixed: wide enough to invite a click on a large
-       window, and it gives way before the tabs do on a small one. */
-    width: clamp(220px, 30vw, 560px);
+    /* Its column sets the width — clamped, wide enough to invite a click on a
+       large window, and giving way before the tabs do on a small one. */
+    min-width: 0;
   }
 
   .nav-search input {
