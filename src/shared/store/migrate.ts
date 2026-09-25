@@ -1,9 +1,10 @@
 /**
  * Bringing a document on disk up to the current schema.
  *
- * This is the code most worth testing in the whole project: it runs once, on
- * data the user cannot get back, and a mistake here is not a crash but a
- * quietly emptier library.
+ * This is the code most worth testing in the whole project: it runs on every
+ * load and on every sync pull — not once, at a version change — over data the
+ * user cannot get back, and a mistake here is not a crash but a quietly
+ * emptier library. Everything it does has to be a no-op the second time.
  *
  * Three shapes have existed:
  *
@@ -17,7 +18,8 @@
  *   metadata that makes two copies mergeable. See `document.ts`.
  */
 
-import type { ProbeVerdict, ProviderScan, StoreShape } from '../types'
+import type { ProbeVerdict, ProviderScan, StoreShape, TitleRating } from '../types'
+import { isLegacyRating, isRatingValue, legacyRatingOf, valueOfLegacy } from '../rating'
 import { SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
 import { DEFAULT_SETTINGS, emptyDocument } from './core'
@@ -172,7 +174,10 @@ function fromTyped(
    * against it.
    */
   doc.watched = doc.watched.map((entry) => ({ ...entry, season: entry.season ?? null }))
-  doc.ratings = doc.ratings.map((rating) => ({ ...rating, season: rating.season ?? null }))
+  doc.ratings = doc.ratings.flatMap((record) => {
+    const scaled = onRatingScale({ ...record, season: record.season ?? null })
+    return scaled ? [scaled] : []
+  })
 
   /**
    * Repair watchlist entries written before later fields existed.
@@ -219,6 +224,57 @@ function fromTyped(
   })
 
   return doc
+}
+
+/**
+ * The 1–10 rating scale: every rating carries a `value`, and a `rating` string
+ * derived from it.
+ *
+ * Builds up to 1.7.3 stored only `rating: 'like' | 'dislike'`. Such a record
+ * gets the fixed conversion — a like is an 8, a dislike a 4 — marked `coarse`,
+ * because the conversion knows which side the user came down on and nothing
+ * about how far.
+ *
+ * **`value` wins whenever it is present.** That is safe because of how the old
+ * builds write: every path in 1.7.3 that sets an opinion builds the record from
+ * scratch, so an old build can never leave a stale `value` sitting next to a
+ * like or dislike it has just changed. The only records carrying both are ones
+ * this build (or a later one) wrote, and there the string was derived from the
+ * number. So the string is re-derived here rather than trusted: the two can
+ * never disagree after a load.
+ *
+ * Like the season normalisation above, this is detected per record rather than
+ * gated on `schemaVersion` — see `SCHEMA_VERSION` for why it has to be. It runs
+ * on every load and on every sync pull, so it must be a no-op the second time:
+ * nothing here touches `updatedAt`, `key`, `season`, `at` or `genreIds`, and a
+ * record that is already on the scale comes back field for field unchanged.
+ *
+ * A record with neither a usable `value` nor a like or dislike says nothing
+ * anyone can read, and is dropped rather than guessed at. Guessing is how a
+ * corrupted record becomes an opinion the user never held, silently steering
+ * the recommendations. In practice this is only a hand-edited file: a
+ * tombstone is a copy of a record that was readable when it was deleted.
+ */
+function onRatingScale(record: Synced<TitleRating>): Synced<TitleRating> | null {
+  const stored = record as unknown as Record<string, unknown>
+
+  if (isRatingValue(stored.value)) {
+    return {
+      ...record,
+      value: stored.value,
+      // Absent only on a record written by hand; a value nobody marked as
+      // converted is taken as chosen.
+      coarse: typeof stored.coarse === 'boolean' ? stored.coarse : false,
+      rating: legacyRatingOf(stored.value),
+    }
+  }
+
+  if (isLegacyRating(stored.rating)) {
+    const value = valueOfLegacy(stored.rating)
+    return { ...record, value, coarse: true, rating: legacyRatingOf(value) }
+  }
+
+  return null
 }
 
 function stringList(value: unknown): string[] {

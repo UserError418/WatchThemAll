@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import type { Rating, WatchedEntry } from '@shared/types'
-import { deepest, groupWatched, leaning, ribbon, summarise, tallyLabel } from './watchedgroups'
+import type { RatingValue, WatchedEntry } from '@shared/types'
+import {
+  bandOf,
+  deepest,
+  formatMean,
+  groupWatched,
+  leaning,
+  ribbon,
+  summarise,
+  summaryLabel,
+} from './watchedgroups'
 
 let seq = 0
 function entry(over: Partial<WatchedEntry> = {}): WatchedEntry {
@@ -23,8 +32,8 @@ function entry(over: Partial<WatchedEntry> = {}): WatchedEntry {
 }
 
 /** Ratings supplied by key `${tmdbId}:${season}`, matching the scope rule. */
-function ratings(map: Record<string, Rating>) {
-  return (e: WatchedEntry): Rating | null => map[`${e.tmdbId}:${e.season}`] ?? null
+function ratings(map: Record<string, RatingValue>) {
+  return (e: WatchedEntry): RatingValue | null => map[`${e.tmdbId}:${e.season}`] ?? null
 }
 
 const none = () => null
@@ -80,12 +89,27 @@ describe('groupWatched', () => {
     expect(groups[0]?.seasons.map((s) => s.entry.season)).toEqual([2, null])
   })
 
-  it('tallies the ratings across seasons', () => {
+  it('counts the seasons in each band', () => {
+    const groups = groupWatched(
+      [entry({ season: 1 }), entry({ season: 2 }), entry({ season: 3 }), entry({ season: 4 })],
+      ratings({ '1396:1': 9, '1396:2': 8, '1396:3': 6, '1396:4': 2 }),
+    )
+    expect(groups[0]).toMatchObject({ liked: 2, mixed: 1, disliked: 1, unrated: 0 })
+  })
+
+  it('averages the rated seasons, leaving the unrated ones out', () => {
     const groups = groupWatched(
       [entry({ season: 1 }), entry({ season: 2 }), entry({ season: 3 })],
-      ratings({ '1396:1': 'like', '1396:2': 'like', '1396:3': 'dislike' }),
+      ratings({ '1396:1': 9, '1396:2': 6 }),
     )
-    expect(groups[0]).toMatchObject({ likes: 2, dislikes: 1, unrated: 0 })
+    // (9 + 6) / 2, not (9 + 6 + 0) / 3: an unrated season is not a zero.
+    expect(groups[0]?.mean).toBe(7.5)
+    expect(groups[0]?.unrated).toBe(1)
+  })
+
+  /** A zero would read as a verdict; nothing rated means no mean at all. */
+  it('has no mean when nothing is rated', () => {
+    expect(groupWatched([entry({ season: 1 })], none)[0]?.mean).toBeNull()
   })
 
   /**
@@ -95,7 +119,7 @@ describe('groupWatched', () => {
    */
   it('counts only the entries it was given', () => {
     const groups = groupWatched([entry({ season: 3 })], none)
-    expect(groups[0]).toMatchObject({ unrated: 1, likes: 0 })
+    expect(groups[0]).toMatchObject({ unrated: 1, liked: 0 })
     expect(groups[0]?.seasons).toHaveLength(1)
   })
 
@@ -164,30 +188,58 @@ describe('groupWatched sorting', () => {
   })
 })
 
-describe('tallyLabel', () => {
-  it('states what is known and omits what is zero', () => {
-    expect(tallyLabel({ likes: 18, dislikes: 2, unrated: 0 })).toBe('18 liked · 2 disliked')
-    expect(tallyLabel({ likes: 0, dislikes: 0, unrated: 3 })).toBe('3 unrated')
+describe('summaryLabel', () => {
+  it('states the mean to one decimal and what is still unrated', () => {
+    expect(summaryLabel({ mean: 7.75, unrated: 0 })).toBe('avg 7.8')
+    expect(summaryLabel({ mean: 8, unrated: 2 })).toBe('avg 8.0 · 2 unrated')
+    expect(summaryLabel({ mean: null, unrated: 3 })).toBe('3 unrated')
   })
 
   it('says nothing when there is nothing to say', () => {
-    expect(tallyLabel({ likes: 0, dislikes: 0, unrated: 0 })).toBe('')
+    expect(summaryLabel({ mean: null, unrated: 0 })).toBe('')
+  })
+})
+
+describe('formatMean', () => {
+  /** One decimal always, so an 8 and a 7.5 are visibly different numbers. */
+  it('prints one decimal', () => {
+    expect(formatMean(8)).toBe('8.0')
+    expect(formatMean(7.45)).toBe('7.5')
+  })
+})
+
+describe('bandOf', () => {
+  it('bands a rating and leaves an unrated season unbanded', () => {
+    expect(bandOf(9)).toBe('liked')
+    expect(bandOf(7)).toBe('mixed')
+    expect(bandOf(5)).toBe('disliked')
+    expect(bandOf(null)).toBeNull()
   })
 })
 
 describe('leaning', () => {
-  it('reports the majority opinion', () => {
-    expect(leaning({ likes: 5, dislikes: 1 })).toBe('like')
-    expect(leaning({ likes: 1, dislikes: 5 })).toBe('dislike')
+  it('tints by the band the mean rounds into', () => {
+    expect(leaning({ mean: 8.4 })).toBe('liked')
+    expect(leaning({ mean: 7.6 })).toBe('liked')
+    expect(leaning({ mean: 7.4 })).toBe('mixed')
+    expect(leaning({ mean: 3 })).toBe('disliked')
   })
 
   /**
-   * A split series is not "liked". Tinting it either colour would assert
-   * something the tally printed beside it contradicts.
+   * The case the old majority vote could only answer with "no tint": a series
+   * split between love and dislike. Its mean is in the middle, and the middle
+   * is mixed.
    */
-  it('reports nothing on a tie', () => {
-    expect(leaning({ likes: 3, dislikes: 3 })).toBeNull()
-    expect(leaning({ likes: 0, dislikes: 0 })).toBeNull()
+  it('reads a split series as mixed', () => {
+    const groups = groupWatched(
+      [entry({ season: 1 }), entry({ season: 2 })],
+      ratings({ '1396:1': 9, '1396:2': 3 }),
+    )
+    expect(leaning(groups[0]!)).toBe('mixed')
+  })
+
+  it('reports nothing when nothing is rated', () => {
+    expect(leaning({ mean: null })).toBeNull()
   })
 })
 
@@ -195,19 +247,22 @@ describe('summarise', () => {
   it('counts titles and seasons separately, which is the point', () => {
     const groups = groupWatched(
       [entry({ tmdbId: 1, season: 1 }), entry({ tmdbId: 1, season: 2 }), entry({ tmdbId: 2 })],
-      ratings({ '1:1': 'like' }),
+      ratings({ '1:1': 8, '1:2': 6 }),
     )
     expect(summarise(groups)).toEqual({
       titles: 2,
       seasons: 3,
-      likes: 1,
-      dislikes: 0,
-      unrated: 2,
+      liked: 1,
+      mixed: 1,
+      disliked: 0,
+      unrated: 1,
     })
   })
 
   it('handles an empty library', () => {
-    expect(summarise([])).toEqual({ titles: 0, seasons: 0, likes: 0, dislikes: 0, unrated: 0 })
+    expect(summarise([])).toEqual({
+      titles: 0, seasons: 0, liked: 0, mixed: 0, disliked: 0, unrated: 0,
+    })
   })
 })
 
@@ -258,11 +313,11 @@ describe('ribbon', () => {
   it('runs oldest first, the opposite way to the expanded list', () => {
     const groups = groupWatched(
       [entry({ season: 1 }), entry({ season: 2 }), entry({ season: 3 })],
-      ratings({ '1396:1': 'like', '1396:3': 'dislike' }),
+      ratings({ '1396:1': 9, '1396:3': 4 }),
     )
     const strip = ribbon(groups[0]!)
     expect(strip.segments.map((s) => s.label)).toEqual(['Season 1', 'Season 2', 'Season 3'])
-    expect(strip.segments.map((s) => s.rating)).toEqual(['like', null, 'dislike'])
+    expect(strip.segments.map((s) => s.rating)).toEqual([9, null, 4])
     expect(strip.hidden).toBe(0)
   })
 

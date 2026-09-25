@@ -13,7 +13,7 @@
   import { library } from '../lib/library.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
-  import RateButtons from './RateButtons.svelte'
+  import RatingStrip from './RatingStrip.svelte'
   import { backdropUrl, posterUrl } from '../lib/images'
   import { airDate, countdown, episodeCode, hasAired, runtime, year } from '../lib/format'
   import EpisodeRow from './EpisodeRow.svelte'
@@ -156,7 +156,7 @@
       library.attachImdbId(tmdbId, result.imdbId)
       // Lets the watchlist draw a real progress bar without a request per tile.
       if (type === 'tv') library.setEpisodeCount(tmdbId, result.episodeCount)
-      library.setRating(tmdbId, result.rating)
+      library.setScore(tmdbId, result.rating)
 
       if (type === 'tv' && result.seasonCount > 0) {
         // Resume where the user left off rather than always at season one.
@@ -558,7 +558,7 @@
             {#if seen}
               <!-- Scoped to match the button beside it: an opinion about season
                    three is a different thing from an opinion about the show. -->
-              <RateButtons
+              <RatingStrip
                 media={detail ?? subject}
                 season={subject.type === 'movie' ? null : selectedSeason}
               />

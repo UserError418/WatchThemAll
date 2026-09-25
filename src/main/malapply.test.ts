@@ -148,20 +148,24 @@ describe('applyMalImport', () => {
     expect(store.watched.some((w) => w.tmdbId === 5)).toBe(true)
   })
 
-  it('seeds ratings from scores, on the same thresholds as the parser', async () => {
+  it('turns scores into ratings one to one, middle of the scale included', async () => {
     const { store, summary } = await applyMalImport(
       emptyStore(),
       [
         entry({ malId: 1, title: 'loved', score: 9 }),
         entry({ malId: 2, title: 'hated', score: 3 }),
-        entry({ malId: 3, title: 'shrug', score: 6 }),
+        entry({ malId: 3, title: 'fine', score: 7 }),
+        entry({ malId: 4, title: 'unscored', score: 0 }),
       ],
       decisions(),
       resolveAll,
     )
 
-    expect(store.ratings.map((r) => r.rating).sort()).toEqual(['dislike', 'like'])
-    expect(summary.ratings).toBe(2)
+    expect(store.ratings.map((r) => r.value).sort()).toEqual([3, 7, 9])
+    // Chosen by the user on the same 1–10 scale, so not a conversion.
+    expect(store.ratings.every((r) => !r.coarse && r.season === null)).toBe(true)
+    expect(store.ratings.find((r) => r.value === 7)?.rating).toBe('like')
+    expect(summary).toMatchObject({ ratings: 3, refined: 0 })
   })
 
   it('never overwrites a rating the user set by hand', async () => {
@@ -172,18 +176,145 @@ describe('applyMalImport', () => {
     const before: StoreShape = {
       ...emptyStore(),
       ratings: [stamp({ key: `tv:${id}`, tmdbId: id, type: 'tv', season: null,
- rating: 'like', genreIds: [], at: 1 })],
+        value: 9, coarse: false, rating: 'like', genreIds: [], at: 1 })],
     }
 
-    const { store } = await applyMalImport(
+    const { store, summary } = await applyMalImport(
       before,
-      [entry({ score: 2 })],
+      [entry({ score: 7 })],
       decisions(),
       resolveAll,
     )
 
-    expect(store.ratings).toHaveLength(1)
-    expect(store.ratings[0]?.rating).toBe('like')
+    expect(store.ratings).toEqual(before.ratings)
+    expect(summary).toMatchObject({ ratings: 0, refined: 0 })
+  })
+
+  describe('refining a converted thumb', () => {
+    const id = fakeId('Cowboy Bebop')
+    /** A thumb from before the 1–10 scale, as `migrate` converted it. */
+    const converted = (value: 8 | 4) =>
+      stamp(
+        { key: `tv:tt${id}`, tmdbId: id, type: 'tv' as const, season: null, value,
+          coarse: true, rating: value === 8 ? ('like' as const) : ('dislike' as const),
+          genreIds: [16], at: 1 },
+        1,
+      )
+
+    /**
+     * The point of the refine: the thumb said which side, MAL says how far,
+     * and they agree — so the exact score replaces the conversion.
+     */
+    it('replaces a converted like with the exact score when MAL agrees', async () => {
+      const { store, summary } = await applyMalImport(
+        { ...emptyStore(), ratings: [converted(8)] },
+        [entry({ score: 10 })],
+        decisions(),
+        resolveAll,
+      )
+
+      expect(store.ratings).toHaveLength(1)
+      expect(store.ratings[0]).toMatchObject({
+        key: `tv:tt${id}`,
+        value: 10,
+        coarse: false,
+        rating: 'like',
+        genreIds: [16],
+      })
+      // Stamped, so the refined record wins the next merge.
+      expect(store.ratings[0]!.updatedAt).toBeGreaterThan(1)
+      expect(summary).toMatchObject({ ratings: 0, refined: 1 })
+    })
+
+    /**
+     * A converted like against a MAL 5: the user changed their mind at some
+     * point, and the thumb in the app is the newer statement.
+     */
+    it('leaves a converted thumb alone when MAL disagrees with it', async () => {
+      const before = converted(8)
+      const { store, summary } = await applyMalImport(
+        { ...emptyStore(), ratings: [before] },
+        [entry({ score: 5 })],
+        decisions(),
+        resolveAll,
+      )
+
+      expect(store.ratings).toEqual([before])
+      expect(summary).toMatchObject({ ratings: 0, refined: 0 })
+    })
+
+    it('refines a converted dislike too', async () => {
+      const { store } = await applyMalImport(
+        { ...emptyStore(), ratings: [converted(4)] },
+        [entry({ score: 2 })],
+        decisions(),
+        resolveAll,
+      )
+
+      expect(store.ratings[0]).toMatchObject({ value: 2, coarse: false, rating: 'dislike' })
+    })
+
+    /** MAL cannot tell seasons apart, so a season opinion is out of its reach. */
+    it('never touches a season rating, converted or not', async () => {
+      const season = { ...converted(8), key: `tv:tt${id}:s2`, season: 2 }
+      const { store, summary } = await applyMalImport(
+        { ...emptyStore(), ratings: [season] },
+        [entry({ score: 10 })],
+        decisions(),
+        resolveAll,
+      )
+
+      expect(store.ratings).toEqual([season])
+      expect(summary).toMatchObject({ ratings: 0, refined: 0 })
+    })
+  })
+
+  /**
+   * MAL files "2nd Season" as an entry of its own, and it resolves to the same
+   * TMDB series. The title gets the mean of those scores — first-wins made the
+   * result depend on the order of the export file.
+   */
+  describe('several MAL entries for one title', () => {
+    const sameShow = async (): Promise<ResolvedTitle> => ({
+      tmdbId: 42, imdbId: 'tt42', title: 'Shingeki', posterPath: null, genreIds: [16], rating: 8,
+    })
+    const seasons = [
+      entry({ malId: 1, title: 'Shingeki no Kyojin', score: 9 }),
+      entry({ malId: 2, title: 'Shingeki no Kyojin Season 2', score: 6 }),
+      entry({ malId: 3, title: 'Shingeki no Kyojin Season 3', score: 0 }),
+    ]
+
+    it('rates the title with the rounded mean of the scored entries', async () => {
+      const { store, summary } = await applyMalImport(emptyStore(), seasons, decisions(), sameShow)
+
+      // (9 + 6) / 2 = 7.5, rounded half up; the unscored entry is not a zero.
+      expect(store.ratings).toHaveLength(1)
+      expect(store.ratings[0]).toMatchObject({ tmdbId: 42, season: null, value: 8 })
+      expect(summary.ratings).toBe(1)
+    })
+
+    it('gives the same answer whatever order the export lists them in', async () => {
+      const forward = await applyMalImport(emptyStore(), seasons, decisions(), sameShow)
+      const backward = await applyMalImport(
+        emptyStore(), [...seasons].reverse(), decisions(), sameShow,
+      )
+      expect(backward.store.ratings[0]?.value).toBe(forward.store.ratings[0]?.value)
+    })
+
+    it('refines with the mean, not with whichever entry came first', async () => {
+      const thumb = stamp({ key: 'tv:tt42', tmdbId: 42, type: 'tv' as const, season: null,
+        value: 8 as const, coarse: true, rating: 'like' as const, genreIds: [], at: 1 }, 1)
+      const { store, summary } = await applyMalImport(
+        { ...emptyStore(), ratings: [thumb] },
+        [entry({ malId: 1, score: 10 }), entry({ malId: 2, score: 7 })],
+        decisions(),
+        sameShow,
+      )
+
+      // (10 + 7) / 2 = 8.5 → 9, which agrees with the like it refines.
+      expect(store.ratings[0]).toMatchObject({ value: 9, coarse: false })
+      expect(summary.refined).toBe(1)
+    })
   })
 
   it('leaves scores alone when the user opted out', async () => {

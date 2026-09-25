@@ -29,6 +29,9 @@
  * XML, and the failure mode is a title we skip rather than data we corrupt.
  */
 
+import type { RatingValue } from '@shared/types'
+import { isRatingValue } from '@shared/rating'
+
 /** The statuses MAL writes, normalised to our own vocabulary. */
 export type MalStatus = 'watching' | 'completed' | 'onHold' | 'dropped' | 'planToWatch'
 
@@ -187,16 +190,25 @@ export const STATUS_LABELS: Record<MalStatus, string> = {
 /**
  * Turn a MAL score into a rating, or nothing.
  *
- * MAL's 1–10 is not linear in sentiment: its community average sits near 7, so
- * a 6 is mild disappointment rather than approval. The thresholds reflect that
- * rather than splitting the range down the middle. Everything between is left
- * unrated, because a shrug is not a signal and pretending otherwise would
- * flood the taste profile with noise from an import.
+ * One to one: a MAL 7 is a 7 here. The two scales are the same 1–10 in the
+ * same hands, so any remapping would be the app second-guessing the user's
+ * own numbers. 0 is MAL's "not scored" and becomes no rating at all, as does
+ * anything outside the scale, which a well-formed export never contains.
+ *
+ * This used to keep only 8 and above (a like) and 5 and below (a dislike), and
+ * drop 6 and 7 on the argument that a shrug is not a signal. Two things made
+ * that obsolete. The ratings themselves are now 1–10, so a 6 or a 7 is
+ * representable rather than having to be rounded to a side. And the taste
+ * model centres every rating on the user's own mean, so a 7 from someone
+ * whose average is 8 is a mild negative and says something — dropping it
+ * threw away exactly the calibration the new model reads.
+ *
+ * MAL's sentiment reading still holds and still matters, just elsewhere: its
+ * community average sits near 7, so a 6 is mild disappointment rather than
+ * approval. `ratingBand` in `@shared/rating` draws its bands on that reading.
  */
-export function ratingFromScore(score: number): 'like' | 'dislike' | null {
-  if (score >= 8) return 'like'
-  if (score >= 1 && score <= 5) return 'dislike'
-  return null
+export function ratingFromScore(score: number): RatingValue | null {
+  return isRatingValue(score) ? score : null
 }
 
 /**

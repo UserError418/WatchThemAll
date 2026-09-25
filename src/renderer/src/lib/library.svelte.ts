@@ -20,13 +20,13 @@ import type {
   ResumePoint,
   StoreShape,
   StorePatch,
-  Rating,
+  RatingValue,
   TitleRating,
   WatchedEntry,
   WatchlistEntry,
 } from '@shared/types'
 import { resumeKey } from '@shared/types'
-import { ratingForEntry, ratingForScope } from '@shared/rating'
+import { legacyRatingOf, ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 
 /** `crypto.randomUUID` needs a secure context; file:// in Electron qualifies. */
@@ -78,7 +78,7 @@ class Library {
   resumePoints = $state<ResumePoint[]>([])
   /** Titles the user has already seen. See the Watched tab. */
   watched = $state<WatchedEntry[]>([])
-  /** Liked and disliked titles, which steer the tailored Browse row. */
+  /** The user's own 1–10 ratings, which steer the tailored Browse row. */
   ratings = $state<TitleRating[]>([])
   settings = $state<StoreShape['settings']>({
     releaseCheckMinutes: 60,
@@ -881,64 +881,99 @@ class Library {
   /* ── Ratings ─────────────────────────────────────────────────────────── */
 
   /**
-   * The user's opinion of a title, or of one of its seasons.
+   * The user's rating of a title, or of one of its seasons, from 1 to 10.
    *
    * `season` null asks about the series as a whole, which is a different
    * question from "what did you think of season 3" and is stored separately —
    * a show can be worth watching while one season of it is not.
    */
-  ratingFor(tmdbId: number, season: number | null = null): Rating | null {
+  ratingFor(tmdbId: number, season: number | null = null): RatingValue | null {
     return ratingForScope(this.ratings, tmdbId, season)
   }
 
   /**
-   * The opinion on a watched entry, at whatever scope that entry is about.
+   * Whether the rating at this scope was converted from a like or a dislike
+   * rather than chosen on the 1–10 scale — so the control can invite the user
+   * to refine it. False when there is no rating at all.
+   */
+  isCoarse(tmdbId: number, season: number | null = null): boolean {
+    return this.ratingRecord(tmdbId, season)?.coarse ?? false
+  }
+
+  /**
+   * The rating on a watched entry, at whatever scope that entry is about.
    *
    * Preferred over `ratingFor` for anything holding an entry, because the entry
    * already knows its own season and passing one separately is how the Watched
    * tab came to list seasons the user had just rated under "Unrated".
    */
-  ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): Rating | null {
+  ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): RatingValue | null {
     return ratingForEntry(this.ratings, entry)
   }
 
   /**
-   * Set, change or clear an opinion.
+   * Set or change a rating, or clear it by choosing the value it already has.
    *
    * Pressing the rating a title already has clears it, so the same control both
    * states and retracts an opinion. Without that there is no way back from a
    * mis-tap except a separate 'clear' affordance nobody would look for.
+   *
+   * The one exception is a `coarse` rating — an 8 or a 4 converted from a
+   * thumb. Its lit value is not one the user ever picked, so tapping it is
+   * read as "yes, that one" and confirms it rather than deleting it. Clearing
+   * there would turn the most natural response to the "tap to refine" hint
+   * into the loss of an opinion the user has held since before the scale
+   * existed. A second tap, on what is now a chosen value, clears as usual.
+   *
+   * Anything set here is chosen on the scale, so it is never `coarse`.
    */
-  rate(media: MediaSummary | MediaDetail, rating: Rating, season: number | null = null): void {
-    const current = this.ratingFor(media.tmdbId, season)
-    const rest = this.ratings.filter(
-      (r) => !(r.tmdbId === media.tmdbId && (r.season ?? null) === season),
-    )
+  rate(media: MediaSummary | MediaDetail, value: RatingValue, season: number | null = null): void {
+    const current = this.ratingRecord(media.tmdbId, season)
+    if (current?.value === value && !current.coarse) {
+      this.clearRating(media, season)
+      return
+    }
 
     const base = `${media.type}:${media.imdbId || media.tmdbId}`
-
-    this.ratings =
-      current === rating
-        ? rest
-        : [
-            {
-              // The season suffix keeps a whole-title rating on exactly the key
-              // it has always had, so nothing already stored is re-identified.
-              key: season === null ? base : `${base}:s${season}`,
-              tmdbId: media.tmdbId,
-              type: media.type,
-              season,
-              rating,
-              // Copied in rather than looked up later: the taste profile reads
-              // every rating, and re-fetching genres per title is what made the
-              // original's equivalent one HTTP request per saved show.
-              genreIds: media.genreIds,
-              at: Date.now(),
-            },
-            ...rest,
-          ]
-
+    this.ratings = [
+      {
+        // The season suffix keeps a whole-title rating on exactly the key
+        // it has always had, so nothing already stored is re-identified.
+        key: season === null ? base : `${base}:s${season}`,
+        tmdbId: media.tmdbId,
+        type: media.type,
+        season,
+        value,
+        coarse: false,
+        // For builds from before the 1–10 scale; see `TitleRating.rating`.
+        rating: legacyRatingOf(value),
+        // Copied in rather than looked up later: the taste profile reads
+        // every rating, and re-fetching genres per title is what made the
+        // original's equivalent one HTTP request per saved show.
+        genreIds: media.genreIds,
+        at: Date.now(),
+      },
+      ...this.ratingsExcept(media.tmdbId, season),
+    ]
     void this.persist({ ratings: this.ratings })
+  }
+
+  /** Remove the rating at exactly this scope, if there is one. */
+  clearRating(media: Pick<MediaSummary, 'tmdbId'>, season: number | null = null): void {
+    const rest = this.ratingsExcept(media.tmdbId, season)
+    if (rest.length === this.ratings.length) return
+    this.ratings = rest
+    void this.persist({ ratings: this.ratings })
+  }
+
+  /** The stored record at exactly this scope — the same rule as `ratingForScope`. */
+  private ratingRecord(tmdbId: number, season: number | null): TitleRating | undefined {
+    return this.ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)
+  }
+
+  /** Every rating except the one at exactly this scope. */
+  private ratingsExcept(tmdbId: number, season: number | null): TitleRating[] {
+    return this.ratings.filter((r) => !(r.tmdbId === tmdbId && (r.season ?? null) === season))
   }
 
   /** How many rated titles still have no opinion, for the Watched tab's prompt. */
@@ -971,17 +1006,21 @@ class Library {
    * title, which is the one moment it is known for free, and both the watchlist
    * and the watched list are updated — a title is often in both, and a score
    * that is right in one place and stale in the other is worse than either.
+   *
+   * Named for the score, as `scoreFor` is. It was `setRating`, which sat one
+   * line from `rate` and `clearRating` while writing TMDB's number instead of
+   * the user's — the naming trap `scoreFor` below describes.
    */
-  setRating(tmdbId: number, rating: number): void {
-    if (tmdbId === 0 || !(rating > 0)) return
+  setScore(tmdbId: number, score: number): void {
+    if (tmdbId === 0 || !(score > 0)) return
 
     const entry = this.watchlistEntry(tmdbId)
     const seen = this.watched.find((w) => w.tmdbId === tmdbId)
-    const stale = (entry && entry.rating !== rating) || (seen && seen.rating !== rating)
+    const stale = (entry && entry.rating !== score) || (seen && seen.rating !== score)
     if (!stale) return
 
-    if (entry) entry.rating = rating
-    if (seen) seen.rating = rating
+    if (entry) entry.rating = score
+    if (seen) seen.rating = score
     void this.persist({ watchlist: this.watchlist, watched: this.watched })
   }
 
@@ -995,7 +1034,7 @@ class Library {
    *
    * Called `scoreFor` and not `ratingFor` because this app has two things
    * called a rating and they are not the same: TMDB's *score* out of ten, and
-   * the user's own like/dislike, which `ratingFor` returns. Naming both the
+   * the user's own 1–10 verdict, which `ratingFor` returns. Naming both the
    * same thing is how one gets drawn where the other was meant.
    */
   scoreFor(tmdbId: number): number {

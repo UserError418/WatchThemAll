@@ -389,14 +389,32 @@ export interface WatchedEntry {
 }
 
 /**
- * What the user thought of a title.
+ * What the user thought of a title, on their own scale of 1 to 10.
  *
- * Two values rather than a score. A five-star scale invites deliberation over a
- * judgement the user makes in half a second, and the recommendation only needs
- * the sign: more like this, or less. Stored per title rather than per episode —
- * nobody has an opinion about episode 14 in isolation.
+ * Until 1.7.3 this was a like or a dislike, on the argument that the
+ * recommendation only needed the sign. It no longer does: the taste model
+ * centres each rating on the user's own mean, so how far a verdict sits from
+ * their usual is the signal, and two values cannot say that. Still stored per
+ * title or season rather than per episode — nobody has an opinion about
+ * episode 14 in isolation.
+ *
+ * A literal union rather than `number`, on purpose. TMDB's score is *also*
+ * called `rating` in this codebase (`MediaSummary.rating`, a float 0–10), and
+ * the two are exactly the same shape on the page. With a plain number, handing
+ * TMDB's 7.4 to something that expects the user's verdict would type-check and
+ * quietly turn the crowd's opinion into the user's. A union makes that an
+ * error until someone converts on purpose, through `isRatingValue`.
  */
-export type Rating = 'like' | 'dislike'
+export type RatingValue = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
+
+/**
+ * The two-valued opinion that builds up to 1.7.3 store and read.
+ *
+ * Kept as its own name rather than deleted so every place that still speaks it
+ * is visible: the migration, which reads it, and `TitleRating.rating`, which is
+ * written for older builds and read by nothing new.
+ */
+export type LegacyRating = 'like' | 'dislike'
 
 export interface TitleRating {
   /**
@@ -415,7 +433,31 @@ export interface TitleRating {
   type: MediaType
   /** The season this applies to, or null for the whole title. */
   season: number | null
-  rating: Rating
+  /** The user's verdict. Never TMDB's score — see `RatingValue`. */
+  value: RatingValue
+  /**
+   * True when `value` was up-converted from a like or a dislike rather than
+   * chosen on the 1–10 scale.
+   *
+   * Such a value says which side of the line the user came down on, not how
+   * far: every legacy like is an 8 and every dislike a 4, so a model reading
+   * magnitude has to know that these eights are not eights anyone chose.
+   * Rating the title again in the new UI writes `false`.
+   */
+  coarse: boolean
+  /**
+   * The same verdict in the two-valued form, derived from `value` by
+   * `legacyRatingOf` every time the record is written or migrated.
+   *
+   * Written for one reader only: a build from before the 1–10 scale — a phone
+   * still on 1.7.3, syncing through Drive — which knows nothing of `value`.
+   * Without it that build reads `rating` as `undefined`, which its taste model
+   * counts as a dislike, so every opinion the user holds would turn against
+   * them the first time the phone synced. Nothing new reads it except the
+   * migration, which uses it to recover a `value` for a record an old build
+   * wrote.
+   */
+  rating: LegacyRating
   /** TMDB genre ids at the time of rating, so the profile needs no lookups. */
   genreIds: number[]
   at: number

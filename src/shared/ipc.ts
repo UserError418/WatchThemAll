@@ -488,6 +488,8 @@ export interface MalImportSummary {
   watched: number
   releases: number
   ratings: number
+  /** Converted thumbs replaced by the exact MAL score. See `malapply.ts`. */
+  refined: number
   unmatched: string[]
   skipped: number
 }

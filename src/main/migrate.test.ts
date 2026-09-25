@@ -474,3 +474,166 @@ describe('a document that has been through migrate still merges correctly', () =
     expect(doc.watchlist[0]?.updatedAt).toBe(4_242)
   })
 })
+
+/**
+ * The 1–10 rating scale.
+ *
+ * Every rating the user made before it is a like or a dislike, and the only
+ * copy of those opinions is this document — so the conversion is tested for
+ * what it keeps as much as for what it adds. It also runs on every load and on
+ * every sync pull, which makes idempotence and an untouched `updatedAt` part
+ * of correctness rather than tidiness: the last time `migrate` rewrote a
+ * stamp on load, the sync merge lost the ability to tell old from new.
+ */
+describe('the 1–10 rating scale', () => {
+  /** A rating exactly as 1.7.3 wrote it: no `value`, no `coarse`. */
+  const legacy = (over: Record<string, unknown> = {}) => ({
+    key: 'tv:tt0903747',
+    tmdbId: 1396,
+    type: 'tv',
+    season: null,
+    rating: 'like',
+    genreIds: [18, 80],
+    at: 1_700_000_000_000,
+    updatedAt: 1_700_000_500_000,
+    deletedAt: null,
+    ...over,
+  })
+
+  const ratingsOf = (...records: Record<string, unknown>[]) =>
+    migrate({ schemaVersion: SCHEMA_VERSION, ratings: records }, 9_999).ratings
+
+  it('turns a legacy like into an 8 and a dislike into a 4, both marked coarse', () => {
+    const [like, dislike] = ratingsOf(
+      legacy(),
+      legacy({ key: 'tv:tt0903747:s2', season: 2, rating: 'dislike' }),
+    )
+    expect(like).toMatchObject({ value: 8, coarse: true, rating: 'like' })
+    expect(dislike).toMatchObject({ value: 4, coarse: true, rating: 'dislike' })
+  })
+
+  /**
+   * The fields a merge and the scope lookups identify a record by. Changing
+   * any of them turns one opinion into another, or makes it lose every
+   * conflict it should win.
+   */
+  it('leaves updatedAt, key, season, at and genreIds exactly as they were', () => {
+    const before = legacy({ key: 'tv:tt0903747:s3', season: 3 })
+    const [after] = ratingsOf(before)
+    expect(after).toMatchObject({
+      key: before.key,
+      season: before.season,
+      at: before.at,
+      genreIds: before.genreIds,
+      updatedAt: before.updatedAt,
+      deletedAt: null,
+    })
+  })
+
+  it('is a no-op the second time, field for field', () => {
+    const once = migrate({ schemaVersion: SCHEMA_VERSION, ratings: [legacy()] }, 9_999)
+    const twice = migrate(once, 11_111)
+    expect(twice.ratings).toEqual(once.ratings)
+    // Key order too — the sync decides whether to push by comparing JSON.
+    expect(JSON.stringify(twice.ratings)).toBe(JSON.stringify(once.ratings))
+  })
+
+  it('keeps a value set on the new scale, and whether it was coarse', () => {
+    const [chosen, converted] = ratingsOf(
+      legacy({ value: 6, coarse: false, rating: 'like' }),
+      legacy({ key: 'tv:tt2', tmdbId: 2, value: 8, coarse: true, rating: 'like' }),
+    )
+    expect(chosen).toMatchObject({ value: 6, coarse: false })
+    expect(converted).toMatchObject({ value: 8, coarse: true })
+  })
+
+  /**
+   * `value` wins whenever it is present, and the string is re-derived from it.
+   * An old build builds every rating from scratch, so it can never leave a
+   * stale value beside a string it changed; a mismatch can only be damage,
+   * and the number is the one this build wrote.
+   */
+  it('re-derives the legacy string from the value rather than trusting it', () => {
+    const [low, high] = ratingsOf(
+      legacy({ value: 3, coarse: false, rating: 'like' }),
+      legacy({ key: 'tv:tt2', tmdbId: 2, value: 7, coarse: false, rating: 'dislike' }),
+    )
+    expect(low).toMatchObject({ value: 3, rating: 'dislike' })
+    expect(high).toMatchObject({ value: 7, rating: 'like' })
+  })
+
+  it('treats a value with no coarse flag as chosen', () => {
+    const [record] = ratingsOf(legacy({ value: 9 }))
+    expect(record).toMatchObject({ value: 9, coarse: false, rating: 'like' })
+  })
+
+  /** An out-of-range or fractional value is not a rating; the string still is. */
+  it('falls back to the legacy string when the value is not on the scale', () => {
+    const [fraction, zero] = ratingsOf(
+      legacy({ value: 7.4 }),
+      legacy({ key: 'tv:tt2', tmdbId: 2, value: 0, rating: 'dislike' }),
+    )
+    expect(fraction).toMatchObject({ value: 8, coarse: true })
+    expect(zero).toMatchObject({ value: 4, coarse: true })
+  })
+
+  /**
+   * Nothing readable, so nothing kept. Guessing would invent an opinion the
+   * user never held and feed it to the recommendations.
+   */
+  it('drops a record that holds neither a value nor a like or dislike', () => {
+    const kept = ratingsOf(
+      legacy({ rating: 'meh' }),
+      legacy({ key: 'tv:tt2', tmdbId: 2, rating: undefined, value: 'ten' }),
+      legacy({ key: 'tv:tt3', tmdbId: 3 }),
+    )
+    expect(kept.map((r) => r.key)).toEqual(['tv:tt3'])
+  })
+
+  it('converts a tombstone too, and leaves it deleted', () => {
+    const [gone] = ratingsOf(legacy({ deletedAt: 1_700_000_900_000, updatedAt: 1_700_000_900_000 }))
+    expect(gone).toMatchObject({ value: 8, coarse: true, deletedAt: 1_700_000_900_000 })
+  })
+
+  /**
+   * The seam, which is where the last `migrate` bug lived. One device has
+   * upgraded and re-rated the title a 9; another is still on 1.7.3 and holds
+   * the same key as a plain like. Whichever write is newer must win, and the
+   * result must read as a rating after the next load either way.
+   */
+  describe('composed with the merge', () => {
+    const upgraded = (updatedAt: number) =>
+      migrate(
+        {
+          schemaVersion: SCHEMA_VERSION,
+          ratings: [legacy({ value: 9, coarse: false, rating: 'like', updatedAt })],
+        },
+        9_999,
+      )
+    // What an old build pushes: never migrated by this code, legacy string only.
+    const old = (rating: string, updatedAt: number) =>
+      ({ schemaVersion: SCHEMA_VERSION, ratings: [legacy({ rating, updatedAt })] }) as never
+
+    it('keeps the newer 9 over an older legacy dislike', () => {
+      const merged = migrate(mergeDocuments(upgraded(5_000), migrate(old('dislike', 4_000))))
+      expect(merged.ratings[0]).toMatchObject({ value: 9, coarse: false, rating: 'like' })
+    })
+
+    it('lets a newer legacy dislike from the old device beat an older 9', () => {
+      const merged = migrate(mergeDocuments(upgraded(4_000), migrate(old('dislike', 5_000))))
+      expect(merged.ratings[0]).toMatchObject({ value: 4, coarse: true, rating: 'dislike' })
+      expect(merged.ratings[0]?.updatedAt).toBe(5_000)
+    })
+
+    /**
+     * The direction the old device sees. It merges the upgraded record
+     * wholesale, and its own migrate knows nothing of `value` — so this build
+     * must read the result correctly when the record comes back unchanged.
+     */
+    it('reads back an upgraded record that round-tripped through an old device', () => {
+      const pushed = upgraded(5_000)
+      const [record] = migrate(JSON.parse(JSON.stringify(pushed))).ratings
+      expect(record).toMatchObject({ value: 9, coarse: false, rating: 'like', updatedAt: 5_000 })
+    })
+  })
+})

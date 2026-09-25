@@ -171,6 +171,9 @@
           <li><strong>{done.watchlist}</strong> added to your Watchlist</li>
           <li><strong>{done.releases}</strong> now tracked for new episodes</li>
           <li><strong>{done.ratings}</strong> rated from your MAL scores</li>
+          {#if done.refined > 0}
+            <li><strong>{done.refined}</strong> 👍/👎 sharpened to your exact MAL score</li>
+          {/if}
         </ul>
 
         {#if done.unmatched.length > 0}
@@ -264,9 +267,10 @@
         <label class="scores">
           <input type="checkbox" bind:checked={applyScores} />
           <span>
-            Use my MAL scores as likes and dislikes
-            <em>8 and above is a like, 5 and below a dislike; the middle is left unrated. Ratings
-              you have already set by hand are never overwritten.</em
+            Use my MAL scores as ratings
+            <em>Each score carries over as it is, 1 to 10. A 👍 or 👎 from before ratings had a
+              scale is replaced by the exact score when the two agree; anything you have rated
+              on the 1–10 scale is never overwritten.</em
             >
           </span>
         </label>

@@ -25,19 +25,21 @@
    * archive an order of magnitude bigger, where every pixel of poster is a row
    * that does not fit on screen.
    *
-   * The folding, the tally and the sort live in `watchedgroups.ts` with their
-   * tests. This file is layout.
+   * The folding, the band counts, the means and the sort live in
+   * `watchedgroups.ts` with their tests. This file is layout.
    */
-  import type { MediaSummary, WatchedEntry } from '@shared/types'
+  import type { MediaSummary, RatingValue, WatchedEntry } from '@shared/types'
+  import type { RatingBand } from '@shared/rating'
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
   import {
+    bandOf,
     deepest,
     groupWatched,
     leaning,
     ribbon,
     summarise,
-    tallyLabel,
+    summaryLabel,
     WATCHED_SORTS,
     type TitleGroup,
     type WatchedSort,
@@ -45,7 +47,7 @@
   import { expandIn, expandOut, stagger } from '../lib/motion'
   import { fly } from 'svelte/transition'
   import { SvelteSet } from 'svelte/reactivity'
-  import RateButtons from '../components/RateButtons.svelte'
+  import RatingStrip from '../components/RatingStrip.svelte'
   import Score from '../components/Score.svelte'
 
   interface Props {
@@ -54,7 +56,8 @@
 
   const { onselect }: Props = $props()
 
-  type Filter = 'all' | 'unrated' | 'liked' | 'disliked'
+  /** The bands are filters in their own right: see `ratingBand` for the lines. */
+  type Filter = 'all' | 'unrated' | RatingBand
 
   let filter = $state<Filter>('all')
   let query = $state('')
@@ -97,10 +100,9 @@
       // here is what listed seasons the user had just rated under "Unrated",
       // with a lit thumb on the very same row.
       const rating = library.ratingForEntry(entry)
+      if (filter === 'all') return true
       if (filter === 'unrated') return rating === null
-      if (filter === 'liked') return rating === 'like'
-      if (filter === 'disliked') return rating === 'dislike'
-      return true
+      return bandOf(rating) === filter
     })
   })
 
@@ -119,14 +121,12 @@
    */
   const shelf = $derived(groupWatched(library.watched, (e) => library.ratingForEntry(e), 'title'))
   const portrait = $derived(summarise(shelf))
-  const rated = $derived(portrait.likes + portrait.dislikes)
+  const rated = $derived(portrait.liked + portrait.mixed + portrait.disliked)
   const top = $derived(deepest(shelf))
 
-  /** "liked" / "disliked" / "not rated", for a ribbon segment's tooltip. */
-  function ratingWord(rating: 'like' | 'dislike' | null): string {
-    if (rating === 'like') return 'liked'
-    if (rating === 'dislike') return 'disliked'
-    return 'not rated'
+  /** "8 · liked" or "not rated", for a ribbon segment's tooltip. */
+  function ratingWord(rating: RatingValue | null): string {
+    return rating === null ? 'not rated' : `${rating} · ${bandOf(rating)}`
   }
 
   /**
@@ -153,12 +153,19 @@
     return only === null || only === undefined ? 'Whole series' : `Season ${only}`
   }
 
-  const FILTERS: Array<{ id: Filter; label: string }> = [
+  /** `range` is drawn beside the label, so the bands never have to be guessed. */
+  const FILTERS: Array<{ id: Filter; label: string; range?: string }> = [
     { id: 'all', label: 'All' },
     { id: 'unrated', label: 'Unrated' },
-    { id: 'liked', label: 'Liked' },
-    { id: 'disliked', label: 'Disliked' },
+    { id: 'liked', label: 'Liked', range: '8–10' },
+    { id: 'mixed', label: 'Mixed', range: '6–7' },
+    { id: 'disliked', label: 'Disliked', range: '1–5' },
   ]
+
+  /** A band tile and a meter segment are the same filter, and toggle back to All. */
+  function toggleFilter(band: Filter): void {
+    filter = filter === band ? 'all' : band
+  }
 </script>
 
 <div class="watched">
@@ -179,6 +186,7 @@
         {#each FILTERS as f (f.id)}
           <button class:active={filter === f.id} onclick={() => (filter = f.id)}>
             {f.label}
+            {#if f.range}<span class="range">{f.range}</span>{/if}
             {#if f.id === 'unrated' && unratedCount > 0}<span class="badge">{unratedCount}</span
               >{/if}
           </button>
@@ -219,26 +227,26 @@
         <span class="figure">{portrait.seasons}</span>
         <span class="label">seasons &amp; films</span>
       </div>
-      <button
-        class="stat act"
-        class:on={filter === 'liked'}
-        onclick={() => (filter = filter === 'liked' ? 'all' : 'liked')}
-      >
-        <span class="figure good">{portrait.likes}</span>
-        <span class="label">liked</span>
+      <button class="stat act" class:on={filter === 'liked'} onclick={() => toggleFilter('liked')}>
+        <span class="figure liked">{portrait.liked}</span>
+        <span class="label">liked · 8–10</span>
+      </button>
+      <button class="stat act" class:on={filter === 'mixed'} onclick={() => toggleFilter('mixed')}>
+        <span class="figure mixed">{portrait.mixed}</span>
+        <span class="label">mixed · 6–7</span>
       </button>
       <button
         class="stat act"
         class:on={filter === 'disliked'}
-        onclick={() => (filter = filter === 'disliked' ? 'all' : 'disliked')}
+        onclick={() => toggleFilter('disliked')}
       >
-        <span class="figure bad">{portrait.dislikes}</span>
-        <span class="label">disliked</span>
+        <span class="figure disliked">{portrait.disliked}</span>
+        <span class="label">disliked · 1–5</span>
       </button>
       <button
         class="stat act"
         class:on={filter === 'unrated'}
-        onclick={() => (filter = filter === 'unrated' ? 'all' : 'unrated')}
+        onclick={() => toggleFilter('unrated')}
       >
         <span class="figure">{portrait.unrated}</span>
         <span class="label">unrated</span>
@@ -265,24 +273,17 @@
         few disliked" on a library where nothing is.
       -->
       <div class="meter" role="group" aria-label="How the library was rated">
-        {#if portrait.likes > 0}
-          <button
-            class="mseg like"
-            style="flex: {portrait.likes}"
-            onclick={() => (filter = 'liked')}
-            aria-label="{portrait.likes} liked"
-            title="{portrait.likes} liked"
-          ></button>
-        {/if}
-        {#if portrait.dislikes > 0}
-          <button
-            class="mseg dislike"
-            style="flex: {portrait.dislikes}"
-            onclick={() => (filter = 'disliked')}
-            aria-label="{portrait.dislikes} disliked"
-            title="{portrait.dislikes} disliked"
-          ></button>
-        {/if}
+        {#each ['liked', 'mixed', 'disliked'] as const as band (band)}
+          {#if portrait[band] > 0}
+            <button
+              class="mseg {band}"
+              style="flex: {portrait[band]}"
+              onclick={() => (filter = band)}
+              aria-label="{portrait[band]} {band}"
+              title="{portrait[band]} {band}"
+            ></button>
+          {/if}
+        {/each}
         {#if portrait.unrated > 0}
           <button
             class="mseg blank"
@@ -310,7 +311,7 @@
         {/if}
         {#if rated > 0}
           <span class="caption-dim">
-            {Math.round((portrait.likes / rated) * 100)}% of what you rated, you liked.
+            {Math.round((portrait.liked / rated) * 100)}% of what you rated, you liked.
           </span>
         {/if}
       </p>
@@ -324,7 +325,12 @@
           {@const open = isOpen(group)}
           {@const lean = leaning(group)}
           <li class="group" class:open in:fly={stagger(index, 14, 10)}>
-            <div class="row" class:like={lean === 'like'} class:dislike={lean === 'dislike'}>
+            <div
+              class="row"
+              class:liked={lean === 'liked'}
+              class:mixed={lean === 'mixed'}
+              class:disliked={lean === 'disliked'}
+            >
               {#if group.flat}
                 <span class="chev placeholder" aria-hidden="true"></span>
               {:else}
@@ -357,7 +363,9 @@
                   <span class="name">{group.title}</span>
                   <span class="meta">
                     {seasonSummary(group)}
-                    {#if tallyLabel(group)}<span class="dot">·</span>{tallyLabel(group)}{/if}
+                    <!-- The mean, for a series; a flat row's chip already shows its number. -->
+                    {#if !group.flat && summaryLabel(group)}<span class="dot">·</span
+                      >{summaryLabel(group)}{/if}
                     {#if group.imported}<span class="mal" title="Imported from MyAnimeList"
                         >MAL</span
                       >{/if}
@@ -381,16 +389,18 @@
                   class="ribbon"
                   onclick={() => toggle(group)}
                   aria-expanded={open}
-                  aria-label="{group.seasons.length} seasons — {tallyLabel(group)}"
+                  aria-label="{group.seasons.length} seasons — {summaryLabel(group)}"
                 >
                   {#if strip.hidden > 0}
                     <span class="rib-more">+{strip.hidden}</span>
                   {/if}
                   {#each strip.segments as segment (segment.key)}
+                    {@const band = bandOf(segment.rating)}
                     <span
                       class="rib"
-                      class:like={segment.rating === 'like'}
-                      class:dislike={segment.rating === 'dislike'}
+                      class:liked={band === 'liked'}
+                      class:mixed={band === 'mixed'}
+                      class:disliked={band === 'disliked'}
                       title="{segment.label} · {ratingWord(segment.rating)}"
                     ></span>
                   {/each}
@@ -403,13 +413,14 @@
 
               <!--
                 A flat row rates inline; a multi-season one has nothing to rate
-                at the title level, because 1.5.7 made the opinion a per-season
-                thing and there is no average of a like and a dislike.
+                at the title level, because 1.5.7 made the rating a per-season
+                thing. Its mean is derived from the seasons, not set, so it is
+                printed in the meta line rather than offered as a control.
               -->
               {#if group.flat}
-                <RateButtons
+                <RatingStrip
                   media={asMedia(group.seasons[0]!.entry)}
-                  size="sm"
+                  form="compact"
                   season={group.seasons[0]!.entry.season}
                 />
               {/if}
@@ -431,9 +442,9 @@
                         ? 'Whole series'
                         : `Season ${season.entry.season}`}
                     </button>
-                    <RateButtons
+                    <RatingStrip
                       media={asMedia(season.entry)}
-                      size="sm"
+                      form="compact"
                       season={season.entry.season}
                     />
                     <button
@@ -535,6 +546,12 @@
     color: var(--text-on-accent);
   }
 
+  /* The band's range, beside its name: quieter than the label it qualifies. */
+  .range {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.65;
+  }
+
   .filters button.active .badge {
     background: rgb(0 0 0 / 22%);
     color: inherit;
@@ -604,12 +621,16 @@
     line-height: var(--leading-tight);
   }
 
-  .figure.good {
-    color: var(--success);
+  .figure.liked {
+    color: var(--rating-liked);
   }
 
-  .figure.bad {
-    color: var(--danger);
+  .figure.mixed {
+    color: var(--rating-mixed);
+  }
+
+  .figure.disliked {
+    color: var(--rating-disliked);
   }
 
   /* A title is not a number and cannot be set like one. */
@@ -658,12 +679,16 @@
     filter: brightness(1.25);
   }
 
-  .mseg.like {
-    background: var(--success);
+  .mseg.liked {
+    background: var(--rating-liked);
   }
 
-  .mseg.dislike {
-    background: var(--danger);
+  .mseg.mixed {
+    background: var(--rating-mixed);
+  }
+
+  .mseg.disliked {
+    background: var(--rating-disliked);
   }
 
   .mseg.blank {
@@ -741,21 +766,29 @@
     transition: background var(--dur-fast) var(--ease-out);
   }
 
-  .row.like::before {
-    background: color-mix(in srgb, var(--success) 32%, transparent);
+  .row.liked::before {
+    background: color-mix(in srgb, var(--rating-liked) 32%, transparent);
   }
 
-  .row.dislike::before {
-    background: color-mix(in srgb, var(--danger) 38%, transparent);
+  .row.mixed::before {
+    background: color-mix(in srgb, var(--rating-mixed) 34%, transparent);
+  }
+
+  .row.disliked::before {
+    background: color-mix(in srgb, var(--rating-disliked) 38%, transparent);
   }
 
   /* Full strength on the row under the pointer: the one you are asking about. */
-  .row.like:hover::before {
-    background: var(--success);
+  .row.liked:hover::before {
+    background: var(--rating-liked);
   }
 
-  .row.dislike:hover::before {
-    background: var(--danger);
+  .row.mixed:hover::before {
+    background: var(--rating-mixed);
+  }
+
+  .row.disliked:hover::before {
+    background: var(--rating-disliked);
   }
 
   .row:hover {
@@ -869,12 +902,16 @@
       background var(--dur-fast) var(--ease-out);
   }
 
-  .rib.like {
-    background: color-mix(in srgb, var(--success) 62%, transparent);
+  .rib.liked {
+    background: color-mix(in srgb, var(--rating-liked) 62%, transparent);
   }
 
-  .rib.dislike {
-    background: color-mix(in srgb, var(--danger) 62%, transparent);
+  .rib.mixed {
+    background: color-mix(in srgb, var(--rating-mixed) 62%, transparent);
+  }
+
+  .rib.disliked {
+    background: color-mix(in srgb, var(--rating-disliked) 62%, transparent);
   }
 
   /* Full strength, and taller, on the row being asked about. */
@@ -882,12 +919,16 @@
     height: 14px;
   }
 
-  .row:hover .rib.like {
-    background: var(--success);
+  .row:hover .rib.liked {
+    background: var(--rating-liked);
   }
 
-  .row:hover .rib.dislike {
-    background: var(--danger);
+  .row:hover .rib.mixed {
+    background: var(--rating-mixed);
+  }
+
+  .row:hover .rib.disliked {
+    background: var(--rating-disliked);
   }
 
   .rib-more {

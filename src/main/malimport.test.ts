@@ -161,23 +161,23 @@ describe('parseMalExport', () => {
 })
 
 describe('ratingFromScore', () => {
-  it('reads 8 and above as a like', () => {
-    expect(ratingFromScore(8)).toBe('like')
-    expect(ratingFromScore(10)).toBe('like')
+  /** The same 1–10 in the same hands; remapping would second-guess the user. */
+  it('maps every MAL score one to one', () => {
+    for (let score = 1; score <= 10; score += 1) expect(ratingFromScore(score)).toBe(score)
   })
 
-  it('reads 5 and below as a dislike', () => {
-    // MAL's community average sits near 7, so a 6 is mild disappointment
-    // rather than approval and the split is not down the middle of 1–10.
-    expect(ratingFromScore(1)).toBe('dislike')
-    expect(ratingFromScore(5)).toBe('dislike')
+  /**
+   * Kept now, where they used to be dropped as a shrug. With ratings centred
+   * on the user's own mean, a 6 or a 7 is exactly the calibration the taste
+   * model reads.
+   */
+  it('keeps the middle of the scale', () => {
+    expect(ratingFromScore(6)).toBe(6)
+    expect(ratingFromScore(7)).toBe(7)
   })
 
-  it('leaves the middle and the unrated alone', () => {
-    // A shrug is not a signal; treating it as one floods the taste profile.
-    expect(ratingFromScore(6)).toBeNull()
-    expect(ratingFromScore(7)).toBeNull()
-    expect(ratingFromScore(0)).toBeNull()
+  it("reads MAL's 0 as not scored, and anything off the scale as nothing", () => {
+    for (const score of [0, -1, 11, 7.5, NaN]) expect(ratingFromScore(score)).toBeNull()
   })
 })
 
