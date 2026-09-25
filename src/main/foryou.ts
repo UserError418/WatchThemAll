@@ -337,8 +337,28 @@ export function planRows(
 ): ForYouRow[] {
   const rows: ForYouRow[] = []
 
-  if (topPickSeeds(profile).length > 0) {
-    rows.push({ kind: 'topPicks', key: 'for-you:top', title: 'Top picks for you' })
+  /*
+   * Top picks pools favourites that do *not* head a Because row.
+   *
+   * Every title belongs to the first row that shows it, and Top picks is
+   * above the Because rows. When one favourite seeded both, Top picks showed
+   * that favourite's best recommendations first and its own Because row came
+   * up empty — measured on the owner's library, where "Because you watched Liar
+   * Game" rendered as a heading over nothing while TMDB had 535
+   * recommendations for it. Disjoint seeds leave each row its own material.
+   */
+  const heading = new Set(because.map((t) => titleId(t.type, t.tmdbId)))
+  const pooled = topPickSeeds({
+    ...profile,
+    titles: profile.titles.filter((t) => !heading.has(titleId(t.type, t.tmdbId))),
+  })
+  if (pooled.length > 0) {
+    rows.push({
+      kind: 'topPicks',
+      key: 'for-you:top',
+      title: 'Top picks for you',
+      seeds: pooled.map((t) => ({ tmdbId: t.tmdbId, type: t.type })),
+    })
   }
 
   for (const t of because) {
@@ -380,13 +400,21 @@ export function isForYouRow(value: unknown): value is ForYouRow {
   if (typeof row.key !== 'string' || typeof row.title !== 'string') return false
   const positiveInt = (x: unknown): boolean => Number.isInteger(x) && (x as number) > 0
 
+  const isSeed = (x: unknown): boolean => {
+    const seed = x as Record<string, unknown> | undefined
+    return !!seed && positiveInt(seed.tmdbId) && (seed.type === 'tv' || seed.type === 'movie')
+  }
+
   switch (row.kind) {
     case 'topPicks':
-      return true
-    case 'because': {
-      const seed = row.seed as Record<string, unknown> | undefined
-      return !!seed && positiveInt(seed.tmdbId) && (seed.type === 'tv' || seed.type === 'movie')
-    }
+      return (
+        Array.isArray(row.seeds) &&
+        row.seeds.length >= 1 &&
+        row.seeds.length <= TOP_PICK_SEEDS &&
+        row.seeds.every(isSeed)
+      )
+    case 'because':
+      return isSeed(row.seed)
     case 'genre':
       return (
         Array.isArray(row.concepts) &&
@@ -562,7 +590,7 @@ export async function buildRow(
 ): Promise<Paged<MediaSummary>> {
   switch (row.kind) {
     case 'topPicks':
-      return topPicks(page, profile, deps)
+      return topPicks(row.seeds, page, profile, deps)
     case 'because':
       return because(row.seed, page, profile, deps)
     case 'genre':
@@ -570,9 +598,19 @@ export async function buildRow(
   }
 }
 
-async function topPicks(page: number, profile: Profile, deps: ForYouDeps): Promise<Paged<MediaSummary>> {
+async function topPicks(
+  planned: ReadonlyArray<{ tmdbId: number; type: MediaType }>,
+  page: number,
+  profile: Profile,
+  deps: ForYouDeps,
+): Promise<Paged<MediaSummary>> {
   if (page > MAX_PAGES.topPicks) return EMPTY(page)
-  const seeds = topPickSeeds(profile)
+  // The planned seeds, weighted by what the profile says of them *now*. One
+  // the user has since un-rated or turned against simply drops out.
+  const byId = new Map(profile.titles.map((t) => [titleId(t.type, t.tmdbId), t]))
+  const seeds = planned
+    .map((s) => byId.get(titleId(s.type, s.tmdbId)))
+    .filter((t): t is TitleAffinity => !!t && t.score > 0)
   if (seeds.length === 0) return EMPTY(page)
 
   const [pages, penalties] = await Promise.all([
@@ -829,12 +867,12 @@ export async function forYouPlan(
  * How many candidates to try for the "Because you" rows, and how many fresh
  * recommendations a seed needs to be worth a row.
  *
- * Measured on the owner's library: "Because you watched Liar Game" rendered as a
- * heading over nothing — TMDB has almost no recommendations for it. The first
- * page is fetched here for the head of the list (the row would fetch exactly
- * that page next, and the client caches it, so this costs nothing extra for
- * the seeds kept), and a seed that cannot fill a row is passed over for the
- * next one.
+ * A title TMDB knows little about — a new or obscure series — has a
+ * recommendation list that is empty, or that the user has already seen most
+ * of, and its row would be a heading over nothing. The first page is fetched
+ * here for the head of the list (the row fetches exactly that page next, and
+ * the client caches it, so this costs nothing extra for the seeds kept), and a
+ * seed that cannot fill a row is passed over for the next one.
  */
 const BECAUSE_TRIES = 6
 const BECAUSE_MIN_ITEMS = 8

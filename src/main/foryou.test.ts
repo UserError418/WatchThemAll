@@ -237,6 +237,15 @@ describe('planRows', () => {
     for (const row of rows) expect(isForYouRow(row)).toBe(true)
   })
 
+  it('never builds Top picks from a favourite that heads a Because row', () => {
+    for (let seed = 0; seed < 30; seed += 1) {
+      const rows = planRows(buildProfile(library(), NOW), seed, name, NOW)
+      const top = rows.find((r) => r.kind === 'topPicks')
+      const heads = rows.flatMap((r) => (r.kind === 'because' ? [r.seed.tmdbId] : []))
+      expect(top?.kind === 'topPicks' && top.seeds.some((s) => heads.includes(s.tmdbId))).toBe(false)
+    }
+  })
+
   it('names the reason in the heading', () => {
     const rows = planRows(buildProfile(library(), NOW), 7, name, NOW)
     const because = rows.filter((r) => r.kind === 'because').map((r) => r.title)
@@ -278,7 +287,9 @@ describe('forYouPlan', () => {
 
 describe('isForYouRow', () => {
   it('refuses rows main could not have planned', () => {
-    expect(isForYouRow({ kind: 'topPicks', key: 'k', title: 't' })).toBe(true)
+    expect(isForYouRow({ kind: 'topPicks', key: 'k', title: 't', seeds: [{ tmdbId: 1, type: 'tv' }] })).toBe(true)
+    expect(isForYouRow({ kind: 'topPicks', key: 'k', title: 't', seeds: [] })).toBe(false)
+    expect(isForYouRow({ kind: 'topPicks', key: 'k', title: 't' })).toBe(false)
     expect(isForYouRow({ kind: 'because', key: 'k', title: 't', seed: { tmdbId: 1, type: 'tv' } })).toBe(true)
     expect(isForYouRow({ kind: 'because', key: 'k', title: 't', seed: { tmdbId: -1, type: 'tv' } })).toBe(false)
     expect(isForYouRow({ kind: 'because', key: 'k', title: 't', seed: { tmdbId: 1, type: 'person' } })).toBe(false)
@@ -290,7 +301,13 @@ describe('isForYouRow', () => {
 
 /* ── Rows ────────────────────────────────────────────────────────────────── */
 
-const TOP: ForYouRow = { kind: 'topPicks', key: 'for-you:top', title: 'Top picks for you' }
+/** Top picks over the favourites the library fixture's tests recommend from. */
+const TOP: ForYouRow = {
+  kind: 'topPicks',
+  key: 'for-you:top',
+  title: 'Top picks for you',
+  seeds: [1, 2, 3, 4, 5].map((tmdbId) => ({ tmdbId, type: 'tv' as const })),
+}
 
 describe('Top picks', () => {
   it('ranks a title several favourites agree on above one only one mentions', async () => {

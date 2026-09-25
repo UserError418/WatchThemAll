@@ -351,7 +351,16 @@ export interface DiscoverRequest {
  * than trusting it — see `isForYouRow`.
  */
 export type ForYouRow =
-  | { kind: 'topPicks'; key: string; title: string }
+  | {
+      kind: 'topPicks'
+      key: string
+      title: string
+      /**
+       * The favourites it pools, chosen at plan time — never ones that head a
+       * "Because you" row, or Top picks would claim that row's titles first.
+       */
+      seeds: Array<{ tmdbId: number; type: MediaType }>
+    }
   | {
       kind: 'because'
       key: string
