@@ -10,6 +10,7 @@
 
 import { mount } from 'svelte'
 import App from '@/App.svelte'
+import { scan } from '@/lib/scan.svelte'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import '@/styles/fonts.css'
 import '@/styles/tokens.css'
@@ -57,6 +58,13 @@ function renderStartupFailure(error: unknown): void {
 
 async function start(): Promise<void> {
   window.wta = await createBridge()
+
+  // What `src/renderer/src/main.ts` does before mounting, and the one line this
+  // entry had missed since the phone scan shipped in 1.7.0: without it no
+  // progress event reached the pickers, so "Test all sources" read
+  // "Starting…" for the whole run. After the bridge, because it subscribes
+  // through `window.wta`.
+  scan.listen()
 
   /**
    * Draw behind the status bar rather than under it.
