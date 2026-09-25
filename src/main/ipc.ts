@@ -234,10 +234,10 @@ export function registerIpc(deps: IpcDeps): void {
         season: target?.season,
         episode: target?.episode,
         label: key,
-        // Only `runtimecheck` reads this, and the network probe does not run it
-        // — a scan asks whether a stream exists, not whether it is the right
-        // programme. Inventing a number here would imply a check that is not
-        // happening.
+        // A scan asks whether a stream exists, not whether it is the right
+        // programme, so it has no runtime and invents none. The one reader is
+        // the quality reading's `lengthVerdict`, which without it still
+        // refuses an ad's size, just not a wrong programme's.
         runtimeMinutes: null,
       })
 

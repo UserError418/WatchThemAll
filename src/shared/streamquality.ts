@@ -2,11 +2,11 @@
  * How good a stream can get, read from what the stream says about itself.
  *
  * A stream's quality is not in its URL. An HLS master playlist lists every
- * rendition it offers with a `RESOLUTION`, a DASH manifest gives each
- * `Representation` a width and height, and everything else — a media playlist
- * without its master, a whole MP4 — names no quality at all. So this module
- * reads the manifests that do, and says "unknown" for the rest rather than
- * guessing.
+ * rendition it offers with a `RESOLUTION`, and a DASH manifest gives each
+ * `Representation` a width and height. A media playlist without its master
+ * names no quality — but if it carries fMP4, its init segment states the one
+ * rendition's size (`initsegment.ts`), and this module finds that segment for
+ * the caller to fetch. Everything else is "unknown" rather than a guess.
  *
  * Pure and in `shared/`, so every side can take the same answer: the desktop
  * scan, the phone — which reaches the same manifests through a different
@@ -90,6 +90,55 @@ export function readLadder(body: string): Ladder {
   return { kind: 'unknown', renditions: [] }
 }
 
+/** What a media playlist says about its one rendition, short of its size. */
+export interface MediaPlaylist {
+  /**
+   * The `#EXT-X-MAP` init segment, as written — relative to the playlist — or
+   * null when the segments carry no separate init (MPEG-TS does not).
+   */
+  init: string | null
+  /** The init segment's byte range within its file, when the playlist gives one. */
+  initRange: { offset: number; length: number } | null
+  /**
+   * The first media segment, as written. Without an init segment, its opening
+   * bytes are where MPEG-TS states the picture size; see `transportstream.ts`.
+   */
+  firstSegment: string | null
+  /** The length the segments add up to, in seconds. */
+  seconds: number
+}
+
+/**
+ * Read a media playlist for what the stream's own bytes can then answer.
+ *
+ * Its length is how an ad's playlist is told from the title's: the same check
+ * `runtimecheck.ts` puts the picture through. Its init segment is where fMP4
+ * states its picture size (`initsegment.ts`), and its first segment is where
+ * MPEG-TS does (`transportstream.ts`).
+ */
+export function readMediaPlaylist(body: string): MediaPlaylist {
+  let init: string | null = null
+  let initRange: MediaPlaylist['initRange'] = null
+  let firstSegment: string | null = null
+  let seconds = 0
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line !== '' && !line.startsWith('#')) {
+      firstSegment ??= line
+    } else if (line.startsWith('#EXTINF:')) {
+      const value = parseFloat(line.slice('#EXTINF:'.length))
+      if (Number.isFinite(value) && value > 0) seconds += value
+    } else if (line.startsWith('#EXT-X-MAP:') && init === null) {
+      // Only the first: a playlist that switches init segments mid-stream is
+      // switching encodes, and its opening one is what a player starts on.
+      init = /(?:^|[:,])URI="([^"]+)"/.exec(line)?.[1] ?? null
+      const range = /(?:^|[:,])BYTERANGE="(\d+)(?:@(\d+))?"/.exec(line)
+      if (range) initRange = { length: Number(range[1]), offset: Number(range[2] ?? 0) }
+    }
+  }
+  return { init, initRange, firstSegment, seconds }
+}
+
 /**
  * The renditions of an HLS master.
  *
@@ -162,7 +211,8 @@ function sorted(renditions: Rendition[]): Rendition[] {
  * - `single-file` — the source served one whole file. There is only one
  *   rendition, so the picture the page decoded *is* the best it offers.
  * - `single-rendition` — HLS without a master: the page fetched media playlists
- *   and never a list of renditions, so there is one, and the picture is it.
+ *   and never a list of renditions, so there is one, and its size is the best.
+ *   Read from its init segment, or failing that from the picture.
  * - `unlabelled` — HLS that names no sizes and cannot be pinned down: a master
  *   without `RESOLUTION`, or no playlist or picture to go on.
  * - `sealed` — playlists went by, but none answered when asked for again.
@@ -194,6 +244,12 @@ export interface QualityEvidence {
   video: { rendition: Rendition; runtime: 'plausible' | 'implausible' | 'unknown' } | null
   /** The best class the player itself lists, from its API or its menu; null if it said nothing. */
   player?: number | null
+  /**
+   * The sizes the stream's own init segments declare: one per fMP4 media
+   * playlist whose length fits the title. The caller drops the rest — an ad's
+   * playlist declares its size just as confidently.
+   */
+  declared?: Rendition[]
 }
 
 export interface QualityJudgement {
@@ -248,8 +304,12 @@ export function judgeQuality(evidence: QualityEvidence): QualityJudgement {
   const media = answered.some((p) => p.ladder.kind === 'hls-media')
   if (evidence.wholeFiles > 0 && !masters && !media) return verdict('single-file', playing)
   // Every playlist a media playlist, and the page's whole traffic watched from
-  // the first request: there was no master, so there is one rendition.
-  if (media && !masters && playing !== null) return verdict('single-rendition', playing)
+  // the first request: there was no master, so there is one rendition. Its
+  // init segment and its picture describe the same frames; either will do.
+  const declared = (evidence.declared ?? []).map(qualityClass)
+  if (media && !masters && (declared.length > 0 || playing !== null)) {
+    return verdict('single-rendition', Math.max(...declared, playing ?? 0))
+  }
   if (masters || media) return verdict('unlabelled', null)
   if (evidence.playlists.length > answered.length) return verdict('sealed', null)
   return verdict('unreadable', null)

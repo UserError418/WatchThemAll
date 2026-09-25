@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { bestQuality, judgeQuality, qualityClass, readLadder } from './streamquality'
+import { bestQuality, judgeQuality, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
 
 const MASTER = [
   '#EXTM3U',
@@ -137,6 +137,51 @@ describe('readLadder', () => {
   })
 })
 
+describe('readMediaPlaylist', () => {
+  // Videasy's shape: fMP4 with an init segment named after its rendition.
+  const FMP4 = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:7',
+    '#EXT-X-TARGETDURATION:6',
+    '#EXT-X-MAP:URI="init-s1080p-v1-a1.mp4"',
+    '#EXTINF:6.006,',
+    'seg-1-s1080p-v1-a1.m4s',
+    '#EXTINF:5.5,',
+    'seg-2-s1080p-v1-a1.m4s',
+    '#EXT-X-ENDLIST',
+  ].join('\n')
+
+  it('finds the init segment, the first segment and the length', () => {
+    const playlist = readMediaPlaylist(FMP4)
+    expect(playlist.init).toBe('init-s1080p-v1-a1.mp4')
+    expect(playlist.initRange).toBeNull()
+    expect(playlist.firstSegment).toBe('seg-1-s1080p-v1-a1.m4s')
+    expect(playlist.seconds).toBeCloseTo(11.506)
+  })
+
+  it('reports no init segment for MPEG-TS, which has none, but its first segment', () => {
+    // Videasy's other shape: opaque paths, Windows line endings.
+    const ts = '#EXTM3U\r\n#EXT-X-TARGETDURATION:8\r\n#EXTINF:7.83,\r\n/r6/s/abc\r\n#EXTINF:6,\r\n/r6/s/def\r\n'
+    expect(readMediaPlaylist(ts)).toMatchObject({ init: null, firstSegment: '/r6/s/abc' })
+  })
+
+  it('has no first segment when the playlist lists none', () => {
+    expect(readMediaPlaylist('#EXTM3U\n#EXT-X-ENDLIST\n').firstSegment).toBeNull()
+  })
+
+  it('reads the byte range of an init segment packed into a larger file', () => {
+    const packed = '#EXTM3U\n#EXT-X-MAP:URI="main.mp4",BYTERANGE="720@0"\n#EXTINF:6,\n'
+    expect(readMediaPlaylist(packed).initRange).toEqual({ offset: 0, length: 720 })
+    const offset = '#EXTM3U\n#EXT-X-MAP:BYTERANGE="720@1000",URI="main.mp4"\n'
+    expect(readMediaPlaylist(offset)).toMatchObject({ init: 'main.mp4', initRange: { offset: 1000, length: 720 } })
+  })
+
+  it('keeps the first init segment when the encode changes mid-stream', () => {
+    const switched = '#EXTM3U\n#EXT-X-MAP:URI="a.mp4"\n#EXTINF:6,\ns1.m4s\n#EXT-X-MAP:URI="b.mp4"\n'
+    expect(readMediaPlaylist(switched).init).toBe('a.mp4')
+  })
+})
+
 describe('judgeQuality', () => {
   const ladderOf = (body: string) => readLadder(body)
   const video = (width: number, height: number, runtime: 'plausible' | 'implausible' | 'unknown' = 'plausible') => ({
@@ -206,6 +251,32 @@ describe('judgeQuality', () => {
       video: video(1920, 800),
     })
     expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080 })
+  })
+
+  it('reads HLS with no master off its init segment when there is no picture', () => {
+    // Videasy: fMP4, and a player whose picture the probe cannot reach.
+    const media = '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:6.0,\nseg.m4s\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(media) }],
+      wholeFiles: 0,
+      video: null,
+      declared: [{ width: 1920, height: 1080 }],
+    })
+    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080, playing: null })
+  })
+
+  it('does not read a master without sizes off its init segments either', () => {
+    // Each variant has its own init segment; one read is one rung, not the top.
+    const master = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=9\nb.m3u8\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 200, ladder: ladderOf(master) }],
+      wholeFiles: 0,
+      video: null,
+      declared: [{ width: 1280, height: 720 }],
+    })
+    expect(judged).toMatchObject({ outcome: 'unlabelled', best: null })
   })
 
   it('does not read a master without sizes off its picture: there are other renditions', () => {

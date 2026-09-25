@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { checkRuntime } from './runtimecheck'
+import { checkRuntime, lengthVerdict } from './runtimecheck'
 
 const check = (deliveredSeconds: number, expectedMinutes: number | null) =>
   checkRuntime({ deliveredSeconds, expectedMinutes })
@@ -84,5 +84,30 @@ describe('the boundary', () => {
     // 60-minute title: a quarter is 15, so 46..75 inclusive.
     expect(check(74 * 60, 60).verdict).toBe('plausible')
     expect(check(76 * 60, 60).verdict).toBe('implausible')
+  })
+})
+
+describe('lengthVerdict', () => {
+  it('holds a length to the runtime when there is one', () => {
+    expect(lengthVerdict(8_348, 139)).toBe('plausible')
+    // Videasy's "One Piece" episode 5: 52 minutes, for a 25-minute anime.
+    expect(lengthVerdict(3_133, 25)).toBe('implausible')
+  })
+
+  it('refuses anything under ten minutes when there is no runtime', () => {
+    // A pre-roll, or an ad served as its own playlist.
+    expect(lengthVerdict(30, null)).toBe('implausible')
+    expect(lengthVerdict(599, null)).toBe('implausible')
+  })
+
+  it('does not vouch for a long length without a runtime, only lets it through', () => {
+    expect(lengthVerdict(600, null)).toBe('unknown')
+    expect(lengthVerdict(3_133, null)).toBe('unknown')
+  })
+
+  it('leaves a length that is no length unknown', () => {
+    // A live stream reports Infinity, a video before its metadata NaN.
+    expect(lengthVerdict(Infinity, null)).toBe('unknown')
+    expect(lengthVerdict(NaN, 25)).toBe('unknown')
   })
 })

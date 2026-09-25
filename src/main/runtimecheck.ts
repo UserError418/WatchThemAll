@@ -104,3 +104,23 @@ export function checkRuntime(input: RuntimeCheckInput): RuntimeCheck {
     reason: `${deliveredMinutes.toFixed(1)} min against ${expectedMinutes} min expected`,
   }
 }
+
+/** Shorter than any episode, longer than any ad: see `lengthVerdict`. */
+const MINIMUM_TITLE_SECONDS = 600
+
+/**
+ * Whether something of this length is the title, for believing the size it
+ * states.
+ *
+ * The quality readings need this: an ad's picture, or an ad served as its own
+ * HLS playlist, states its size as plainly as the title's does. So each is
+ * held to `checkRuntime`, and when TMDB gives no runtime — the scans pass
+ * none — to being at least ten minutes long, which no ad or placeholder is and
+ * every episode is. That fallback refuses an ad; it cannot catch the wrong
+ * programme, which only a runtime can.
+ */
+export function lengthVerdict(seconds: number, expectedMinutes: number | null): RuntimeVerdict {
+  const verdict = checkRuntime({ deliveredSeconds: seconds, expectedMinutes }).verdict
+  if (verdict !== 'unknown') return verdict
+  return Number.isFinite(seconds) && seconds < MINIMUM_TITLE_SECONDS ? 'implausible' : 'unknown'
+}

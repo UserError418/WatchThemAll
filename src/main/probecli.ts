@@ -783,6 +783,14 @@ function describeQuality(r: QualityProbeResult): string {
   if (j.contradiction) parts.push('CONTRADICTION (picture above ladder)')
   const statuses = r.playlists.map((p) => `${p.kind}:${p.status}`).join(',')
   if (statuses) parts.push(`[${statuses}]`)
+  // What each stream's header declared, beside the picture, so the two can be compared.
+  const headers = r.playlists
+    .filter((p) => p.header && p.header.status !== null)
+    .map((p) => {
+      const h = p.header!
+      return `${h.source}:${h.size ? `${h.size.width}x${h.size.height}` : `${h.status}?${h.lead?.slice(0, 8) ?? ''}`}`
+    })
+  if (headers.length) parts.push(headers.join(','))
   if (r.wholeFiles.length) parts.push(`files:${r.wholeFiles.length}`)
   return parts.join('  ')
 }

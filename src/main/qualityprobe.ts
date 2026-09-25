@@ -21,14 +21,21 @@
  *   renditions and the decoded picture arrive after it.
  * - `inspect`, to read the `<video>` elements before the window goes.
  *
- * ## Two independent readings
+ * ## Three independent readings
  *
  * The manifest says what is *offered*; the `<video>` says what is *decoding*.
  * Each playlist is asked for again with the headers the page sent — the phone's
  * `capture.peek` has exactly this keyhole, so what works here works there —
  * and read by `streamquality.ts`. The picture is a floor on the best quality,
  * never a ceiling (see `judgeQuality`), and it is the whole answer only for a
- * source that serves one file.
+ * source that serves one file or one rendition.
+ *
+ * The third is the stream's own bytes. A media playlist that carries fMP4
+ * points at an init segment stating the rendition's size (`initsegment.ts`);
+ * one that carries MPEG-TS opens its first segment with an H.264 SPS stating
+ * the same (`transportstream.ts`). Either is readable where the picture is
+ * not: Videasy's player keeps its `<video>` out of reach, but its segments
+ * answer like any other file.
  */
 
 import type { WebContents } from 'electron'
@@ -36,8 +43,16 @@ import type { Provider } from '@shared/types'
 import { probeStream, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
 import { isFalseWholeFile, WHOLE_FILE_URL } from './mediarequest'
-import { checkRuntime } from './runtimecheck'
-import { judgeQuality, readLadder, type LadderKind, type QualityJudgement, type Rendition } from '@shared/streamquality'
+import { lengthVerdict } from './runtimecheck'
+import {
+  judgeQuality,
+  readLadder,
+  readMediaPlaylist,
+  type LadderKind,
+  type QualityJudgement,
+  type Rendition,
+} from '@shared/streamquality'
+import { HEADER_BYTES, readStreamHeader, streamHeaderOf, type StreamHeader } from '@shared/streamheader'
 
 /**
  * How long the measurement keeps watching after the first media request.
@@ -105,6 +120,19 @@ export interface PlaylistReading {
   status: number
   kind: LadderKind
   renditions: Rendition[]
+  /** Media playlists: the length the segments add up to, in seconds. */
+  seconds?: number
+  /** Media playlists: where the stream states its picture size, and what it said once asked. */
+  header?: HeaderReading
+}
+
+/** A media playlist's stream header (see `streamheader.ts`), and what it said once asked. */
+export interface HeaderReading extends StreamHeader {
+  /** Status of the request; null until it is made — the scan skips it when a ladder answered. */
+  status: number | null
+  size: Rendition | null
+  /** The first bytes, in hex, when no size could be read from them: what the host sent instead. */
+  lead?: string
 }
 
 /** One `<video>` element, as the page reported it. */
@@ -183,18 +211,21 @@ const READ_VIDEOS_SCRIPT = `(() => {
  * keep what they know: hls.js holds its levels on the instance, JW Player
  * answers `getQualityLevels()`, video.js has `qualityLevels()`, and a player
  * that draws a quality menu has usually drawn it already, hidden until the
- * gear is clicked. Three kinds of evidence, each a short string:
+ * gear is clicked. Two kinds of evidence, each a short string:
  *
  * - `api` — a player object's own list of renditions
  * - `menu` — an element whose own text is a quality ("1080p", "4K"), with
  *   where it sits, hidden or not
- * - `attr` — an attribute naming a quality or resolution
  *
- * Deliberately raw: this is a survey, and the rules that turn it into a number
- * are written against what real players turned out to expose.
+ * Deliberately raw, and measure mode only: this is a survey, and a rule that
+ * turns it into a number would have to be written against what real players
+ * expose. The survey of 2026-09-25 found no player API with levels and no menu
+ * with more than "Auto" (VidFlix, VidSrc PM — which confirms one rendition),
+ * so nothing reads it yet. A third kind, attributes naming a quality, matched
+ * only `aria-labelledby` noise and was dropped.
  */
 const SNIFF_SCRIPT = `(() => {
-  const out = { api: [], menu: [], attr: [] }
+  const out = { api: [], menu: [] }
   const add = (list, text) => { if (list.length < 30) list.push(String(text).slice(0, 160)) }
   const heights = (levels) => {
     try { return JSON.stringify(Array.from(levels, (l) => l && (l.height ?? l.label ?? l.name ?? l.bitrate ?? null))) } catch { return '?' }
@@ -231,9 +262,6 @@ const SNIFF_SCRIPT = `(() => {
       if (el.tagName === 'MEDIA-PLAYER' || el.tagName === 'MEDIA-CONTROLLER') tryLevels(el.tagName.toLowerCase(), el)
       const own = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
       if (own && own.length <= 16 && QUALITY.test(own)) add(out.menu, own + ' @ ' + where(el) + (el.offsetParent === null ? ' (hidden)' : ''))
-      for (const attr of el.attributes) {
-        if (/quality|resolution|level|height|label/i.test(attr.name) && /\\d{3,4}|4k|hd/i.test(attr.value)) add(out.attr, attr.name + '=' + attr.value + ' @ ' + where(el))
-      }
       if (el.shadowRoot) walk(el.shadowRoot)
     }
   }
@@ -246,7 +274,6 @@ export interface FrameSniff {
   frame: string
   api: string[]
   menu: string[]
-  attr: string[]
 }
 
 /** The sniff script in every frame, keeping only frames that said something. */
@@ -258,7 +285,7 @@ async function sniffFrames(contents: WebContents): Promise<FrameSniff[]> {
       new Promise<null>((resolve) => setTimeout(() => resolve(null), FRAME_ANSWER_MS)),
     ])) as Omit<FrameSniff, 'frame'> | null
     if (!answer) continue
-    if (answer.api.length + answer.menu.length + answer.attr.length === 0) continue
+    if (answer.api.length + answer.menu.length === 0) continue
     found.push({ frame: frame.url.slice(0, 100), ...answer })
   }
   return found
@@ -304,20 +331,24 @@ async function waitForPicture(contents: WebContents, waitMs: number): Promise<Vi
   }
 }
 
-/** Ask for a URL again with the page's headers, reading at most `MAX_BODY_BYTES`. */
-async function refetch(url: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+/** Ask for a URL again with the page's headers, reading at most `limit` bytes. */
+async function refetch(
+  url: string,
+  headers: Record<string, string>,
+  limit: number,
+): Promise<{ status: number; bytes: Uint8Array }> {
   try {
     const response = await fetch(url, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(REFETCH_TIMEOUT_MS),
     })
-    if (!response.body) return { status: response.status, body: '' }
+    if (!response.body) return { status: response.status, bytes: new Uint8Array() }
 
     const reader = response.body.getReader()
     const chunks: Uint8Array[] = []
     let size = 0
-    while (size < MAX_BODY_BYTES) {
+    while (size < limit) {
       const { done, value } = await reader.read()
       if (done) break
       chunks.push(value)
@@ -325,10 +356,9 @@ async function refetch(url: string, headers: Record<string, string>): Promise<{ 
     }
     // Stop the transfer rather than drain it: this may be a whole film.
     await reader.cancel().catch(() => {})
-    const body = new TextDecoder().decode(Buffer.concat(chunks).subarray(0, MAX_BODY_BYTES))
-    return { status: response.status, body }
+    return { status: response.status, bytes: Buffer.concat(chunks).subarray(0, limit) }
   } catch {
-    return { status: 0, body: '' }
+    return { status: 0, bytes: new Uint8Array() }
   }
 }
 
@@ -359,26 +389,31 @@ export async function probeQuality(
     },
     /**
      * Read the playlists while the page is still alive — their tokens are at
-     * their freshest — and then decide whether the picture is worth waiting for.
+     * their freshest — and then decide what else is worth asking.
      */
     inspect: async (contents) => {
       playlists = await readPlaylists(candidates)
       if (options.mode === 'measure') {
+        // Everything, so each reading can be checked against the others.
+        await readHeaders(playlists, candidates)
         videos = await readVideos(contents)
         sniffed = await sniffFrames(contents)
         return
       }
-      // A ladder settles it. Without one, the picture is the answer for a single
-      // file or a single rendition, so wait for it — but only where something
-      // streamed: a dead source has no picture, and waiting on one would add
-      // the full wait to every dead source in the scan.
-      const ladder = playlists.some((p) => p.renditions.length > 0)
+      // A ladder settles it. Without one, a single rendition's own header is
+      // the answer, and failing that the picture — waited for only where
+      // something streamed: a dead source has no picture, and waiting on one
+      // would add the full wait to every dead source in the scan.
+      if (playlists.some((p) => p.renditions.length > 0)) return
+      await readHeaders(playlists, candidates)
+      if (declaredSizes(playlists, subject).length > 0) return
       const streamed = playlists.length > 0 || [...candidates.values()].some((c) => c.kind === 'whole-file')
-      if (!ladder && streamed) videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
+      if (streamed) videos = await waitForPicture(contents, SCAN_VIDEO_WAIT_MS)
     },
   })
 
   // The page may have gone before `inspect` ran: the watchdog, or a crash.
+  // Its segments are not chased then; the tokens may have gone with it.
   const read = playlists ?? (await readPlaylists(candidates))
 
   const wholeFiles = [...candidates.entries()]
@@ -390,7 +425,8 @@ export async function probeQuality(
     streamed: result.verdict === 'stream',
     playlists: read.map((p) => ({ status: p.status, ladder: { kind: p.kind, renditions: p.renditions } })),
     wholeFiles: wholeFiles.length,
-    video: video ? { rendition: { width: video.width, height: video.height }, runtime: trustInPicture(video, subject) } : null,
+    video: video ? { rendition: { width: video.width, height: video.height }, runtime: lengthVerdict(video.duration, subject.runtimeMinutes ?? null) } : null,
+    declared: declaredSizes(read, subject),
   })
 
   return {
@@ -424,30 +460,63 @@ async function readPlaylists(
     ...entries.filter(([, c]) => c.kind === 'playlist'),
     ...entries.filter(([, c]) => c.kind === 'maybe-playlist'),
   ].slice(0, MAX_PLAYLISTS)
-  const answers = await Promise.all(toRead.map(([url, c]) => refetch(url, c.headers)))
+  const answers = await Promise.all(toRead.map(([url, c]) => refetch(url, c.headers, MAX_BODY_BYTES)))
 
   const playlists: PlaylistReading[] = []
   for (const [index, [url, candidate]] of toRead.entries()) {
     const answer = answers[index]
     if (!answer) continue
-    const ladder = readLadder(answer.body)
+    const body = new TextDecoder().decode(answer.bytes)
+    const ladder = readLadder(body)
     if (candidate.kind === 'maybe-playlist' && ladder.kind === 'unknown') continue
-    playlists.push({ url, status: answer.status, kind: ladder.kind, renditions: ladder.renditions })
+    const reading: PlaylistReading = { url, status: answer.status, kind: ladder.kind, renditions: ladder.renditions }
+    if (ladder.kind === 'hls-media') {
+      const media = readMediaPlaylist(body)
+      reading.seconds = media.seconds
+      const header = streamHeaderOf(media, url)
+      if (header) reading.header = { ...header, status: null, size: null }
+    }
+    playlists.push(reading)
   }
   return playlists
 }
 
 /**
- * Whether the picture is the title, and so whether its size may be believed.
+ * Ask for each media playlist's header — its init segment, or the opening of
+ * its first segment — and read the size it declares.
  *
- * By its length against TMDB's runtime; and when TMDB gives none, by being at
- * least ten minutes long, which no ad or placeholder is and every episode is.
+ * With the headers the page sent for that request itself when it was seen —
+ * players fetch both before the picture starts — and otherwise with the
+ * playlist's, which the same player sent to the same host a moment earlier.
+ * Fills in each playlist's `header` in place.
  */
-function trustInPicture(video: VideoReading, subject: ProbeSubject): 'plausible' | 'implausible' | 'unknown' {
-  const verdict = checkRuntime({
-    deliveredSeconds: video.duration,
-    expectedMinutes: subject.runtimeMinutes ?? null,
-  }).verdict
-  if (verdict !== 'unknown') return verdict
-  return Number.isFinite(video.duration) && video.duration < 600 ? 'implausible' : 'unknown'
+async function readHeaders(
+  playlists: PlaylistReading[],
+  candidates: Map<string, { kind: Candidate; headers: Record<string, string> }>,
+): Promise<void> {
+  const pending = playlists.filter((p) => p.status === 200 && p.header && p.header.status === null)
+  await Promise.all(
+    pending.map(async (playlist) => {
+      const header = playlist.header!
+      const headers = { ...(candidates.get(header.url)?.headers ?? candidates.get(playlist.url)?.headers ?? {}) }
+      const { offset, length } = header.range
+      headers['Range'] = `bytes=${offset}-${offset + length - 1}`
+      const answer = await refetch(header.url, headers, HEADER_BYTES)
+      header.status = answer.status
+      const answered = answer.status === 200 || answer.status === 206
+      header.size = answered ? readStreamHeader(header.source, answer.bytes) : null
+      if (!header.size) header.lead = Buffer.from(answer.bytes.subarray(0, 12)).toString('hex')
+    }),
+  )
 }
+
+/**
+ * The sizes the streams' headers declared, from playlists whose length fits
+ * the title — an ad served as HLS declares its size just as plainly.
+ */
+function declaredSizes(playlists: PlaylistReading[], subject: ProbeSubject): Rendition[] {
+  return playlists
+    .filter((p) => p.header?.size && lengthVerdict(p.seconds ?? 0, subject.runtimeMinutes ?? null) !== 'implausible')
+    .map((p) => p.header!.size!)
+}
+
