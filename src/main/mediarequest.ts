@@ -37,13 +37,21 @@
  * MP4/WebM/MKV cases are the few that serve progressive files. `/segment` and
  * `/manifest` catch the extensionless proxy paths that name themselves.
  *
+ * Those two must be a whole path segment. Unanchored, they matched VidZee's
+ * intro-skip API (`…/introdb/segments?imdb_id=…`), which it calls on every
+ * title within a second of loading — so "Test all sources" reported VidZee
+ * streaming on four of five canaries where its only playlist had failed, and
+ * timed it at 0.8 s. The same looseness matched any page's web-app manifest
+ * (`/manifest.json`). A false green is the cheaper mistake, but not free: it
+ * puts a dead source at the top of the list.
+ *
  * MKV is here because ScreenScape serves whole films as `.mkv`
  * (`…/movies/1999/fightclub.mkv`). The desktop never needed the extension —
  * the response's `video/…` type caught it — but the phone's capture buffer
  * holds only URLs, so without it the phone's scan watched ScreenScape play and
  * reported that nothing had streamed.
  */
-export const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm|mkv)(\?|$)|\/segment|\/manifest/i
+export const MEDIA_PATTERN = /\.(m3u8|mpd|ts|m4s|mp4|webm|mkv)(\?|$)|\/(segment|manifest)(\/|\?|$)/i
 
 export const MEDIA_MIME = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|video\/|audio\/)/i
 

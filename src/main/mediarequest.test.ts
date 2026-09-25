@@ -19,6 +19,7 @@ describe('isMediaRequest from the URL alone', () => {
     ['a progressive MP4', 'https://cdn.example/films/title.mp4?expires=1'],
     ['a progressive MKV', 'https://s3.streamflixserver.site/movies/1999/fightclub.mkv'],
     ['a proxy path that names itself', 'https://proxy.example/v1/manifest?data=xyz'],
+    ['a segment proxy path', 'https://proxy.example/segment/000042'],
   ])('recognises %s', (_label, url) => {
     expect(isMediaRequest(url)).toBe(true)
   })
@@ -27,6 +28,10 @@ describe('isMediaRequest from the URL alone', () => {
     ['a provider API call', 'https://screenscape.me/api/eyJrIjoicm91dGUifQ'],
     ['an analytics beacon', 'https://www.googletagmanager.com/td?id=G-S9S669WDEX'],
     ['a script whose name merely contains an extension', 'https://cdn.example/mkv-player.js'],
+    // Called by VidZee on every title; it made the scan report a dead source as streaming.
+    ['an intro-skip API', 'https://core.vidzee.wtf/introdb/segments?imdb_id=tt4574334&season=4&episode=9'],
+    ['a web-app manifest', 'https://player.example/manifest.json'],
+    ['a site manifest', 'https://player.example/site.webmanifest'],
   ])('ignores %s', (_label, url) => {
     expect(isMediaRequest(url)).toBe(false)
   })
