@@ -173,6 +173,15 @@ the scan fetches the newest few captured requests with their original headers,
 a dozen at most per provider, and reads the content type and first line, which
 is how the cast feature already decides what it can hand a television.
 
+**Quality comes from the playlists, and only from them.** Once a provider
+streams, the scan reads its oldest few captured playlists the same way — the
+master comes first, and it is the only playlist that lists renditions with
+their sizes — and parses them with the desktop's own parser
+(`src/shared/streamquality.ts`). The desktop can also read the picture's size
+off the provider's `<video>`, which is the answer for a source serving one
+whole file; the phone cannot reach into a cross-origin frame, so those sources
+show no quality here.
+
 **The probe surface is visible because it has to be.** Several providers resolve
 no stream until something clicks, and a cross-origin iframe can only be clicked
 by a real touch at real coordinates — `ScanPlugin.tap` dispatches a
