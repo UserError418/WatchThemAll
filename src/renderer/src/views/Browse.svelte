@@ -46,7 +46,15 @@
 
   const { onselect }: Props = $props()
 
-  let plan = $state<ForYouRow[]>([])
+  /**
+   * `$state.raw`, not `$state`: each row is handed back to main over IPC to
+   * fetch its pages, and a deep `$state` wraps every row in a Proxy, which the
+   * structured clone behind `ipcRenderer.invoke` refuses — "An object could
+   * not be cloned", on every personal row, on the desktop only (the phone's
+   * bridge is a plain function call). The plan is replaced whole, never
+   * mutated, so it needs no deep reactivity anyway.
+   */
+  let plan = $state.raw<ForYouRow[]>([])
   let heroFallback = $state<MediaSummary | null>(null)
 
   $effect(() => {
@@ -64,28 +72,42 @@
   })
 
   /**
-   * Changes whenever the library does in a way the profile would notice.
+   * What the profile is built from, as one comparable string: every rating's
+   * scope and value, and which titles are watched or saved.
    *
-   * The collections are replaced, never mutated, on every write — so reading
-   * the references is enough to subscribe, and a rating changed from 7 to 9
-   * (same length, different contents) still registers.
+   * A string rather than the collections themselves, because the collections
+   * are replaced on writes that say nothing about taste — the score backfill
+   * rewrites watched entries on every launch — and anything keyed on their
+   * identity would fire for those too.
    */
-  const tasteVersion = $derived([library.ratings, library.watched, library.watchlist])
+  const tasteSignature = $derived(
+    [
+      library.ratings.map((r) => `${r.key}=${r.value}`).join(','),
+      library.watched.map((w) => w.id).join(','),
+      library.watchlist.map((w) => w.id).join(','),
+    ].join('|'),
+  )
 
   /**
-   * The plan is fetched on arrival and then left alone — rows that rearranged
-   * themselves whenever the user rated something would be a page that moves
-   * under the pointer. Two exceptions, both below.
+   * The plan and the rows are fetched on arrival and then left alone while the
+   * user is on the page.
+   *
+   * Main rebuilds the profile on every request, so the page is current each
+   * time Browse is opened. It is deliberately *not* refreshed in place: rows
+   * claim titles top-down (see `shown`), and a row near the top that reloads
+   * after the rows below it have loaded finds its titles already theirs.
+   * Measured — refreshing Top picks on every library write left it with seven
+   * cards of thirty. A page that re-sorts under the pointer is worse anyway.
+   *
+   * The one exception is a new user: an empty plan is asked for again each
+   * time the taste signature changes, because their first few ratings are
+   * exactly when the rows should appear.
    */
   let planned = false
   $effect(() => {
-    void tasteVersion
-    // A new user with nothing to go on gets an empty plan. Their first few
-    // ratings are exactly when the rows should appear, so an empty plan is
-    // re-asked on every change until it is not empty.
-    //
-    // `plan` is read untracked: this effect must re-run when the *library*
-    // changes, not when the plan it just fetched arrives — an empty plan would
+    void tasteSignature
+    // `plan` is read untracked: this must re-run when the *library* changes,
+    // not when the plan it just fetched arrives — an empty plan would
     // otherwise re-request itself forever.
     untrack(() => {
       if (planned && plan.length > 0) return
@@ -134,18 +156,7 @@
   <Top10Row title="Top 10 Series This Week" request={{ row: 'trending', page: 0 }} eager {onselect} />
 
   {#each plan as row, index (row.key)}
-    {#if row.kind === 'topPicks'}
-      <!--
-        The one row that follows the library live. Re-created when the taste
-        changes, so rating something from the detail view is reflected here
-        without reloading the page — the other rows keep their place.
-      -->
-      {#key tasteVersion}
-        <BrowseRow title={row.title} load={forYou(row)} hideOwned eager={index === 0} {onselect} />
-      {/key}
-    {:else}
-      <BrowseRow title={row.title} load={forYou(row)} hideOwned eager={index === 0} {onselect} />
-    {/if}
+    <BrowseRow title={row.title} load={forYou(row)} hideOwned hideWhenEmpty eager={index === 0} {onselect} />
   {/each}
 
   {#each charts as row (row.key)}

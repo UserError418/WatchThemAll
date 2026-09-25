@@ -11,7 +11,9 @@ import {
   shelfGenres,
   topPickSeeds,
   withExploration,
+  forYouPlan,
   EXPLORE_EVERY,
+  TOP_PICKS_PER_PAGE,
   type ForYouDeps,
 } from './foryou'
 import type { TasteStore } from './taste'
@@ -247,6 +249,33 @@ describe('planRows', () => {
   })
 })
 
+describe('forYouPlan', () => {
+  const genres = async () => [] as Array<{ id: number; name: string }>
+
+  it('passes over a favourite TMDB has nothing to recommend for', async () => {
+    // Enough fresh recommendations for every seed but title 1.
+    const plenty = (base: number) => Array.from({ length: 10 }, (_, i) => media(base + i))
+    const recs: Record<number, MediaSummary[]> = { 2: plenty(200), 3: plenty(300), 4: plenty(400), 5: plenty(500) }
+    const net = { ...deps(recs), genres }
+    for (let seed = 0; seed < 20; seed += 1) {
+      const plan = await forYouPlan(library(), seed, net, NOW)
+      const because = plan.rows.filter((r) => r.kind === 'because')
+      expect(because).toHaveLength(3)
+      expect(because.some((r) => r.kind === 'because' && r.seed.tmdbId === 1)).toBe(false)
+    }
+  })
+
+  it('still plans Top picks and Because rows when genre names fail to load', async () => {
+    const plenty = (base: number) => Array.from({ length: 10 }, (_, i) => media(base + i))
+    const recs = Object.fromEntries([1, 2, 3, 4, 5].map((id) => [id, plenty(id * 100)]))
+    const net = { ...deps(recs), genres: async () => { throw new Error('offline') } }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const plan = await forYouPlan(library(), 3, net, NOW)
+    spy.mockRestore()
+    expect(plan.rows.map((r) => r.kind)).toEqual(['topPicks', 'because', 'because', 'because'])
+  })
+})
+
 describe('isForYouRow', () => {
   it('refuses rows main could not have planned', () => {
     expect(isForYouRow({ kind: 'topPicks', key: 'k', title: 't' })).toBe(true)
@@ -279,6 +308,14 @@ describe('Top picks', () => {
     const recs = { 1: [media(100), media(101)], 6: [media(100)], 7: [media(100)] }
     const ids = (await buildRow(TOP, 1, profile, deps(recs))).items.map((m) => m.tmdbId)
     expect(ids.indexOf(101)).toBeLessThan(ids.indexOf(100) === -1 ? Infinity : ids.indexOf(100))
+  })
+
+  it('leaves the rest of the pool to the rows below it', async () => {
+    const profile = buildProfile(library(), NOW)
+    const many = Array.from({ length: 20 }, (_, i) => media(1000 + i))
+    const recs = { 1: many, 2: many.map((m) => media(m.tmdbId + 100)), 3: many.map((m) => media(m.tmdbId + 200)) }
+    const result = await buildRow(TOP, 1, profile, deps(recs))
+    expect(result.items).toHaveLength(TOP_PICKS_PER_PAGE)
   })
 
   it('ranks a candidate lower when a dislike also points at it, short of dropping it', async () => {

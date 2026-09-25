@@ -36,9 +36,18 @@
     hideOwned?: boolean
     /** Load on mount rather than waiting to be scrolled near. */
     eager?: boolean
+    /**
+     * Render nothing, rather than "Nothing here.", once loaded and empty.
+     *
+     * For the personal rows. Their heading is a claim — "Because you watched
+     * Liar Game" — and a claim over an empty track reads as broken, whereas a
+     * chart that is empty is honest information. A personal row can also be
+     * emptied by the rows above it claiming every title it had.
+     */
+    hideWhenEmpty?: boolean
   }
 
-  const { title, load, onselect, hideOwned = false, eager = false }: Props = $props()
+  const { title, load, onselect, hideOwned = false, eager = false, hideWhenEmpty = false }: Props = $props()
 
   /**
    * A title's identity within the row.
@@ -107,6 +116,7 @@
   }
 </script>
 
+{#if !(hideWhenEmpty && loaded && !loading && !error && visible.length === 0)}
 <RowShell
   {title}
   {loading}
@@ -130,3 +140,4 @@
     />
   {/each}
 </RowShell>
+{/if}

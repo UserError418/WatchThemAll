@@ -229,6 +229,16 @@ export function becauseSeeds(
   now = Date.now(),
   limit = BECAUSE_ROWS,
 ): TitleAffinity[] {
+  return becauseCandidates(profile, seed, now).slice(0, limit)
+}
+
+/**
+ * Every eligible "Because you…" seed, in the order this session would use them.
+ *
+ * `becauseSeeds` takes the head of this; `forYouPlan` walks further down it
+ * when a head seed turns out to have nothing TMDB can recommend.
+ */
+export function becauseCandidates(profile: Profile, seed: number, now = Date.now()): TitleAffinity[] {
   const pool = profile.titles
     .filter((t) => t.score > 0)
     .filter((t) => t.verdict !== null || investment(t.engagement) > 0)
@@ -252,20 +262,16 @@ export function becauseSeeds(
     order.push(remaining.splice(index, 1)[0]!.t)
   }
 
-  // Take them in that order, passing over any that repeats an already-chosen
-  // seed's genres — then, if that left the rows short, fill up from what was
-  // passed over. A narrow library is better served by two similar rows than
-  // by one.
+  // Then every draw that does not repeat an earlier draw's genres, followed by
+  // the ones that do — so the head of the list is as varied as the pool
+  // allows, and a narrow library still gets its rows, just similar ones.
   const redundant = (t: TitleAffinity, chosen: TitleAffinity[]): boolean =>
     chosen.some((c) => jaccard(c.genreIds, t.genreIds) >= MAX_SEED_OVERLAP)
-  const chosen: TitleAffinity[] = []
+  const distinct: TitleAffinity[] = []
   for (const t of order) {
-    if (chosen.length < limit && !redundant(t, chosen)) chosen.push(t)
+    if (!redundant(t, distinct)) distinct.push(t)
   }
-  for (const t of order) {
-    if (chosen.length < limit && !chosen.includes(t)) chosen.push(t)
-  }
-  return chosen
+  return [...distinct, ...order.filter((t) => !distinct.includes(t))]
 }
 
 /* ── Choosing genre shelves ──────────────────────────────────────────────── */
@@ -327,6 +333,7 @@ export function planRows(
   seed: number,
   genreName: (concept: number) => string | undefined,
   now = Date.now(),
+  because: readonly TitleAffinity[] = becauseSeeds(profile, seed, now),
 ): ForYouRow[] {
   const rows: ForYouRow[] = []
 
@@ -334,7 +341,7 @@ export function planRows(
     rows.push({ kind: 'topPicks', key: 'for-you:top', title: 'Top picks for you' })
   }
 
-  for (const t of becauseSeeds(profile, seed, now)) {
+  for (const t of because) {
     const name = profile.names.get(titleId(t.type, t.tmdbId))
     if (!name) continue
     rows.push({
@@ -501,6 +508,18 @@ const MAX_PAGES = { topPicks: 2, because: 3, genre: 6 } as const
 const EMPTY = (page: number): Paged<MediaSummary> => ({ items: [], page, totalPages: 0 })
 
 /**
+ * How many cards one page of Top picks shows.
+ *
+ * Six favourites' recommendations pool to a hundred candidates, and the first
+ * version showed them all. Every title belongs to the first row that shows it,
+ * so a hundred-card Top picks left the "Because you" rows below it with a
+ * handful each — measured: six cards under "Because you liked Hell's Paradise".
+ * Thirty is a screen and a half of the strongest; the rest are the Because
+ * rows' to show, with their reason attached.
+ */
+export const TOP_PICKS_PER_PAGE = 30
+
+/**
  * Candidates recommended by disliked titles, for the penalty term.
  *
  * Always page 1: it is a reference list consulted by every row, and the TMDB
@@ -566,7 +585,7 @@ async function topPicks(page: number, profile: Profile, deps: ForYouDeps): Promi
   )
   const more = pages.some((p) => p.totalPages > page)
   return {
-    items: withExploration(rank(candidates, penalties, profile)),
+    items: withExploration(rank(candidates, penalties, profile)).slice(0, TOP_PICKS_PER_PAGE),
     page,
     totalPages: more ? Math.min(MAX_PAGES.topPicks, page + 1) : page,
   }
@@ -801,7 +820,38 @@ export async function forYouPlan(
   } catch (err) {
     console.error('[for-you] genre names unavailable, planning without shelves:', err)
   }
-  return { rows: planRows(buildProfile(store, now), seed, namer, now) }
+  const profile = buildProfile(store, now)
+  const because = await viableBecauseSeeds(becauseCandidates(profile, seed, now), profile, net)
+  return { rows: planRows(profile, seed, namer, now, because) }
+}
+
+/**
+ * How many candidates to try for the "Because you" rows, and how many fresh
+ * recommendations a seed needs to be worth a row.
+ *
+ * Measured on the owner's library: "Because you watched Liar Game" rendered as a
+ * heading over nothing — TMDB has almost no recommendations for it. The first
+ * page is fetched here for the head of the list (the row would fetch exactly
+ * that page next, and the client caches it, so this costs nothing extra for
+ * the seeds kept), and a seed that cannot fill a row is passed over for the
+ * next one.
+ */
+const BECAUSE_TRIES = 6
+const BECAUSE_MIN_ITEMS = 8
+
+async function viableBecauseSeeds(
+  candidates: readonly TitleAffinity[],
+  profile: Profile,
+  net: ForYouDeps,
+): Promise<TitleAffinity[]> {
+  const tried = candidates.slice(0, BECAUSE_TRIES)
+  const pages = await Promise.all(tried.map((t) => net.recommendations(t.tmdbId, t.type, 1)))
+  return tried
+    .filter((_, i) => {
+      const fresh = pages[i]!.items.filter((m) => !profile.owned.has(titleId(m.type, m.tmdbId)))
+      return fresh.length >= BECAUSE_MIN_ITEMS
+    })
+    .slice(0, BECAUSE_ROWS)
 }
 
 /** One page of a planned row, or an empty page for a row main did not plan. */
