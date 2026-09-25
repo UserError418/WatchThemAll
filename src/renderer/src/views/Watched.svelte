@@ -423,6 +423,9 @@
                   form="compact"
                   season={group.seasons[0]!.entry.season}
                 />
+              {:else}
+                <!-- Holds the chip's column, so every row's ✕ lines up. -->
+                <span class="chip-slot" aria-hidden="true"></span>
               {/if}
 
               <button
@@ -859,8 +862,12 @@
 
   .meta {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-1);
+    /* Break between the phrases, never inside one: on a phone-width row
+       "2 seasons · avg 8.0" otherwise wrapped as "2 / seasons · / avg / 8.0". */
+    white-space: nowrap;
     font-size: var(--text-xs);
     color: var(--text-secondary);
   }
@@ -958,6 +965,11 @@
     .ribbon {
       display: none;
     }
+  }
+
+  /* The width of RatingStrip's compact chip, which it stands in for. */
+  .chip-slot {
+    width: 40px;
   }
 
   .drop {
