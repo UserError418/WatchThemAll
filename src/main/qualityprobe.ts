@@ -110,6 +110,14 @@ const MAX_BODY_BYTES = 512 * 1024
 /** How long one re-request may take. A ceiling against a host that never answers. */
 const REFETCH_TIMEOUT_MS = 10_000
 
+/**
+ * How long a stream header may take: at most 64 KB, so a host that has not
+ * answered in this long is not going to. Tighter than a playlist's, because the
+ * scan asks while the provider's page is still alive and streaming, and every
+ * second of that competes with the other probes still trying to start.
+ */
+const HEADER_TIMEOUT_MS = 5_000
+
 /** Per frame, when asking for its `<video>` elements. The script returns at once. */
 const FRAME_ANSWER_MS = 2_000
 
@@ -336,12 +344,13 @@ async function refetch(
   url: string,
   headers: Record<string, string>,
   limit: number,
+  timeoutMs = REFETCH_TIMEOUT_MS,
 ): Promise<{ status: number; bytes: Uint8Array }> {
   try {
     const response = await fetch(url, {
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(REFETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.body) return { status: response.status, bytes: new Uint8Array() }
 
@@ -501,7 +510,7 @@ async function readHeaders(
       const headers = { ...(candidates.get(header.url)?.headers ?? candidates.get(playlist.url)?.headers ?? {}) }
       const { offset, length } = header.range
       headers['Range'] = `bytes=${offset}-${offset + length - 1}`
-      const answer = await refetch(header.url, headers, HEADER_BYTES)
+      const answer = await refetch(header.url, headers, HEADER_BYTES, HEADER_TIMEOUT_MS)
       header.status = answer.status
       const answered = answer.status === 200 || answer.status === 206
       header.size = answered ? readStreamHeader(header.source, answer.bytes) : null
