@@ -84,7 +84,6 @@ export interface ExtractResult {
   error: string | null
 }
 
-/** Headers a re-request must not replay verbatim. */
 /**
  * How long to wait when asking for a URL ourselves, rather than watching the
  * page ask for it.
@@ -95,6 +94,7 @@ export interface ExtractResult {
  */
 const VERIFY_TIMEOUT_MS = 20_000
 
+/** Headers a re-request must not replay verbatim. */
 const HOP_BY_HOP = new Set([
   'host',
   'connection',
@@ -104,6 +104,22 @@ const HOP_BY_HOP = new Set([
   'sec-fetch-mode',
   'sec-fetch-site',
 ])
+
+/**
+ * The headers a page sent, minus the ones a second request must not copy.
+ *
+ * Shared with the quality probe, which asks for playlists again the same way:
+ * two copies of this list would drift, and a header wrongly replayed there
+ * reads as a sealed provider.
+ */
+export function replayableHeaders(headers: Record<string, string>): Record<string, string> {
+  const replayable: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (HOP_BY_HOP.has(name.toLowerCase())) continue
+    replayable[name] = value
+  }
+  return replayable
+}
 
 /**
  * Is this request the media?
@@ -163,12 +179,7 @@ async function capture(
       if (stream) return
       const kind = classify(url, 'media', mime)
       if (!kind) return
-      const replayable: Record<string, string> = {}
-      for (const [name, value] of Object.entries(headers)) {
-        if (HOP_BY_HOP.has(name.toLowerCase())) continue
-        replayable[name] = value
-      }
-      stream = { url, kind, headers: replayable, foundAtMs: Date.now() - started }
+      stream = { url, kind, headers: replayableHeaders(headers), foundAtMs: Date.now() - started }
     },
   })
 

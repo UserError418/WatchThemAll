@@ -22,7 +22,7 @@
  * @see scripts/probe-providers.mjs for the runner.
  */
 
-import { BrowserWindow, session } from 'electron'
+import { BrowserWindow, session, type WebContents } from 'electron'
 import type { Provider } from '@shared/types'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
 import { decide } from './adblock'
@@ -118,6 +118,36 @@ export interface ProbeOptions {
    * diff.
    */
   onMedia?: (media: { url: string; headers: Record<string, string>; mime: string }) => void
+  /**
+   * Called for every completed response, with the headers that fetched it.
+   *
+   * For the quality probe, which needs every playlist a player asks for rather
+   * than the first media request: a player fetches the master first and a
+   * variant after it, and some fetch a variant directly and never the master.
+   */
+  onResponse?: (response: ProbeResponse) => void
+  /**
+   * Keep watching this long after the first media request, instead of stopping
+   * at it. Zero, the default, is what the scan wants: the first manifest
+   * settles the verdict. The quality probe lingers, because the renditions and
+   * the decoded picture arrive after it.
+   */
+  lingerMs?: number
+  /**
+   * Look inside the page once watching is over, before the window is torn
+   * down. Must bound its own time: the page is hostile and still running.
+   */
+  inspect?: (contents: WebContents) => Promise<void>
+}
+
+/** One completed response, as `onResponse` sees it. */
+export interface ProbeResponse {
+  url: string
+  statusCode: number
+  resourceType: string
+  mime: string
+  /** What Chromium sent for it, `Cookie` included. Empty if the send was not seen. */
+  headers: Record<string, string>
 }
 
 /**
@@ -154,7 +184,7 @@ export async function probeStream(
   subject: ProbeSubject,
   options: ProbeOptions = {},
 ): Promise<StreamProbeResult> {
-  const { timeoutMs = 12_000, verbose = false, frameUrl, onMedia } = options
+  const { timeoutMs = 12_000, verbose = false, frameUrl, onMedia, onResponse, lingerMs = 0, inspect } = options
 
   /**
    * A watchdog the page cannot outlive.
@@ -171,10 +201,15 @@ export async function probeStream(
    * so far, which is usually enough to classify.
    */
   const partial: { current: StreamProbeResult | null } = { current: null }
-  const watchdogMs = timeoutMs * 2 + 8_000
+  const watchdogMs = (timeoutMs + lingerMs) * 2 + 8_000
 
   return Promise.race([
-    runProbe(provider, subject, { timeoutMs, verbose, frameUrl, onMedia }, partial),
+    runProbe(
+      provider,
+      subject,
+      { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect },
+      partial,
+    ),
     new Promise<StreamProbeResult>((resolve) =>
       setTimeout(() => {
         const result = partial.current
@@ -202,17 +237,19 @@ export async function probeStream(
   ])
 }
 
+/** The options that are callbacks, and so stay optional past the defaults. */
+type Hook = 'frameUrl' | 'onMedia' | 'onResponse' | 'inspect'
+
 async function runProbe(
   provider: Provider,
   subject: ProbeSubject,
-  // Defaults are resolved by the caller. `frameUrl` and `onMedia` stay optional
-  // because absence is a meaningful choice for both — "do not wrap this URL"
-  // and "nobody is listening" — rather than a value somebody forgot to pass.
-  options: Required<Omit<ProbeOptions, 'frameUrl' | 'onMedia'>> &
-    Pick<ProbeOptions, 'frameUrl' | 'onMedia'>,
+  // Defaults are resolved by the caller. The hooks stay optional because
+  // absence is a meaningful choice for each — "do not wrap this URL", "nobody
+  // is listening" — rather than a value somebody forgot to pass.
+  options: Required<Omit<ProbeOptions, Hook>> & Pick<ProbeOptions, Hook>,
   partial: { current: StreamProbeResult | null },
 ): Promise<StreamProbeResult> {
-  const { timeoutMs, verbose, frameUrl, onMedia } = options
+  const { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect } = options
 
   const base: StreamProbeResult = {
     providerId: provider.id,
@@ -323,7 +360,7 @@ async function runProbe(
   const sentHeaders = new Map<string, Record<string, string>>()
 
   probeSession.webRequest.onSendHeaders(filter, (details) => {
-    if (!onMedia) return
+    if (!onMedia && !onResponse) return
     const headers: Record<string, string> = {}
     for (const [name, value] of Object.entries(details.requestHeaders ?? {})) {
       headers[name] = String(value)
@@ -343,6 +380,14 @@ async function runProbe(
 
     const mime = String(details.responseHeaders?.['content-type'] ?? details.responseHeaders?.['Content-Type'] ?? '')
     const looksLikeMedia = isMediaRequest(details.url, details.resourceType, mime)
+
+    onResponse?.({
+      url: details.url,
+      statusCode: details.statusCode,
+      resourceType: details.resourceType,
+      mime,
+      headers: sentHeaders.get(details.url) ?? {},
+    })
 
     if (looksLikeMedia && details.statusCode < 400) {
       firstMediaAt ??= Date.now()
@@ -458,6 +503,9 @@ async function runProbe(
    * DOM click are needed lives there.
    */
   const press = (): void => {
+    // Once something streams, a click on the centre of the player pauses it.
+    // Only reachable while lingering; without a linger the watch ends first.
+    if (firstMediaAt !== null) return
     clickCentre(win.webContents, 1280, 720)
     void clickPlayInFrames(win.webContents)
   }
@@ -469,7 +517,8 @@ async function runProbe(
   await new Promise<void>((resolve) => {
     const deadline = startedAt + timeoutMs
     const tick = setInterval(() => {
-      if (firstMediaAt !== null || Date.now() > deadline || win.isDestroyed()) {
+      const settled = firstMediaAt !== null && Date.now() >= firstMediaAt + lingerMs
+      if (settled || Date.now() > deadline || win.isDestroyed()) {
         clearInterval(tick)
         resolve()
       }
@@ -496,6 +545,8 @@ async function runProbe(
 
   base.timeToMediaMs = firstMediaAt === null ? null : firstMediaAt - startedAt
   base.verdict = classify(base, title)
+
+  if (inspect && !win.isDestroyed()) await inspect(win.webContents).catch(() => {})
 
   /**
    * Destroy on the next tick, never inline.
