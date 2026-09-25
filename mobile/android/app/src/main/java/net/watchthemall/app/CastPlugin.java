@@ -1,6 +1,7 @@
 package net.watchthemall.app;
 
 import android.os.Handler;
+import android.util.Base64;
 import android.os.Looper;
 import android.util.Log;
 
@@ -27,7 +28,9 @@ import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -155,6 +158,11 @@ public class CastPlugin extends Plugin {
      * `Origin` — names a browser refuses to let a page set, whatever its CORS
      * situation. Capped, because a candidate may turn out to be a video file and
      * reading a feature-length one into a string would take the app out.
+     *
+     * With `encoding: "base64"` the body comes back as the raw bytes, base64
+     * encoded, for the scan's quality reading: an init segment or the head of a
+     * TS segment is binary, and decoding it as UTF-8 would replace every byte
+     * that is not valid text — which is most of them — before JavaScript saw it.
      */
     @PluginMethod
     public void fetchText(PluginCall call) {
@@ -165,6 +173,7 @@ public class CastPlugin extends Plugin {
         }
         JSObject headers = call.getObject("headers", new JSObject());
         int limit = call.getInt("limitBytes", 4 * 1024 * 1024);
+        boolean binary = "base64".equals(call.getString("encoding", "text"));
 
         HttpURLConnection connection = null;
         try {
@@ -181,33 +190,56 @@ public class CastPlugin extends Plugin {
             }
 
             int status = connection.getResponseCode();
-            StringBuilder body = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(
-                    status >= 400 ? connection.getErrorStream() : connection.getInputStream(),
-                    StandardCharsets.UTF_8
-                )
-            )) {
-                char[] buffer = new char[8192];
-                int read;
-                while ((read = reader.read(buffer)) != -1 && body.length() < limit) {
-                    body.append(buffer, 0, read);
-                }
-            } catch (Exception ignored) {
-                // A body we cannot read is reported through `status` below; the
-                // caller decides whether that disqualifies the candidate.
-            }
+            InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            String body = binary ? readBase64(stream, limit) : readText(stream, limit);
 
             JSObject result = new JSObject();
             result.put("status", status);
             result.put("contentType", connection.getContentType() != null ? connection.getContentType() : "");
-            result.put("body", body.toString());
+            result.put("body", body);
             call.resolve(result);
         } catch (Exception error) {
             call.reject("fetch failed: " + error.getMessage());
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    /**
+     * Up to `limit` characters of a response, as UTF-8 text.
+     *
+     * A body we cannot read comes back empty; the status is reported beside it
+     * and the caller decides whether that disqualifies the candidate.
+     */
+    private static String readText(InputStream stream, int limit) {
+        StringBuilder body = new StringBuilder();
+        if (stream == null) return "";
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            char[] buffer = new char[8192];
+            int read;
+            while ((read = reader.read(buffer)) != -1 && body.length() < limit) {
+                body.append(buffer, 0, read);
+            }
+        } catch (Exception ignored) {
+            // Whatever was read before the failure is still returned.
+        }
+        return body.toString();
+    }
+
+    /** Up to `limit` bytes of a response, base64 encoded; empty when unreadable. */
+    private static String readBase64(InputStream stream, int limit) {
+        if (stream == null) return "";
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (InputStream in = stream) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while (bytes.size() < limit && (read = in.read(buffer, 0, Math.min(buffer.length, limit - bytes.size()))) != -1) {
+                bytes.write(buffer, 0, read);
+            }
+        } catch (Exception ignored) {
+            // Whatever was read before the failure is still returned.
+        }
+        return Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP);
     }
 
     /* ── The proxy ──────────────────────────────────────────────────────── */

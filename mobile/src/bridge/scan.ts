@@ -62,7 +62,9 @@ import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequ
 import { renderTemplate } from '@main/providers'
 import type { PlayRequest } from '@shared/ipc'
 import { capture, type Candidate } from './cast'
-import { bestQuality, readLadder } from '@shared/streamquality'
+import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
+import { readStreamHeader, streamHeaderOf } from '@shared/streamheader'
+import { lengthVerdict } from '@main/runtimecheck'
 
 interface ScanNative {
   /** A real touch at a point in the WebView. See `ScanPlugin`. */
@@ -439,8 +441,9 @@ async function probeOne(
  * The phone's counterpart of the desktop's `probeQuality` scan reading, with
  * one reading fewer: it cannot reach into the provider's frame to ask the
  * `<video>` its size, so a source serving one whole file stays unknown here.
- * The parser is the desktop's, from `shared/`, so a playlist reads the same on
- * both.
+ * A single rendition without a master is read from its own header instead —
+ * see `readDeclaredSizes`. The parsers and the judgement are the desktop's,
+ * from `shared/`, so a stream reads the same on both.
  */
 async function readQuality(candidates: Candidate[], bodies: Map<string, string>): Promise<number | null> {
   const playlists = candidates
@@ -456,6 +459,40 @@ async function readQuality(candidates: Candidate[], bodies: Map<string, string>)
       return response && (response.status === 200 || response.status === 206) ? response.body : ''
     }),
   )
-  const offered = read.map((body) => bestQuality(readLadder(body))).filter((q): q is number => q !== null)
-  return offered.length > 0 ? Math.max(...offered) : null
+  const ladders = read.map((body) => readLadder(body))
+  // A ladder settles it; only without one is a header worth a fetch.
+  const laddered = ladders.some((ladder) => bestQuality(ladder) !== null)
+  const declared = laddered ? [] : await readDeclaredSizes(playlists, read)
+  return judgeQuality({
+    streamed: true,
+    playlists: ladders.map((ladder, i) => ({ status: read[i] ? 200 : 0, ladder })),
+    wholeFiles: 0,
+    video: null,
+    declared,
+  }).best
+}
+
+/**
+ * The sizes the media playlists' own streams declare, from their headers.
+ *
+ * Only from playlists at least as long as a title: the scan has no runtime to
+ * check against (see `lengthVerdict`), and an ad served as its own playlist
+ * states its size just as plainly. The header is fetched with the playlist's
+ * request headers — the same player asked the same host a moment earlier.
+ */
+async function readDeclaredSizes(playlists: Candidate[], bodies: string[]): Promise<Rendition[]> {
+  const sizes = await Promise.all(
+    playlists.map(async (candidate, i) => {
+      const body = bodies[i] ?? ''
+      if (readLadder(body).kind !== 'hls-media') return null
+      const media = readMediaPlaylist(body)
+      if (lengthVerdict(media.seconds, null) === 'implausible') return null
+      const header = streamHeaderOf(media, candidate.url)
+      if (!header) return null
+      const answer = await capture.peekBytes(header.url, candidate, header.range).catch(() => null)
+      if (!answer || (answer.status !== 200 && answer.status !== 206)) return null
+      return readStreamHeader(header.source, answer.bytes)
+    }),
+  )
+  return sizes.filter((size): size is Rendition => size !== null)
 }
