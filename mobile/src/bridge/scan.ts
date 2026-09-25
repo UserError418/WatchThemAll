@@ -62,6 +62,7 @@ import { isMediaRequest, isMediaResponse } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import type { PlayRequest } from '@shared/ipc'
 import { capture, type Candidate } from './cast'
+import { bestQuality, readLadder } from '@shared/streamquality'
 
 interface ScanNative {
   /** A real touch at a point in the WebView. See `ScanPlugin`. */
@@ -118,6 +119,19 @@ const TAP_AT_MS = [1_500, 5_000, 9_000]
  */
 const PEEKS_PER_POLL = 2
 const PEEKS_PER_PROVIDER = 12
+
+/**
+ * How many playlists to read for quality once a stream is found.
+ *
+ * Oldest first, because a player fetches its master before anything else and
+ * the master is the only playlist that names sizes. Four covers a master, a
+ * variant and an audio playlist or two; each is one small fetch on a scan that
+ * already takes fifteen seconds per provider.
+ */
+const QUALITY_PEEKS = 4
+
+/** A playlist by its URL, which is all the capture buffer holds. */
+const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)/i
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
 
@@ -227,6 +241,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       const verdicts: Record<string, ProbeVerdict> = {}
       /** Milliseconds to the first recognised media, for streaming providers only. */
       const timings: Record<string, number> = {}
+      /** Best quality class offered, for streaming providers whose playlists say. */
+      const qualities: Record<string, number> = {}
       const total = providers.length
 
       const publish = (provider: Provider | null, finished: boolean): void => {
@@ -238,6 +254,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           total,
           verdicts: { ...verdicts },
           timings: { ...timings },
+          qualities: { ...qualities },
           // Always false here. The re-check exists to undo starvation caused by
           // probing several providers at once, and this side cannot do that —
           // one capture buffer means one provider at a time, so nothing it
@@ -270,6 +287,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           const measured = await probeOne(surface, url)
           verdicts[provider.id] = measured.verdict
           if (measured.ms !== null) timings[provider.id] = measured.ms
+          if (measured.quality !== null) qualities[provider.id] = measured.quality
           publish(provider, false)
 
           // Blank and settle *between* providers, so the next one starts
@@ -283,7 +301,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         if (token === mine) running = false
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings, qualities }
       publish(null, true)
       return scan
     },
@@ -299,7 +317,11 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
  * once a player is streaming its latest requests are playlists and segments
  * rather than the page's own API calls.
  */
-async function peekForMedia(candidates: Candidate[], peeked: Set<string>): Promise<boolean> {
+async function peekForMedia(
+  candidates: Candidate[],
+  peeked: Set<string>,
+  bodies: Map<string, string>,
+): Promise<boolean> {
   const fresh = candidates
     .filter((candidate) => !peeked.has(candidate.url))
     .sort((a, b) => b.atMs - a.atMs)
@@ -310,6 +332,7 @@ async function peekForMedia(candidates: Candidate[], peeked: Set<string>): Promi
     try {
       const response = await capture.peek(candidate)
       const ok = response.status === 200 || response.status === 206
+      if (ok) bodies.set(candidate.url, response.body)
       if (ok && isMediaResponse(response.contentType, response.body)) return true
     } catch {
       // Expired, unreachable or refused. The next candidate may still answer.
@@ -337,7 +360,7 @@ async function peekForMedia(candidates: Candidate[], peeked: Set<string>): Promi
 async function probeOne(
   surface: ReturnType<typeof createProbeSurface>,
   url: string,
-): Promise<{ verdict: ProbeVerdict; ms: number | null }> {
+): Promise<{ verdict: ProbeVerdict; ms: number | null; quality: number | null }> {
   await capture.clear()
   surface.load(url)
 
@@ -345,6 +368,8 @@ async function probeOne(
   let tapped = 0
   let sawAnything = false
   const peeked = new Set<string>()
+  /** Bodies already fetched while deciding what a candidate was; reused for quality. */
+  const bodies = new Map<string, string>()
 
   while (Date.now() - startedAt < PROBE_MS) {
     await sleep(POLL_MS)
@@ -365,9 +390,40 @@ async function probeOne(
     // request directly, so the two platforms' figures are close, not equal.
     const streaming =
       candidates.some((candidate) => isMediaRequest(candidate.url)) ||
-      (await peekForMedia(candidates, peeked))
-    if (streaming) return { verdict: 'stream', ms: Date.now() - startedAt }
+      (await peekForMedia(candidates, peeked, bodies))
+    if (streaming) {
+      // Timed before the quality read, which is ours and not the provider's.
+      const ms = Date.now() - startedAt
+      return { verdict: 'stream', ms, quality: await readQuality(candidates, bodies) }
+    }
   }
 
-  return { verdict: sawAnything ? 'unsure' : 'dead', ms: null }
+  return { verdict: sawAnything ? 'unsure' : 'dead', ms: null, quality: null }
+}
+
+/**
+ * The best quality the captured playlists name, or null when none does.
+ *
+ * The phone's counterpart of the desktop's `probeQuality` scan reading, with
+ * one reading fewer: it cannot reach into the provider's frame to ask the
+ * `<video>` its size, so a source serving one whole file stays unknown here.
+ * The parser is the desktop's, from `shared/`, so a playlist reads the same on
+ * both.
+ */
+async function readQuality(candidates: Candidate[], bodies: Map<string, string>): Promise<number | null> {
+  const playlists = candidates
+    .filter((candidate) => PLAYLIST_URL.test(candidate.url) || bodies.has(candidate.url))
+    .sort((a, b) => a.atMs - b.atMs)
+    .slice(0, QUALITY_PEEKS)
+
+  const read = await Promise.all(
+    playlists.map(async (candidate) => {
+      const known = bodies.get(candidate.url)
+      if (known !== undefined) return known
+      const response = await capture.peek(candidate).catch(() => null)
+      return response && (response.status === 200 || response.status === 206) ? response.body : ''
+    }),
+  )
+  const offered = read.map((body) => bestQuality(readLadder(body))).filter((q): q is number => q !== null)
+  return offered.length > 0 ? Math.max(...offered) : null
 }

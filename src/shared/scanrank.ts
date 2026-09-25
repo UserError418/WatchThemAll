@@ -24,6 +24,7 @@
  */
 
 import type { ProbeVerdict, TitleOutcome } from './ipc'
+import type { SourceSortKey } from './types'
 
 /**
  * Where one provider sits in the fallback order, lowest first.
@@ -172,4 +173,34 @@ export function formatStreamTime(ms: number): string {
   // Rounded before the threshold test, or 9.96 s would print as "10.0 s".
   const tenths = Math.round(Math.max(ms, 100) / 100) / 10
   return tenths < 10 ? `${tenths.toFixed(1)} s` : `${Math.round(tenths)} s`
+}
+
+/**
+ * A quality class as a label: "1080p".
+ *
+ * Players' own menus say "1080p", so a user can hold this against the menu of
+ * the source they picked and see that it agrees.
+ */
+export function formatQuality(quality: number): string {
+  return `${quality}p`
+}
+
+/** Every key a source order can hold, in the default priority. See `Settings.sourceOrder`. */
+export const SOURCE_SORT_KEYS: readonly SourceSortKey[] = ['list', 'speed', 'quality']
+
+/**
+ * A stored source order, made safe to sort by: known keys only, each once,
+ * and any missing ones appended in default order.
+ *
+ * It decides what Automatic plays, so it cannot be allowed to be partial. A
+ * document edited by hand, or written by a newer version that knows a key this
+ * one does not, must still produce a complete order rather than a crash or a
+ * provider that is never tried.
+ */
+export function normalizeSourceOrder(value: unknown): SourceSortKey[] {
+  const known = new Set<string>(SOURCE_SORT_KEYS)
+  const chosen = Array.isArray(value)
+    ? value.filter((key): key is SourceSortKey => typeof key === 'string' && known.has(key))
+    : []
+  return [...new Set([...chosen, ...SOURCE_SORT_KEYS])]
 }

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatStreamTime, inScanOrder } from './scanrank'
+import { formatStreamTime, inScanOrder, normalizeSourceOrder } from './scanrank'
 
 const rows = (...ids: string[]): Array<{ id: string }> => ids.map((id) => ({ id }))
 const ids = (items: Array<{ id: string }>): string[] => items.map((item) => item.id)
@@ -64,5 +64,25 @@ describe('formatStreamTime', () => {
   it('never claims a measured stream took no time', () => {
     expect(formatStreamTime(0)).toBe('0.1 s')
     expect(formatStreamTime(20)).toBe('0.1 s')
+  })
+})
+
+describe('normalizeSourceOrder', () => {
+  it('keeps a valid order as it is', () => {
+    expect(normalizeSourceOrder(['speed', 'quality', 'list'])).toEqual(['speed', 'quality', 'list'])
+  })
+
+  it('completes a partial order in the default priority', () => {
+    expect(normalizeSourceOrder(['quality'])).toEqual(['quality', 'list', 'speed'])
+  })
+
+  it('drops keys it does not know and keeps each known key once', () => {
+    // A newer version's key, a typo, a duplicate: none may leave a gap.
+    expect(normalizeSourceOrder(['bitrate', 'speed', 'speed', 3])).toEqual(['speed', 'list', 'quality'])
+  })
+
+  it('falls back to the default for anything that is not a list', () => {
+    expect(normalizeSourceOrder(undefined)).toEqual(['list', 'speed', 'quality'])
+    expect(normalizeSourceOrder('speed')).toEqual(['list', 'speed', 'quality'])
   })
 })

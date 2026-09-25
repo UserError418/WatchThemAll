@@ -579,12 +579,13 @@ function enabledProviders(): Provider[] {
  * that were measured dead a minute ago.
  */
 function orderedForRequest(req: TitleRef): Provider[] {
-  const { streamOutcomes, favouriteProviderIds, providerScans } = store.read()
+  const { streamOutcomes, favouriteProviderIds, providerScans, settings } = store.read()
   const key = titleKey(req)
   return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
     scan: freshScan(providerScans, key),
+    sourceOrder: settings.sourceOrder,
   })
 }
 

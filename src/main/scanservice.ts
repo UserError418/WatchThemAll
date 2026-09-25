@@ -59,7 +59,8 @@
 
 import type { Provider } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
-import { probeStream, type ProbeSubject, type StreamVerdict } from './streamprobe'
+import type { ProbeSubject, StreamVerdict } from './streamprobe'
+import { probeQuality } from './qualityprobe'
 import { providerRank } from '@shared/scanrank'
 
 /**
@@ -88,6 +89,13 @@ const VERDICT: Record<StreamVerdict, ProbeVerdict> = {
   empty: 'dead',
   unreachable: 'dead',
   'no-template': 'dead',
+}
+
+/** What one probe of one provider settles. */
+interface Measured {
+  verdict: ProbeVerdict
+  ms: number | null
+  quality: number | null
 }
 
 export interface ScanServiceOptions {
@@ -175,6 +183,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const verdicts: Record<string, ProbeVerdict> = {}
       /** Milliseconds to the first media request, kept for streaming providers only. */
       const timings: Record<string, number> = {}
+      /** Best quality class offered, for streaming providers whose stream says. */
+      const qualities: Record<string, number> = {}
       const total = providers.length
 
       let confirming = false
@@ -187,6 +197,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           total,
           verdicts: { ...verdicts },
           timings: { ...timings },
+          qualities: { ...qualities },
           confirming,
           finished,
           cancelled: finished && token !== mine,
@@ -194,24 +205,39 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       }
 
       /**
-       * One measurement: the verdict, and how long the stream took to appear.
+       * One measurement: the verdict, how long the stream took to appear, and
+       * the best quality it offers.
        *
        * The time is the probe's own `timeToMediaMs` — from the start of the
        * load to the first media request — which is the moment the source
        * stopped being a page and started being a stream. Measured under the
        * fan-out's contention, so it is fair between providers of one scan
        * rather than a figure for a quiet line.
+       *
+       * The quality is `probeQuality`'s scan reading, which stops where the
+       * probe always stopped; see `QualityMode` for why it must not linger.
        */
-      const probe = async (provider: Provider): Promise<{ verdict: ProbeVerdict; ms: number | null }> => {
-        const result = await probeStream(provider, subject, { timeoutMs, frameUrl: options.frameUrl })
+      const probe = async (provider: Provider): Promise<Measured> => {
+        const result = await probeQuality(provider, subject, {
+          mode: 'scan',
+          timeoutMs,
+          frameUrl: options.frameUrl,
+        })
         const verdict = VERDICT[result.verdict]
-        return { verdict, ms: verdict === 'stream' ? result.timeToMediaMs : null }
+        const streamed = verdict === 'stream'
+        return {
+          verdict,
+          ms: streamed ? result.timeToMediaMs : null,
+          quality: streamed ? result.judgement.best : null,
+        }
       }
 
-      const settle = (provider: Provider, measured: { verdict: ProbeVerdict; ms: number | null }): void => {
+      const settle = (provider: Provider, measured: Measured): void => {
         verdicts[provider.id] = measured.verdict
         if (measured.ms !== null) timings[provider.id] = measured.ms
         else delete timings[provider.id]
+        if (measured.quality !== null) qualities[provider.id] = measured.quality
+        else delete qualities[provider.id]
       }
 
       publish(providers[0] ?? null, false)
@@ -272,7 +298,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       }
       confirming = false
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings, qualities }
       if (token === mine) running = false
       publish(null, true)
       return scan

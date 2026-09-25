@@ -40,6 +40,8 @@ class ProviderScanState {
   verdicts = $state<Record<string, ProbeVerdict>>({})
   /** Milliseconds to the first media request, for each provider that streamed. */
   timings = $state<Record<string, number>>({})
+  /** Best quality class offered, for each provider whose stream says. */
+  qualities = $state<Record<string, number>>({})
 
   running = $state(false)
   done = $state(0)
@@ -63,6 +65,7 @@ class ProviderScanState {
     window.wta.on.providerScan((progress: ProviderScanProgress) => {
       this.verdicts = progress.verdicts
       this.timings = progress.timings
+      this.qualities = progress.qualities
       this.done = progress.done
       this.total = progress.total
       this.current = progress.providerName
@@ -89,6 +92,7 @@ class ProviderScanState {
     this.subject = media
     this.verdicts = {}
     this.timings = {}
+    this.qualities = {}
     this.done = 0
     this.cancelled = false
     this.running = true
@@ -114,6 +118,7 @@ class ProviderScanState {
     this.subject = null
     this.verdicts = {}
     this.timings = {}
+    this.qualities = {}
     this.done = 0
     this.total = 0
     this.current = null

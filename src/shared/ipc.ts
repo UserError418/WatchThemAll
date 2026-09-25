@@ -410,6 +410,8 @@ export interface ProviderScanProgress {
   verdicts: Record<string, ProbeVerdict>
   /** Milliseconds to the first media request, for each provider that streamed. See `ProviderScan.timings`. */
   timings: Record<string, number>
+  /** Best quality class offered, for each streaming provider whose stream says. See `ProviderScan.qualities`. */
+  qualities: Record<string, number>
   /**
    * The scan is re-checking a provider that looked dead.
    *

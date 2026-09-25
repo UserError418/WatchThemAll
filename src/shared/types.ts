@@ -618,7 +618,22 @@ export interface ProviderScan {
    * without timings is still a scan.
    */
   timings?: Record<string, number>
+  /**
+   * The best quality each streaming provider offers, as a class — 1080 for
+   * 1080p, whatever the exact pixel size. Only where the stream says so; see
+   * `streamquality.ts`. Absent for a provider means unknown, not low.
+   */
+  qualities?: Record<string, number>
 }
+
+/**
+ * What can decide between two sources that are equally likely to work.
+ *
+ * - `speed` — how fast the stream started in the last test
+ * - `quality` — the best quality the stream offers
+ * - `list` — the user's own: favourites first, then the provider order
+ */
+export type SourceSortKey = 'speed' | 'quality' | 'list'
 
 export interface Settings {
   /** Poll interval for release checks, in minutes. */
@@ -656,6 +671,13 @@ export interface Settings {
    * does is either local or already visible to TMDB.
    */
   skipIntro: boolean
+  /**
+   * How sources are ordered within each group — works, may work, does not
+   * work — for the source lists and for Automatic alike. Every key, once, in
+   * priority order. `list` orders completely, so anything after it never gets
+   * a say; it is always there so the order is never left to chance.
+   */
+  sourceOrder: SourceSortKey[]
 }
 
 /** Re-exported so callers can type a patch without reaching into `store/`. */

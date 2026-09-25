@@ -509,3 +509,36 @@ describe('stored provider scans', () => {
     expect(scan?.timings).toEqual({})
   })
 })
+
+describe('the source order setting', () => {
+  it('defaults to the user list first, which changes nothing for an existing install', () => {
+    expect(migrate({ ...emptyStore(), settings: { skipIntro: false } }).settings.sourceOrder).toEqual([
+      'list',
+      'speed',
+      'quality',
+    ])
+  })
+
+  it('repairs a stored order rather than trusting it', () => {
+    const doc = migrate({ ...emptyStore(), settings: { sourceOrder: ['speed', 'nonsense'] } })
+    expect(doc.settings.sourceOrder).toEqual(['speed', 'list', 'quality'])
+  })
+})
+
+describe('stored scan qualities', () => {
+  const scanned = (scan: Record<string, unknown>) =>
+    migrate({ ...emptyStore(), providerScans: [{ titleKey: 'movie:tt1', at: 1_000, ...scan }] })
+      .providerScans[0]
+
+  it('keeps a quality class beside a streaming verdict', () => {
+    expect(scanned({ verdicts: { a: 'stream' }, qualities: { a: 1080 } })?.qualities).toEqual({ a: 1080 })
+  })
+
+  it('drops a quality that is not a class a label can show, or sits beside no stream', () => {
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'stream', c: 'dead' },
+      qualities: { a: 800, b: '1080', c: 1080 },
+    })
+    expect(scan?.qualities).toEqual({})
+  })
+})
