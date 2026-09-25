@@ -449,7 +449,7 @@ export class StoreCore {
    * expensive in a way an ordinary toggle is not.
    */
   async replaceDocument(next: StoreDocument): Promise<void> {
-    this.doc = next
+    this.doc = keepTombstones(this.doc, next)
     this.invalidate()
     this.notify()
     await this.flush()
@@ -507,6 +507,37 @@ export class StoreCore {
 }
 
 /** The document with every tombstone filtered out of every collection. */
+/**
+ * `next`, plus every deletion in `current` that `next` does not mention.
+ *
+ * Both importers — the MyAnimeList one and the export-file one, on desktop and
+ * phone — build their replacement from `read()`, which hides tombstones, and
+ * hand it to `replaceDocument`. Replacing the document with that wiped every
+ * deletion this device had not yet synced, and the next sync then revived the
+ * deleted records from the other device's copy: the exact hazard `raw()`
+ * warns about, reached through the one method that takes a whole document.
+ *
+ * Fixed here rather than at the four call sites because this is the boundary
+ * all of them cross, and the next importer would build its document the same
+ * way. A sync merge already holds every local tombstone, so for it this adds
+ * nothing. A record that `next` holds under the same identity — live or not —
+ * is left as `next` has it, so an import that re-adds a deleted title wins.
+ */
+function keepTombstones(current: StoreDocument, next: StoreDocument): StoreDocument {
+  const kept = { ...next }
+  for (const key of COLLECTION_KEYS) {
+    const incoming = (next[key] ?? []) as Synced<unknown>[]
+    const present = new Set(incoming.map((r) => identify(key, r as never)))
+    const deletions = (current[key] as Synced<unknown>[]).filter(
+      (r) => r.deletedAt !== null && !present.has(identify(key, r as never)),
+    )
+    if (deletions.length > 0) {
+      ;(kept as Record<string, unknown>)[key] = [...incoming, ...deletions]
+    }
+  }
+  return kept
+}
+
 /** The sync metadata, which says when a record changed rather than what it is. */
 const METADATA_FIELDS = new Set(['updatedAt', 'deletedAt'])
 

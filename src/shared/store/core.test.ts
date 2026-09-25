@@ -34,7 +34,7 @@ async function storeWith(document: Record<string, unknown>): Promise<StoreCore> 
 const outcome = (providerId: string, at: number) => ({
   providerId,
   mediaKey: 'tv:1',
-  outcome: 'stream',
+  outcome: 'stream' as const,
   at,
   updatedAt: at,
   deletedAt: null,
@@ -88,5 +88,41 @@ describe('applyPatch / replaceAll', () => {
     const back = store.raw().streamOutcomes[0]
     expect(back?.deletedAt).toBeNull()
     expect(back?.updatedAt).toBeGreaterThan(150)
+  })
+})
+
+describe('replaceDocument', () => {
+  // Recent, because `load` prunes tombstones past their TTL and a 1970 one
+  // would be gone before the test began.
+  const deletedAt = Date.now() - 1_000
+
+  /**
+   * Both importers build their replacement from `read()`, which hides
+   * tombstones. Taking that document as-is wiped every deletion not yet
+   * synced, and the next sync revived the deleted records from the other
+   * device.
+   */
+  it('keeps a pending deletion the new document does not mention', async () => {
+    const store = await storeWith({
+      streamOutcomes: [outcome('a', 100), { ...outcome('b', 200), deletedAt, updatedAt: deletedAt }],
+    })
+
+    await store.replaceDocument(store.read())
+
+    const gone = store.raw().streamOutcomes.find((r) => r.providerId === 'b')
+    expect(gone?.deletedAt).toBe(deletedAt)
+    expect(store.read().streamOutcomes.map((r) => r.providerId)).toEqual(['a'])
+  })
+
+  /** An import that brings a deleted title back must win over its tombstone. */
+  it('lets the new document re-add a record that was deleted', async () => {
+    const store = await storeWith({
+      streamOutcomes: [{ ...outcome('b', 200), deletedAt, updatedAt: deletedAt }],
+    })
+    const readded = outcome('b', Date.now())
+
+    await store.replaceDocument({ ...store.read(), streamOutcomes: [readded] })
+
+    expect(store.raw().streamOutcomes).toEqual([readded])
   })
 })
