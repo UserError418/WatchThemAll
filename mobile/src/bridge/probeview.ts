@@ -12,10 +12,10 @@
  * ## Shape
  *
  * `openProbe` returns a session. `poll()` hands back the requests made since
- * the previous poll, so a caller loops on it the way `scan.ts` loops on
- * `capture.list()` — except that nothing in the answer came from anyone
- * else, so there is no clearing, blanking or settling to do. `close()` ends
- * it and frees its WebView; always call it, in a `finally`.
+ * the previous poll, so a caller loops on it. Nothing in the answer came from
+ * anyone else — unlike the app's shared capture buffer (`cast.ts`), which the
+ * scan read until 1.9.2 — so there is no clearing, blanking or settling to
+ * do. `close()` ends it and frees its WebView; always call it, in a `finally`.
  *
  * Every session presses play by itself (see `probescript.ts`) and is always
  * silent. `tap()` is the fallback for a player that ignores a scripted click.

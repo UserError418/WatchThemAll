@@ -103,16 +103,11 @@ const Cast = registerPlugin<CastNative>('Cast')
  * the native interface. Two `registerPlugin` calls would work and would be two
  * copies of a contract with Java to keep in step.
  *
- * **It is one buffer with no frame attribution**, which is what forces the scan
- * to be sequential and to stop playback while it runs. See `scan.ts`.
+ * The buffer itself is not here: **it is one buffer with no frame
+ * attribution**, which kept the scan to one provider at a time for as long as
+ * it read it.
  */
 export const capture = {
-  async list(): Promise<Candidate[]> {
-    return (await Cast.candidates()).candidates
-  },
-  clear(): Promise<void> {
-    return Cast.clearCandidates()
-  },
   /**
    * Fetch the start of one captured request, replaying its headers.
    *
