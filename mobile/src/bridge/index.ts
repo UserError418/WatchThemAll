@@ -74,7 +74,15 @@ import {
   titleKey,
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
-import { freshScan, pruneScans, recordScan, scanAwareOrder, scanEpisode } from '@main/providerscan'
+import {
+  freshScan,
+  pruneScans,
+  recordScan,
+  resumeFirst,
+  scanAwareOrder,
+  scanEpisode,
+  type AutomaticOrder,
+} from '@main/providerscan'
 import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
@@ -982,18 +990,23 @@ export async function createBridge(): Promise<WtaApi> {
    * degrades to exactly that function when nothing has been scanned, and folds
    * in the measurement when something has. Both apps must rank identically —
    * the source picker's dots are drawn from the same ranking, and the renderer
-   * that draws them is shared.
+   * that draws them is shared. The same goes for `resumeFirst` after it.
    */
-  const orderedForRequest = (req: TitleRef): Provider[] => {
+  const automaticOrderFor = (req: TitleRef): AutomaticOrder => {
     const { streamOutcomes, favouriteProviderIds, providerScans, settings } = store.read()
     const key = titleKey(req)
-    return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
+    const outcomes = outcomesForTitle(streamOutcomes, key)
+    const scan = freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))
+    const ordered = scanAwareOrder(enabledProviders(), outcomes, {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
-      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
+      scan,
       sourceOrder: settings.sourceOrder,
     })
+    // Then back to the source this title was last watched on — see `resumeFirst`.
+    return resumeFirst(ordered, lastWorkingForTitle(streamOutcomes, key), outcomes, scan)
   }
+  const orderedForRequest = (req: TitleRef): Provider[] => automaticOrderFor(req).providers
 
   /**
    * Everything a source picker draws for one title, including the order.
@@ -1006,11 +1019,12 @@ export async function createBridge(): Promise<WtaApi> {
   const providerStateFor = (media: TitleRef): TitleProviderState => {
     const { streamOutcomes, providerScans } = store.read()
     const key = titleKey(media)
+    const automatic = automaticOrderFor(media)
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
-      lastUsed: lastWorkingForTitle(streamOutcomes, key),
+      resume: automatic.resume,
       scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
-      order: orderedForRequest(media).map((provider) => provider.id),
+      order: automatic.providers.map((provider) => provider.id),
     }
   }
 

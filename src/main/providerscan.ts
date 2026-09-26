@@ -52,7 +52,7 @@
  */
 
 import type { Provider, SourceSortKey } from '@shared/types'
-import type { ProbeVerdict, ProviderScan, TitleOutcome } from '@shared/ipc'
+import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -354,6 +354,66 @@ export function scanAwareOrder(
   return [...tiers.entries()]
     .sort(([a], [b]) => a - b)
     .flatMap(([, tier]) => orderWithin(tier, sourceOrder, measured))
+}
+
+/** Automatic's order for one title, and the source it resumes on, if any. */
+export interface AutomaticOrder {
+  providers: Provider[]
+  /** Null when there is nothing to resume on, or it is no longer green. */
+  resume: ResumeSource | null
+}
+
+/**
+ * Start where the user left off: the source this title last streamed on goes
+ * first, as long as it is still green.
+ *
+ * The owner's call, 2026-09-26. The ordering rules decide the *first* visit
+ * well, but they are a guess about sources in general, and once the user has
+ * watched a title on the second or third source in that order, the guess has
+ * been answered for this title. Starting from the top again on every return
+ * means a slow or broken first choice every time, followed by a switch the
+ * user already made once.
+ *
+ * Not the "last used" boost `outcomes.ts` records removing. That one was a
+ * weight among others, applied everywhere, and could beat a favourite for
+ * reasons the user could not see. This moves exactly one source — the one
+ * both pickers label "resume", so the list says what happens — and only for
+ * the title it streamed. Favourites still decide every title not yet watched.
+ *
+ * "Still green" is `providerRank` 0 or 1: measured streaming, or streamed with
+ * no newer test saying otherwise. A source a later test found dead or
+ * unsure is not resumed on; the ordinary order stands, with it in its tier.
+ */
+export function resumeFirst(
+  ordered: Provider[],
+  resumeId: string | null,
+  titleOutcomes: Record<string, TitleOutcome>,
+  scan: ProviderScan | null,
+): AutomaticOrder {
+  const at = ordered.findIndex((p) => p.id === resumeId)
+  // Absent means disabled on this device, and a disabled source is never tried.
+  if (at < 0 || !isResumable(resumeId, titleOutcomes, scan)) return { providers: ordered, resume: null }
+  const source = ordered[at] as Provider
+  if (at === 0) return { providers: ordered, resume: { providerId: source.id, movedFrom: null } }
+  return {
+    providers: [source, ...ordered.slice(0, at), ...ordered.slice(at + 1)],
+    resume: { providerId: source.id, movedFrom: at },
+  }
+}
+
+/**
+ * Whether Automatic may start on this source: green in both pickers.
+ *
+ * Exported because the pickers' blue "resume" marker makes the same promise
+ * and must not make it about a source Automatic will not start on.
+ */
+export function isResumable(
+  providerId: string | null,
+  titleOutcomes: Record<string, TitleOutcome>,
+  scan: ProviderScan | null,
+): boolean {
+  if (providerId === null) return false
+  return providerRank(titleOutcomes[providerId], scan?.verdicts[providerId]) <= 1
 }
 
 /** Order one tier by the chain of keys, each breaking only the ties of the last. */

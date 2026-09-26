@@ -35,8 +35,8 @@ import { buildPlayUrl } from './providers'
 import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
-import { lastPlayedAt, lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
-import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
+import { lastPlayedAt, outcomesForTitle, titleKey } from './outcomes'
+import { freshScan, pruneScans, recordScan, scanEpisode, type AutomaticOrder } from './providerscan'
 import { airedEpisode, notOutYet } from '@shared/aired'
 import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
@@ -92,13 +92,14 @@ export interface IpcDeps {
    */
   sync: SyncService | null
   /**
-   * The enabled providers in the order Automatic tries them for this title.
+   * The enabled providers in the order Automatic tries them for this title,
+   * and where the resume source was moved from.
    *
    * Takes a title rather than a whole play request because the ordering only
    * ever depended on which title it is — and the source pickers need the same
    * order for a title nobody has pressed play on yet.
    */
-  orderProviders: (media: TitleRef) => Provider[]
+  automaticOrder: (media: TitleRef) => AutomaticOrder
   /** Move the inline player's video to the rectangle the renderer reserved. */
   setPlayerBounds: (bounds: PlayerBounds) => void
   /** Stop playing and put the app's chrome back. */
@@ -203,13 +204,14 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.providersOutcomes, (_e, media: TitleRef): TitleProviderState => {
     const { streamOutcomes, providerScans } = store.read()
     const key = titleKey(media)
+    // From the same store read a moment later, by the function Automatic
+    // itself calls — so the rows and the fallback chain cannot disagree.
+    const automatic = deps.automaticOrder(media)
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
-      lastUsed: lastWorkingForTitle(streamOutcomes, key),
+      resume: automatic.resume,
       scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
-      // From the same store read a moment later, by the function Automatic
-      // itself calls — so the rows and the fallback chain cannot disagree.
-      order: deps.orderProviders(media).map((provider) => provider.id),
+      order: automatic.providers.map((provider) => provider.id),
     }
   })
 
@@ -354,7 +356,7 @@ export function registerIpc(deps: IpcDeps): void {
      * never be reached by the fallback chain. Better to fail with a reason the
      * user can act on.
      */
-    const enabled = deps.orderProviders(req)
+    const enabled = deps.automaticOrder(req).providers
 
     if (enabled.length === 0) {
       return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }

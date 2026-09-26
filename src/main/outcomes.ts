@@ -22,6 +22,11 @@
  * favourite setting being broken. A rule the user can state themselves beats a
  * better rule they cannot, because they are the one who has to trust it.
  *
+ * One rule of that kind came back on 2026-09-26, in a form the user can state:
+ * a title resumes on the source it was last watched on, while that source is
+ * still green. `resumeFirst` in `providerscan.ts` has the reasoning; the
+ * pickers label the source "resume" and say where it moved up from.
+ *
  * The record shape is deliberately the shape a shared service would accept:
  * `{ providerId, mediaKey, outcome, at }` and nothing user-identifying. That is
  * the point of the design — one day these get pooled across users, so that a

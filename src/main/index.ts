@@ -34,12 +34,20 @@ import type { Provider, ProviderCatalog } from '@shared/types'
 import {
   defaultProviderOrder,
   lastPlayedAt,
+  lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
   record,
   titleKey,
 } from './outcomes'
-import { freshScan, pruneScans, recordScan, scanAwareOrder } from './providerscan'
+import {
+  freshScan,
+  pruneScans,
+  recordScan,
+  resumeFirst,
+  scanAwareOrder,
+  type AutomaticOrder,
+} from './providerscan'
 import { createScanService } from './scanservice'
 import { createWatchlistTester } from './watchlisttester'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from './resume'
@@ -646,23 +654,29 @@ function enabledProviders(): Provider[] {
  *
  * Every rule is the user's own — their drag order, narrowed to sources known to
  * have played this title, with favourites in front — plus whatever a recent
- * scan measured. The reasoning is in `scanAwareOrder`, which degrades to
- * exactly `automaticOrder` when nothing has been scanned.
+ * scan measured, and then the source the title was last watched on moved to
+ * the front while it is still green. The reasoning is in `scanAwareOrder`,
+ * which degrades to exactly `automaticOrder` when nothing has been scanned,
+ * and in `resumeFirst`.
  *
  * This is the half of the scan feature the user never sees. The dots tell them
  * which source to pick; this makes the *automatic* choice and every mid-episode
  * fallback use the same measurement, so "Automatic" stops walking into sources
  * that were measured dead a minute ago.
  */
-function orderedForRequest(req: TitleRef): Provider[] {
+function automaticOrderFor(req: TitleRef): AutomaticOrder {
   const { streamOutcomes, favouriteProviderIds, providerScans, settings } = store.read()
   const key = titleKey(req)
-  return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
+  const outcomes = outcomesForTitle(streamOutcomes, key)
+  const scan = freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))
+  const ordered = scanAwareOrder(enabledProviders(), outcomes, {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
-    scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
+    scan,
     sourceOrder: settings.sourceOrder,
   })
+  // Then back to the source this title was last watched on — see `resumeFirst`.
+  return resumeFirst(ordered, lastWorkingForTitle(streamOutcomes, key), outcomes, scan)
 }
 
 /**
@@ -884,7 +898,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       },
       checkReleases,
       allProviders,
-      orderProviders: orderedForRequest,
+      automaticOrder: automaticOrderFor,
       scan,
     })
 

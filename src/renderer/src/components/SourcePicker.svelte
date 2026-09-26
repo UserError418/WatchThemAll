@@ -24,19 +24,23 @@
    *   - red — tried or measured, and it produced no stream
    *   - amber — reachable, but nothing streamed while testing. Worth a try
    *   - green — it has actually played, or was just measured streaming
-   *   - blue — the source this title was last streamed on, labelled "resume"
+   *   - blue — the source this title was last streamed on, labelled "resume",
+   *     which Automatic starts on (see `resumeFirst`)
    *
    * Blue outranks green because it is the more specific claim: every blue
-   * source is also a green one, and "this is where you were" is what the user
-   * is looking for when they open this list mid-series. Everything below blue
+   * source is also a green one — a resume source that stops being green stops
+   * being blue — and "this is where you were" is what the user is looking for
+   * when they open this list mid-series. Everything below blue
    * is decided by `providerDot`, which is derived from `providerRank` — the
    * same function that orders Automatic's fallback chain.
    *
    * ## The order of the rows
    *
-   * Automatic's own order, sent by main with the dots (`state.order`): working
-   * sources at the top, "may work" in the middle, dead ones at the bottom, and
-   * within each group the user's favourites and then their provider order. So
+   * Automatic's own order, sent by main with the dots (`state.order`): the
+   * resume source first, when there is one, marked with where it would
+   * otherwise stand; then working sources, "may work" in the middle, dead ones
+   * at the bottom, and within each group the user's favourites and then their
+   * provider order. So
    * the list reads top to bottom in the order the app will actually try.
    *
    * The rows do not move while a test is running. The order is re-read when it
@@ -63,7 +67,7 @@
    */
   import { flip } from 'svelte/animate'
   import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
   import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
@@ -96,7 +100,7 @@
   let open = $state(false)
   let sourceState = $state<TitleProviderState>({
     outcomes: {},
-    lastUsed: null,
+    resume: null,
     scan: null,
     order: [],
   })
@@ -194,7 +198,7 @@
     selected ? (enabled.find((p) => p.id === selected)?.name ?? 'Automatic') : 'Automatic',
   )
 
-  const RESUME_TITLE = 'The source this title was last streamed on'
+  const resumeText = $derived(sourceState.resume ? resumeNote(sourceState.resume) : null)
 
   /** This document has the token sheet, so tones resolve to custom properties. */
   const TONE: Record<'good' | 'warn' | 'bad', string> = {
@@ -324,7 +328,7 @@
       </div>
 
       {#each rows as provider (provider.id)}
-        {@const resume = provider.id === sourceState.lastUsed}
+        {@const resume = provider.id === sourceState.resume?.providerId}
         {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
         {@const test = scanning ? scan.inFlight(provider.id) : undefined}
         {@const time = measurement(provider.id)}
@@ -340,7 +344,7 @@
             keeping the space reserved is what stops the names jumping around.
           -->
           {#if resume}
-            <span class="dot" style:background="var(--resume)" title={RESUME_TITLE}></span>
+            <span class="dot" style:background="var(--resume)" title={resumeText?.hint}></span>
           {:else if dot.tone}
             <span class="dot" style:background={TONE[dot.tone]} title={dot.hint}></span>
           {:else}
@@ -348,7 +352,7 @@
           {/if}
           <span class="name">{provider.name}</span>
           {#if resume}
-            <span class="hint resume">resume{time}</span>
+            <span class="hint resume" title={resumeText?.hint}>{resumeText?.label}{time}</span>
           {:else if test}
             <!-- Every source under test right now — several at once — so the
                  list shows the scan working through it, not only a counter. -->

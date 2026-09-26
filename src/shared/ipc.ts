@@ -544,9 +544,23 @@ export interface WatchlistTestStatus {
 }
 
 /**
+ * The source Automatic resumes a title on — see `resumeFirst`.
+ *
+ * The one this title last streamed on, and only while it is still green.
+ */
+export interface ResumeSource {
+  providerId: string
+  /**
+   * Its 0-based place in the ordinary order before it was moved to the front,
+   * for the "was 3rd" beside it. Null when it was first anyway.
+   */
+  movedFrom: number | null
+}
+
+/**
  * Everything the source pickers need to draw one title's provider list.
  *
- * `lastUsed` travels with the outcomes rather than in its own round trip
+ * `resume` travels with the outcomes rather than in its own round trip
  * because it is derived from the same log, at the same moment: fetched
  * separately, the dots and the "resume" marker could describe two different
  * instants and disagree about which source is the current one.
@@ -554,12 +568,12 @@ export interface WatchlistTestStatus {
 export interface TitleProviderState {
   /** Keyed by provider id. Absent means never tried for this title. */
   outcomes: Record<string, TitleOutcome>
-  /** The provider that most recently *streamed* this title, if any. */
-  lastUsed: string | null
+  /** Where Automatic starts for this title, when it resumes; null otherwise. */
+  resume: ResumeSource | null
   /**
    * The most recent scan of this title, if one is recent enough to believe.
    *
-   * Travels with the outcomes for the same reason `lastUsed` does: the dots are
+   * Travels with the outcomes for the same reason `resume` does: the dots are
    * drawn from both, and fetching them separately would let the two describe
    * different instants. Null when the title has never been tested. Results
    * older than `RESULT_TTL_MS`, and red or amber ones overtaken by a real play,

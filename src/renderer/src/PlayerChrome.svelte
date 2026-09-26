@@ -25,7 +25,7 @@
   CastDevice,
   CastStatus,
 } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote } from '@shared/scanrank'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
   import { clock } from './lib/format'
@@ -182,7 +182,7 @@
    */
   let sourceState = $state<TitleProviderState>({
     outcomes: {},
-    lastUsed: null,
+    resume: null,
     scan: null,
     order: [],
   })
@@ -550,7 +550,7 @@
   }
   /** `--resume` from the app's tokens; this document has no stylesheet to read. */
   const RESUME_COLOUR = '#5b9dfa'
-  const RESUME_TITLE = 'The source this title was last streamed on'
+  const resumeText = $derived(sourceState.resume ? resumeNote(sourceState.resume) : null)
 
   /**
    * Re-read on every open, never cached.
@@ -572,7 +572,7 @@
       .catch(() => {
         // No record is a fair answer: every dot is simply blank, which is what
         // "never tried" looks like anyway.
-        sourceState = { outcomes: {}, lastUsed: null, scan: null, order: [] }
+        sourceState = { outcomes: {}, resume: null, scan: null, order: [] }
       })
   }
 
@@ -1233,7 +1233,7 @@
           <div class="sources-divider"></div>
         </div>
         {#each sourceRows as provider (provider.id)}
-          {@const resume = provider.id === sourceState.lastUsed}
+          {@const resume = provider.id === sourceState.resume?.providerId}
           {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
           {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
           {@const time = measurement(provider.id)}
@@ -1251,7 +1251,7 @@
               one; reserving the space is what keeps the names from shifting.
             -->
             {#if resume}
-              <span class="dot" style:background={RESUME_COLOUR} title={RESUME_TITLE}></span>
+              <span class="dot" style:background={RESUME_COLOUR} title={resumeText?.hint}></span>
             {:else if dot.tone}
               <span class="dot" style:background={TONE[dot.tone]} title={dot.hint}></span>
             {:else}
@@ -1261,7 +1261,7 @@
             {#if provider.id === context?.providerId}
               <span class="tag">Playing{time}</span>
             {:else if resume}
-              <span class="tag resume">resume{time}</span>
+              <span class="tag resume" title={resumeText?.hint}>{resumeText?.label}{time}</span>
             {:else if test}
               <span class="tag">{test.recheck ? 'testing again…' : 'testing…'}</span>
             {:else if dot.label}

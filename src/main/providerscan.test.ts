@@ -19,6 +19,7 @@ import {
   providerRank,
   pruneScans,
   recordScan,
+  resumeFirst,
   scanAwareOrder,
   scanEpisode,
   scanProgress,
@@ -395,5 +396,63 @@ describe('scanProgress', () => {
 
   it('reports nothing done for a scan that has not started', () => {
     expect(scanProgress({}, 4)).toEqual({ done: 0, total: 4, working: 0 })
+  })
+})
+
+describe('resumeFirst', () => {
+  const ordered = ['a', 'b', 'c', 'd'].map(provider)
+  const ids = (list: Provider[]): string[] => list.map((p) => p.id)
+
+  it('starts on the source the title was last watched on, and says where it was', () => {
+    // The case this exists for: the ordering puts A first, the user watched on
+    // C, and coming back should not mean waiting on A again.
+    const result = resumeFirst(ordered, 'c', { c: 'worked' }, null)
+    expect(ids(result.providers)).toEqual(['c', 'a', 'b', 'd'])
+    expect(result.resume).toEqual({ providerId: 'c', movedFrom: 2 })
+  })
+
+  it('keeps the fallback chain in its order behind the resume source', () => {
+    // If the resume source fails tonight, Automatic carries on exactly as it
+    // would have without it.
+    expect(ids(resumeFirst(ordered, 'd', { d: 'worked' }, null).providers)).toEqual(['d', 'a', 'b', 'c'])
+  })
+
+  it('reports no move when the resume source was first anyway', () => {
+    const result = resumeFirst(ordered, 'a', { a: 'worked' }, null)
+    expect(ids(result.providers)).toEqual(['a', 'b', 'c', 'd'])
+    expect(result.resume).toEqual({ providerId: 'a', movedFrom: null })
+  })
+
+  it('counts a source measured streaming as green even without a play on record', () => {
+    // Played, then a newer test the play has not overruled: the test decides.
+    const result = resumeFirst(ordered, 'b', { b: 'worked' }, scanOf({ b: 'stream' }))
+    expect(result.resume).toEqual({ providerId: 'b', movedFrom: 1 })
+  })
+
+  it('does not resume on a source a newer test found dead', () => {
+    const result = resumeFirst(ordered, 'c', { c: 'worked' }, scanOf({ c: 'dead' }))
+    expect(ids(result.providers)).toEqual(['a', 'b', 'c', 'd'])
+    expect(result.resume).toBeNull()
+  })
+
+  it('still resumes on a source that played and then merely timed out in a test', () => {
+    // Green by `providerRank`: having played this title beats one test that
+    // ran out of time, and the dot the user sees is green too. "Resume while
+    // green" means exactly what the dot says.
+    expect(resumeFirst(ordered, 'c', { c: 'worked' }, scanOf({ c: 'unsure' })).resume).toEqual({
+      providerId: 'c',
+      movedFrom: 2,
+    })
+  })
+
+  it('does nothing for a resume source disabled on this device', () => {
+    // A disabled source must never be tried, resumed on or not.
+    const result = resumeFirst(ordered, 'gone', { gone: 'worked' }, null)
+    expect(ids(result.providers)).toEqual(['a', 'b', 'c', 'd'])
+    expect(result.resume).toBeNull()
+  })
+
+  it('does nothing for a title never watched', () => {
+    expect(resumeFirst(ordered, null, {}, null)).toEqual({ providers: ordered, resume: null })
   })
 })

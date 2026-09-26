@@ -23,7 +23,7 @@
  * derived from the ordering rather than decided beside it.
  */
 
-import type { ProbeVerdict, TitleOutcome } from './ipc'
+import type { ProbeVerdict, ResumeSource, TitleOutcome } from './ipc'
 import type { ScanReason, SourceSortKey } from './types'
 import { describeReason } from './scanreason'
 
@@ -151,6 +151,32 @@ export function providerDot(
     default:
       return UNKNOWN
   }
+}
+
+/**
+ * The words beside the resume source, in both pickers.
+ *
+ * When it was moved up, the label says from where: the list is Automatic's
+ * order, so a source jumping to the top after one evening's viewing would
+ * otherwise look like the ordering had changed its mind about it. "was 3rd"
+ * says the ordering stands and this title is the exception.
+ */
+export function resumeNote(resume: ResumeSource): { label: string; hint: string } {
+  if (resume.movedFrom === null) {
+    return { label: 'resume', hint: 'Automatic starts here: this title was last streamed on it' }
+  }
+  const was = ordinal(resume.movedFrom + 1)
+  return {
+    label: `resume · was ${was}`,
+    hint: `Automatic starts here, because this title was last streamed on it. Otherwise it would be ${was} in line`,
+  }
+}
+
+/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st. */
+export function ordinal(n: number): string {
+  const teens = n % 100 >= 11 && n % 100 <= 13
+  const suffix = teens ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'
+  return `${n}${suffix}`
 }
 
 /**
