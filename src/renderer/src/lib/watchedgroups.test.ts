@@ -7,6 +7,7 @@ import {
   groupWatched,
   leaning,
   ribbon,
+  seasonsToGo,
   summarise,
   summaryLabel,
 } from './watchedgroups'
@@ -335,5 +336,30 @@ describe('ribbon', () => {
     const strip = ribbon(groups[0]!, 3)
     expect(strip.segments.map((s) => s.label)).toEqual(['Season 6', 'Season 7', 'Season 8'])
     expect(strip.hidden).toBe(5)
+  })
+
+  it('draws aired seasons that are not watched as hollow, where they fall', () => {
+    const groups = groupWatched([entry({ season: 1 }), entry({ season: 3 })], ratings({ '1396:3': 8 }))
+    const strip = ribbon(groups[0]!, undefined, 5)
+    expect(strip.segments.map((s) => [s.label, s.rating, s.pending ?? false])).toEqual([
+      ['Season 1', null, false],
+      ['Season 2 · not watched', null, true],
+      ['Season 3', 8, false],
+      ['Season 4 · not watched', null, true],
+      ['Season 5 · not watched', null, true],
+    ])
+    expect(seasonsToGo(groups[0]!, 5)).toBe(3)
+  })
+
+  it('invents no gaps for an import from MyAnimeList, which numbers seasons its own way', () => {
+    const groups = groupWatched([entry({ season: 6, source: 'mal' })], none)
+    expect(ribbon(groups[0]!, undefined, 2).segments).toHaveLength(1)
+    expect(seasonsToGo(groups[0]!, 2)).toBe(0)
+  })
+
+  it('invents no gaps while TMDB has not said how many seasons aired', () => {
+    const groups = groupWatched([entry({ season: 2 })], none)
+    expect(ribbon(groups[0]!).segments).toHaveLength(1)
+    expect(seasonsToGo(groups[0]!, null)).toBe(0)
   })
 })

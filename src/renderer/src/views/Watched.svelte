@@ -20,10 +20,17 @@
    * the library. So the records stay per-season and the *view* folds them:
    * one row per title, expandable to its seasons.
    *
-   * Deliberately no large artwork here, unlike the Watchlist. That tab is a
-   * dashboard of things in flight and holds nineteen entries; this one is an
-   * archive an order of magnitude bigger, where every pixel of poster is a row
-   * that does not fit on screen.
+   * ## Wide covers, and what fills the middle
+   *
+   * This used to be deliberately bare — a 40px poster — on the grounds that an
+   * archive this size should fit as many rows on screen as possible. In use it
+   * was the wrong trade: a thumbnail that small is not recognisable, so every
+   * row had to be read, and a two-thousand-pixel window drew a thousand pixels
+   * of nothing in the middle of each one. The owner's call, 2026-09-26: rows
+   * carry the title's wide artwork, and the middle carries what the row is
+   * about — for a series, the season ribbon with the aired seasons not yet
+   * watched drawn hollow; for a film, its synopsis. Those facts are not on the
+   * watched records; `titlefacts.svelte.ts` fetches them as rows scroll in.
    *
    * The folding, the band counts, the means and the sort live in
    * `watchedgroups.ts` with their tests. This file is layout.
@@ -31,13 +38,20 @@
   import type { MediaSummary, RatingValue, WatchedEntry } from '@shared/types'
   import type { RatingBand } from '@shared/rating'
   import { library } from '../lib/library.svelte'
-  import { posterUrl } from '../lib/images'
+  import { backdropUrl, posterUrl } from '../lib/images'
+  import { titleFacts, whenVisible } from '../lib/titlefacts.svelte'
+  import type { TitleFacts } from '../lib/titlefacts'
+  import { runtime } from '../lib/format'
+  import PageHeader from '../components/PageHeader.svelte'
+  import FilterField from '../components/FilterField.svelte'
   import {
     bandOf,
     deepest,
     groupWatched,
     leaning,
+    RIBBON_LIMIT,
     ribbon,
+    seasonsToGo,
     summarise,
     summaryLabel,
     WATCHED_SORTS,
@@ -162,6 +176,36 @@
     { id: 'disliked', label: 'Disliked', range: '1–5' },
   ]
 
+  /** "2016 · Drama, Mystery · 2h 35m" — the line that places a title. */
+  function factsLine(group: TitleGroup, facts: TitleFacts | null): string {
+    if (facts === null) return ''
+    const parts = [facts.year, facts.genres.join(', ')]
+    if (group.type === 'movie' && facts.runtime) parts.push(runtime(facts.runtime))
+    return parts.filter(Boolean).join(' · ')
+  }
+
+  /** "Ended", "Returning", "Cancelled" — only the states worth a chip. */
+  function statusWord(facts: TitleFacts | null): string | null {
+    switch (facts?.status) {
+      case 'Ended':
+        return 'Ended'
+      case 'Canceled':
+        return 'Cancelled'
+      case 'Returning Series':
+        return 'Returning'
+      default:
+        return null
+    }
+  }
+
+  /** Under the ribbon: where the user is with the series. */
+  function ribbonCaption(group: TitleGroup, facts: TitleFacts | null): string {
+    const toGo = seasonsToGo(group, facts?.airedSeasons ?? null)
+    const watched = group.seasons.length
+    if (toGo > 0) return `${watched} of ${watched + toGo} seasons · ${toGo} to go`
+    return watched === 1 ? '1 season' : `All ${watched} seasons`
+  }
+
   /** A band tile and a meter segment are the same filter, and toggle back to All. */
   function toggleFilter(band: Filter): void {
     filter = filter === band ? 'all' : band
@@ -169,39 +213,26 @@
 </script>
 
 <div class="watched">
-  <header>
-    <div class="title">
-      <h1>Watched</h1>
-      <span class="count">{totals.titles} titles · {totals.seasons} seasons</span>
+  <PageHeader title="Watched" count="{totals.titles} titles · {totals.seasons} seasons">
+    <FilterField bind:value={query} label="Filter watched titles" />
+    <div class="filters">
+      {#each FILTERS as f (f.id)}
+        <button class:active={filter === f.id} onclick={() => (filter = f.id)}>
+          {f.label}
+          {#if f.range}<span class="range">{f.range}</span>{/if}
+          {#if f.id === 'unrated' && unratedCount > 0}<span class="badge">{unratedCount}</span>{/if}
+        </button>
+      {/each}
     </div>
-
-    <div class="tools">
-      <input
-        bind:value={query}
-        type="search"
-        placeholder="Filter by title…"
-        aria-label="Filter watched titles"
-      />
-      <div class="filters">
-        {#each FILTERS as f (f.id)}
-          <button class:active={filter === f.id} onclick={() => (filter = f.id)}>
-            {f.label}
-            {#if f.range}<span class="range">{f.range}</span>{/if}
-            {#if f.id === 'unrated' && unratedCount > 0}<span class="badge">{unratedCount}</span
-              >{/if}
-          </button>
+    <label class="sort">
+      <span class="sr">Sort by</span>
+      <select bind:value={sort}>
+        {#each WATCHED_SORTS as option (option.id)}
+          <option value={option.id}>{option.label}</option>
         {/each}
-      </div>
-      <label class="sort">
-        <span class="sr">Sort by</span>
-        <select bind:value={sort}>
-          {#each WATCHED_SORTS as option (option.id)}
-            <option value={option.id}>{option.label}</option>
-          {/each}
-        </select>
-      </label>
-    </div>
-  </header>
+      </select>
+    </label>
+  </PageHeader>
 
   {#if library.watched.length === 0}
     <p class="empty">
@@ -252,7 +283,15 @@
         <span class="label">unrated</span>
       </button>
       {#if top}
-        <button class="stat act deep" onclick={() => onselect(asMedia(top.seasons[0]!.entry))}>
+        {@const topFacts = titleFacts.get(top.type, top.tmdbId)}
+        <button
+          class="stat act deep"
+          onclick={() => onselect(asMedia(top.seasons[0]!.entry))}
+          use:whenVisible={() => titleFacts.want(top.type, top.tmdbId)}
+        >
+          {#if topFacts?.backdropPath}
+            <img class="deep-art" src={backdropUrl(topFacts.backdropPath, 'w780')} alt="" decoding="async" />
+          {/if}
           <span class="figure small">{top.title}</span>
           <span class="label">{top.seasons.length} seasons — your deepest</span>
         </button>
@@ -324,7 +363,14 @@
         {#each groups as group, index (group.key)}
           {@const open = isOpen(group)}
           {@const lean = leaning(group)}
-          <li class="group" class:open in:fly={stagger(index, 14, 10)}>
+          {@const facts = titleFacts.get(group.type, group.tmdbId)}
+          {@const status = statusWord(facts)}
+          <li
+            class="group"
+            class:open
+            in:fly={stagger(index, 14, 10)}
+            use:whenVisible={() => titleFacts.want(group.type, group.tmdbId)}
+          >
             <div
               class="row"
               class:liked={lean === 'liked'}
@@ -345,27 +391,60 @@
               {/if}
 
               <button class="ident" onclick={() => onselect(asMedia(group.seasons[0]!.entry))}>
-                {#if posterUrl(group.posterPath, 'w154')}
-                  <img
-                    class="thumb"
-                    src={posterUrl(group.posterPath, 'w154')}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    width="40"
-                    height="60"
-                  />
-                {:else}
-                  <span class="thumb blank" aria-hidden="true">{group.title.slice(0, 1)}</span>
-                {/if}
+                <!--
+                  The wide artwork once it is known, and until then — or for a
+                  title TMDB has none for — the poster, contained over a blurred
+                  copy of itself so the box is the same shape either way and
+                  nothing jumps when the backdrop arrives.
+                -->
+                <span class="cover" aria-hidden="true">
+                  {#if posterUrl(group.posterPath, 'w154')}
+                    <img
+                      class="cover-blur"
+                      src={posterUrl(group.posterPath, 'w154')}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <img
+                      class="cover-poster"
+                      src={posterUrl(group.posterPath, 'w154')}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  {:else}
+                    <span class="cover-letter">{group.title.slice(0, 1)}</span>
+                  {/if}
+                  {#if facts?.backdropPath}
+                    <img
+                      class="cover-wide"
+                      src={backdropUrl(facts.backdropPath, 'w300')}
+                      srcset="{backdropUrl(facts.backdropPath, 'w300')} 300w, {backdropUrl(
+                        facts.backdropPath,
+                        'w780',
+                      )} 780w"
+                      sizes="192px"
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  {/if}
+                </span>
 
                 <span class="names">
                   <span class="name">{group.title}</span>
+                  {#if factsLine(group, facts)}
+                    <span class="facts">{factsLine(group, facts)}</span>
+                  {/if}
                   <span class="meta">
                     {seasonSummary(group)}
                     <!-- The mean, for a series; a flat row's chip already shows its number. -->
                     {#if !group.flat && summaryLabel(group)}<span class="dot">·</span
                       >{summaryLabel(group)}{/if}
+                    {#if status}<span class="status" class:live={status === 'Returning'}
+                        >{status}</span
+                      >{/if}
                     {#if group.imported}<span class="mal" title="Imported from MyAnimeList"
                         >MAL</span
                       >{/if}
@@ -374,39 +453,50 @@
               </button>
 
               <!--
-                The season ribbon: one segment per season, tinted by what was
-                thought of it, oldest on the left.
+                The middle of the row: for a series, the season ribbon — one
+                segment per season, tinted by what was thought of it, oldest on
+                the left, with aired seasons not yet watched drawn hollow. It
+                shows what no other surface can: that a twenty-season series was
+                loved for fifteen of them and then was not, or that two new ones
+                are waiting. Pressing it opens the seasons.
 
-                This is what the middle of the row is for, and it is the only
-                thing on the page that shows the *shape* of an opinion — that
-                a twenty-season series was loved for fifteen of them and then
-                was not. Pressing it opens the seasons, which is the question
-                it provokes.
+                For a film there is nothing to draw over time, so the synopsis
+                is what says what the row is about.
               -->
-              {#if !group.flat}
-                {@const strip = ribbon(group)}
-                <button
-                  class="ribbon"
-                  onclick={() => toggle(group)}
-                  aria-expanded={open}
-                  aria-label="{group.seasons.length} seasons — {summaryLabel(group)}"
-                >
-                  {#if strip.hidden > 0}
-                    <span class="rib-more">+{strip.hidden}</span>
-                  {/if}
-                  {#each strip.segments as segment (segment.key)}
-                    {@const band = bandOf(segment.rating)}
-                    <span
-                      class="rib"
-                      class:liked={band === 'liked'}
-                      class:mixed={band === 'mixed'}
-                      class:disliked={band === 'disliked'}
-                      title="{segment.label} · {ratingWord(segment.rating)}"
-                    ></span>
-                  {/each}
-                </button>
+              {#if group.type === 'tv' && (!group.flat || seasonsToGo(group, facts?.airedSeasons ?? null) > 0)}
+                {@const strip = ribbon(group, RIBBON_LIMIT, facts?.airedSeasons ?? null)}
+                <div class="middle">
+                  <button
+                    class="ribbon"
+                    onclick={() => !group.flat && toggle(group)}
+                    aria-expanded={group.flat ? undefined : open}
+                    aria-label="{ribbonCaption(group, facts)} — {summaryLabel(group)}"
+                  >
+                    {#if strip.hidden > 0}
+                      <span class="rib-more">+{strip.hidden}</span>
+                    {/if}
+                    {#each strip.segments as segment (segment.key)}
+                      {@const band = bandOf(segment.rating)}
+                      <span
+                        class="rib"
+                        class:pending={segment.pending}
+                        class:liked={band === 'liked'}
+                        class:mixed={band === 'mixed'}
+                        class:disliked={band === 'disliked'}
+                        title={segment.pending
+                          ? segment.label
+                          : `${segment.label} · ${ratingWord(segment.rating)}`}
+                      ></span>
+                    {/each}
+                  </button>
+                  <span class="caption-line" class:ahead={seasonsToGo(group, facts?.airedSeasons ?? null) > 0}>
+                    {ribbonCaption(group, facts)}
+                  </span>
+                </div>
+              {:else if facts?.overview}
+                <p class="middle overview">{facts.overview}</p>
               {:else}
-                <span class="ribbon"></span>
+                <span class="middle"></span>
               {/if}
 
               <span class="score"><Score rating={group.score} /></span>
@@ -474,47 +564,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  .title {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-  }
-
-  h1 {
-    margin: 0;
-    font-size: var(--text-xl);
-  }
-
-  .count {
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tools {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-
-  input[type='search'] {
-    width: 200px;
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
-    background: var(--bg-raised);
-    color: var(--text-primary);
-    font-size: var(--text-xs);
   }
 
   .filters {
@@ -658,6 +707,31 @@
 
   .deep {
     grid-column: span 2;
+    position: relative;
+    overflow: hidden;
+    justify-content: center;
+  }
+
+  /* The series' own artwork, fading out under the words on the left. */
+  .deep-art {
+    position: absolute;
+    inset: 0 0 0 30%;
+    width: 70%;
+    height: 100%;
+    object-fit: cover;
+    mask-image: linear-gradient(90deg, transparent, #000 60%);
+    opacity: 0.55;
+    pointer-events: none;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+
+  .deep:hover .deep-art {
+    opacity: 0.8;
+  }
+
+  .deep .figure,
+  .deep .label {
+    position: relative;
   }
 
   .meter {
@@ -729,13 +803,13 @@
   .row {
     display: grid;
     /*
-      The third column is the ribbon, and it is why the row no longer has a
-      few hundred pixels of nothing between the title and the score. The
-      identity column is a fixed measure rather than a fraction: as `1.2fr` it
-      was nine hundred pixels wide for three hundred of title, and the ribbon
+      The third column is the ribbon or the synopsis, and it is why the row no
+      longer has a thousand pixels of nothing between the title and the score.
+      The identity column is capped rather than a fraction: as `1.2fr` it was
+      nine hundred pixels wide for three hundred of title, and the ribbon
       started adrift of the words it belongs to.
     */
-    grid-template-columns: 22px minmax(0, 460px) minmax(0, 1fr) auto auto auto;
+    grid-template-columns: 22px minmax(0, 620px) minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: var(--space-3);
     position: relative;
@@ -824,25 +898,66 @@
   .ident {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    gap: var(--space-4);
     min-width: 0;
     text-align: left;
   }
 
-  .thumb {
-    width: 40px;
-    height: 60px;
+  /* ── The cover ────────────────────────────────────────────────────── */
+
+  .cover {
+    position: relative;
     flex: none;
+    width: 192px;
+    aspect-ratio: 16 / 9;
     border-radius: var(--radius-sm);
-    object-fit: cover;
-    background: var(--bg-raised);
+    overflow: hidden;
+    background: var(--bg-elevated);
+    box-shadow: var(--edge-highlight);
   }
 
-  .thumb.blank {
+  .cover img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .cover-blur {
+    object-fit: cover;
+    filter: blur(14px) brightness(0.55);
+    transform: scale(1.2);
+  }
+
+  .cover-poster {
+    object-fit: contain;
+  }
+
+  /* Over the poster, so arriving is a fade rather than a swap. */
+  .cover-wide {
+    object-fit: cover;
+    animation: cover-in var(--dur-mid) var(--ease-out);
+  }
+
+  @keyframes cover-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .cover-letter {
+    position: absolute;
+    inset: 0;
     display: grid;
     place-items: center;
     color: var(--text-tertiary);
-    font-size: var(--text-sm);
+    font-size: var(--text-lg);
+  }
+
+  .row:hover .cover {
+    box-shadow:
+      var(--edge-highlight),
+      0 0 0 1px var(--border-strong);
   }
 
   .names {
@@ -853,7 +968,8 @@
   }
 
   .name {
-    font-size: var(--text-sm);
+    font-size: var(--text-md);
+    font-weight: var(--weight-emphasis);
     color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -874,6 +990,69 @@
 
   .dot {
     color: var(--text-tertiary);
+  }
+
+  .facts {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status {
+    font-size: var(--text-2xs);
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-default);
+    color: var(--text-tertiary);
+  }
+
+  /* Still airing is the state that can change what the user does next. */
+  .status.live {
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent);
+  }
+
+  /* ── The middle ───────────────────────────────────────────────────── */
+
+  .middle {
+    min-width: 0;
+  }
+
+  div.middle {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .overview {
+    margin: 0;
+    max-width: 96ch;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-tertiary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .row:hover .overview {
+    color: var(--text-secondary);
+  }
+
+  .caption-line {
+    padding: 0 var(--space-2);
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Seasons waiting to be watched are the news in this row. */
+  .caption-line.ahead {
+    color: var(--accent);
   }
 
   .mal {
@@ -899,8 +1078,8 @@
   .rib {
     flex: 1;
     min-width: 4px;
-    max-width: 26px;
-    height: 8px;
+    max-width: 34px;
+    height: 10px;
     border-radius: var(--radius-full);
     /* Unrated is a real state and reads as one: present, and empty. */
     background: var(--bg-hover);
@@ -919,6 +1098,12 @@
 
   .rib.disliked {
     background: color-mix(in srgb, var(--rating-disliked) 62%, transparent);
+  }
+
+  /* Aired and not watched: an outline, the shape of a season still to come. */
+  .rib.pending {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--border-strong);
   }
 
   /* Full strength, and taller, on the row being asked about. */
@@ -957,14 +1142,44 @@
     also changes: same specificity means source order decides, and declared
     up there it lost to the `display: flex` down here.
   */
+  /*
+    The phone keeps the identity and the user's own rating, and gives up the
+    rest to make room for the title. At 412px the desktop's columns left the
+    name 45px — "D." for Dune — so the ribbon goes, TMDB's score goes (it is
+    one tap away in the detail sheet; the chip beside it is the user's own
+    verdict, which is what this list is for), and the cover and the gaps get
+    smaller. The name gets about 100px, and two lines of it.
+  */
   @media (max-width: 760px) {
     .row {
-      grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
+      grid-template-columns: 22px minmax(0, 1fr) auto auto;
+      gap: var(--space-2);
+      padding-left: var(--space-2);
     }
 
-    .ribbon {
-      display: none;
+    /* Two lines rather than an ellipsis: ninety pixels is "Everythin…". */
+    .name {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      -webkit-box-orient: vertical;
+      white-space: normal;
+      line-height: var(--leading-tight);
     }
+
+    .middle,
+    .score {
+      display: none !important;
+    }
+
+    .ident {
+      gap: var(--space-3);
+    }
+
+    .cover {
+      width: 96px;
+    }
+
   }
 
   /* The width of RatingStrip's compact chip, which it stands in for. */
@@ -994,10 +1209,17 @@
     margin: 0;
     /* Indented to line up under the title, so the hierarchy is readable
        without a second border or a background. */
-    padding: var(--space-1) 0 var(--space-2) calc(22px + var(--space-3) + 40px + var(--space-3));
+    padding: var(--space-1) 0 var(--space-2) calc(22px + var(--space-3) + 192px + var(--space-4));
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+
+  /* The phone's narrower row, above; declared here so it follows the rule it overrides. */
+  @media (max-width: 760px) {
+    .seasons {
+      padding-left: calc(22px + var(--space-2) + 96px + var(--space-3));
+    }
   }
 
   .season {

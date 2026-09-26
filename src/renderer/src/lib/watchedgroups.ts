@@ -266,6 +266,8 @@ export interface RibbonSegment {
   /** "Season 3", or "Whole series" for a 1.5.8 survivor with no season. */
   label: string
   rating: RatingValue | null
+  /** A season that has aired and is not marked watched: drawn hollow. */
+  pending?: boolean
 }
 
 /**
@@ -293,16 +295,65 @@ export const RIBBON_LIMIT = 24
 export function ribbon(
   group: TitleGroup,
   limit = RIBBON_LIMIT,
+  airedSeasons: number | null = null,
 ): { segments: RibbonSegment[]; hidden: number } {
-  const all: RibbonSegment[] = [...group.seasons].reverse().map((row) => ({
-    key: row.entry.id,
-    label:
-      row.entry.season === null || row.entry.season === undefined
-        ? 'Whole series'
-        : `Season ${row.entry.season}`,
-    rating: row.rating,
-  }))
+  const all: RibbonSegment[] = withPending(
+    [...group.seasons].reverse().map((row) => ({
+      key: row.entry.id,
+      label:
+        row.entry.season === null || row.entry.season === undefined
+          ? 'Whole series'
+          : `Season ${row.entry.season}`,
+      rating: row.rating,
+    })),
+    group,
+    airedSeasons,
+  )
 
   if (all.length <= limit) return { segments: all, hidden: 0 }
   return { segments: all.slice(all.length - limit), hidden: all.length - limit }
+}
+
+/**
+ * The seasons that have aired and are not watched, slotted in where they fall.
+ *
+ * What turns the ribbon from "what I thought of it" into "where I am with
+ * it": a series watched to season 5 of 7 shows two hollow segments at the
+ * end, which is the one thing about it worth knowing at a glance.
+ *
+ * Left out for an import from MyAnimeList, which numbers seasons its own way
+ * — one anime's "season 6" is TMDB's season 2 — so the gaps it would draw
+ * would be invented. Left out too wherever a season has no number, because a
+ * whole-series entry already claims all of them.
+ */
+function withPending(
+  watched: RibbonSegment[],
+  group: TitleGroup,
+  airedSeasons: number | null,
+): RibbonSegment[] {
+  if (airedSeasons === null || group.imported || group.type !== 'tv') return watched
+  const numbers = group.seasons.map((row) => row.entry.season)
+  if (numbers.some((n) => n === null || n === undefined || n < 1)) return watched
+
+  // `watched` runs oldest first, the reverse of `group.seasons` and `numbers`.
+  const seen = new Map(watched.map((segment, i) => [numbers[numbers.length - 1 - i]!, segment]))
+  const last = Math.max(airedSeasons, ...(numbers as number[]))
+  const out: RibbonSegment[] = []
+  for (let season = 1; season <= last; season += 1) {
+    out.push(
+      seen.get(season) ?? {
+        key: `pending-${season}`,
+        label: `Season ${season} · not watched`,
+        rating: null,
+        pending: true,
+      },
+    )
+  }
+  return out
+}
+
+/** How many aired seasons of a series are not marked watched — "2 to go". */
+export function seasonsToGo(group: TitleGroup, airedSeasons: number | null): number {
+  return ribbon(group, Number.MAX_SAFE_INTEGER, airedSeasons).segments.filter((s) => s.pending)
+    .length
 }
