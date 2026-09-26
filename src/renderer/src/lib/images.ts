@@ -64,6 +64,18 @@ export const stillUrl = (path: string | null, size: StillSize = 'w300'): string 
   url(path, size)
 
 /**
+ * A title logo, always as PNG.
+ *
+ * Some logos exist only as SVG. TMDB renders any of them as a PNG when the
+ * sized path asks for `.png` (measured: `w500/….svg` → image/svg+xml,
+ * `w500/….png` → image/png), so every logo arrives as the same kind of image
+ * and nothing downstream has an SVG case. w500 because a card draws it at up
+ * to about 250 CSS pixels, and a logo is a small file at any size.
+ */
+export const logoUrl = (path: string | null): string | null =>
+  path ? url(path.replace(/\.svg$/i, '.png'), 'w500') : null
+
+/**
  * A `srcset` for poster tiles, so HiDPI displays get the sharper asset without
  * forcing it on everyone.
  */

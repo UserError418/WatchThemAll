@@ -36,6 +36,7 @@ function detail(patch: Partial<MediaDetail>): MediaDetail {
     nextEpisode: null,
     lastEpisode: { season: 2, episode: 10, name: 'Into the Fire', airDate: '2025-01-17' },
     trailerKey: null,
+    logoPath: '/logo.png',
     ...patch,
   }
 }
@@ -69,6 +70,11 @@ describe('facts from a TMDB detail', () => {
     expect(overview.endsWith('word…')).toBe(true)
   })
 
+  it('keeps the logo, or its absence', () => {
+    expect(factsFromDetail(detail({}), NOW).logoPath).toBe('/logo.png')
+    expect(factsFromDetail(detail({ logoPath: null }), NOW).logoPath).toBeNull()
+  })
+
   it('says nothing about a year it cannot read', () => {
     expect(factsFromDetail(detail({ releaseDate: null }), NOW).year).toBeNull()
     expect(factsFromDetail(detail({ releaseDate: '' }), NOW).year).toBeNull()
@@ -78,6 +84,7 @@ describe('facts from a TMDB detail', () => {
 describe('the stored cache', () => {
   const facts = (at: number): TitleFacts => ({
     backdropPath: null,
+    logoPath: null,
     year: null,
     genres: [],
     status: '',
@@ -107,5 +114,12 @@ describe('the stored cache', () => {
     expect(parseFacts('[1,2]').size).toBe(0)
     expect(parseFacts(null).size).toBe(0)
     expect(parseFacts(JSON.stringify({ 'tv:1': { at: 'yesterday' } })).size).toBe(0)
+  })
+
+  it('drops a record from before logos, so its card fetches one', () => {
+    const v1: Partial<TitleFacts> = facts(NOW)
+    delete v1.logoPath
+    expect(parseFacts(JSON.stringify({ 'tv:1': v1 })).size).toBe(0)
+    expect(parseFacts(JSON.stringify({ 'tv:1': facts(NOW) })).size).toBe(1)
   })
 })

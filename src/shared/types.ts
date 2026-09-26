@@ -91,6 +91,12 @@ export interface MediaDetail extends MediaSummary {
    * URL, because the origin it is allowed to load from is a CSP concern.
    */
   trailerKey: string | null
+  /**
+   * The title's logo — its name as artwork, on a transparent background — or
+   * null when TMDB has none in English. Drawn over wide artwork, which never
+   * carries the title, the way a streaming service's cards do.
+   */
+  logoPath: string | null
 }
 
 /** The compact episode reference TMDB embeds in a show payload. */

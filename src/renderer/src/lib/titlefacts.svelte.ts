@@ -1,5 +1,6 @@
 /**
- * Title facts for list rows, fetched on demand and remembered between visits.
+ * Title facts for list rows and browse cards, fetched on demand and remembered
+ * between visits.
  *
  * See `titlefacts.ts` for what the facts are and why they are not stored on
  * the library's records. This is the part with state: a reactive map the rows
@@ -11,6 +12,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import type { MediaType } from '@shared/types'
 import {
   FACTS_STORAGE_KEY,
+  RETIRED_STORAGE_KEYS,
   factsFromDetail,
   factsKey,
   isStale,
@@ -44,6 +46,7 @@ class TitleFactsStore {
       for (const [key, value] of parseFacts(localStorage.getItem(FACTS_STORAGE_KEY))) {
         this.facts.set(key, value)
       }
+      for (const key of RETIRED_STORAGE_KEYS) localStorage.removeItem(key)
     } catch {
       // No storage (a test, a locked-down profile): the facts are fetched each visit.
     }

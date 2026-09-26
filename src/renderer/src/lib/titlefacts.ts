@@ -1,8 +1,10 @@
 /**
  * The few facts about a title that a list row shows and the library does not
- * store: its wide artwork, its year, its genres, how many seasons have aired.
+ * store: its wide artwork and logo, its year, its genres, how many seasons
+ * have aired.
  *
- * The Watched tab needs these for every row, and a watched record carries only
+ * The Watched tab needs these for every row, and the desktop's browse cards
+ * need the logo for every card they show; and a watched record carries only
  * what was known when it was marked — a poster path and a title. Storing more
  * on the record would put artwork into the synced document and into every
  * device's merge for something that is only ever drawn. So the facts are
@@ -17,6 +19,8 @@ import type { MediaDetail, MediaType } from '@shared/types'
 
 export interface TitleFacts {
   backdropPath: string | null
+  /** The title's name as artwork, for drawing over the backdrop; see `pickLogo`. */
+  logoPath: string | null
   /** Four digits, or null when TMDB has no date. */
   year: string | null
   /** At most three, most prominent first, as TMDB lists them. */
@@ -55,7 +59,15 @@ export const FACTS_TTL_MS = 7 * 24 * 60 * 60 * 1000
 /** The most entries kept, oldest dropped first: a library, not the catalogue. */
 export const FACTS_LIMIT = 2000
 
-export const FACTS_STORAGE_KEY = 'wta.titleFacts.v1'
+/**
+ * Versioned, because what a record holds is part of the key.
+ *
+ * v2 added the logo. A v1 record has none, and as a *fresh* record it would be
+ * trusted for a week — every card it covered would go without its logo that
+ * long. A new key starts the cache empty instead; the store deletes the old.
+ */
+export const FACTS_STORAGE_KEY = 'wta.titleFacts.v2'
+export const RETIRED_STORAGE_KEYS = ['wta.titleFacts.v1']
 
 export function factsKey(type: MediaType, tmdbId: number): string {
   return `${type}:${tmdbId}`
@@ -65,6 +77,7 @@ export function factsFromDetail(detail: MediaDetail, now: number): TitleFacts {
   const year = detail.releaseDate?.slice(0, 4) ?? null
   return {
     backdropPath: detail.backdropPath,
+    logoPath: detail.logoPath,
     year: year && /^\d{4}$/.test(year) ? year : null,
     genres: detail.genres.slice(0, 3),
     status: detail.status,
@@ -110,6 +123,7 @@ export function parseFacts(raw: string | null): Map<string, TitleFacts> {
       if (
         facts &&
         typeof facts.at === 'number' &&
+        (typeof facts.logoPath === 'string' || facts.logoPath === null) &&
         Array.isArray(facts.genres) &&
         typeof facts.overview === 'string'
       ) {

@@ -24,11 +24,12 @@
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { backdropUrl, posterUrl } from '../lib/images'
+  import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import { canHover } from '../lib/pointer'
   import { cardArt } from '../lib/cardart'
+  import { titleFacts, whenVisible } from '../lib/titlefacts.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import Score from './Score.svelte'
 
@@ -73,17 +74,49 @@
   const showsPoster = $derived(cardArt() === 'poster' && Boolean(media.posterPath))
 
   /**
+   * What TMDB says about the title beyond the summary the card was given:
+   * its logo, and a backdrop when the card came without one.
+   *
+   * Fetched when the card first comes near the screen (`titlefacts`, cached
+   * for a week), so a row does not ask about titles nobody scrolls to. Not for
+   * posters, which need neither.
+   */
+  const facts = $derived(
+    showsPoster || !media.tmdbId ? null : titleFacts.get(media.type, media.tmdbId),
+  )
+
+  /**
    * Otherwise landscape art, falling back to the poster.
    *
-   * Browse rows come from TMDB and nearly always have a backdrop. The fallback
-   * matters for IMDB-sourced results, which carry poster art only.
+   * Browse rows come from TMDB and nearly always have a backdrop. Continue
+   * Watching builds its cards from library entries, which store none, so it
+   * takes the one from the facts. The poster fallback is for what is left —
+   * IMDB-sourced results carry poster art only.
    */
+  const backdrop = $derived(media.backdropPath ?? facts?.backdropPath ?? null)
   const art = $derived(
     showsPoster
       ? posterUrl(media.posterPath)
-      : (backdropUrl(media.backdropPath, 'w780') ?? posterUrl(media.posterPath)),
+      : (backdropUrl(backdrop, 'w780') ?? posterUrl(media.posterPath)),
   )
-  const hasBackdrop = $derived(Boolean(media.backdropPath))
+  const hasBackdrop = $derived(Boolean(backdrop))
+
+  /**
+   * The title's logo over the backdrop, the way a streaming service's cards
+   * carry their name — a backdrop never does (none of 186 measured), and the
+   * plain text line under it is what the user had to read instead.
+   *
+   * Only over a backdrop. A poster cropped into the frame usually shows its
+   * own lettering, and a logo on top of that printed the name twice. The
+   * text name stays until the logo has actually loaded, and stays for good
+   * when there is none — about one title in twenty.
+   */
+  const logo = $derived(hasBackdrop ? logoUrl(facts?.logoPath ?? null) : null)
+  let logoLoaded = $state(false)
+
+  function wantFacts(): void {
+    if (!showsPoster && media.tmdbId) titleFacts.want(media.type, media.tmdbId)
+  }
   const saved = $derived(library.isInWatchlist(media.tmdbId))
   const tracked = $derived(library.isTracked(media.tmdbId))
   const label = $derived(subtitle ?? year(media.releaseDate))
@@ -209,6 +242,7 @@
   data-anchor={anchor}
   onmouseenter={onEnter}
   onmouseleave={onLeave}
+  use:whenVisible={wantFacts}
   role="presentation"
 >
   <div class="inner">
@@ -249,7 +283,17 @@
         -->
         {#if !showsPoster}
           <div class="scrim" aria-hidden="true"></div>
-          <span class="name">{media.title}</span>
+          {#if logo}
+            <img
+              class="logo"
+              class:loaded={logoLoaded}
+              src={logo}
+              alt=""
+              decoding="async"
+              onload={() => (logoLoaded = true)}
+            />
+          {/if}
+          <span class="name" class:replaced={logoLoaded}>{media.title}</span>
         {/if}
 
         {#if progress > 0}
@@ -432,6 +476,42 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  /*
+    Where the name was, capped both ways so a long flat logo and a stacked one
+    both sit in the corner at a readable size. `.art img.logo`, not `.logo`:
+    the artwork rule above sizes every image in the frame to fill it.
+
+    The shadow is what keeps a dark logo readable on a dark backdrop; the scrim
+    only darkens the bottom edge, and logos come in every colour.
+  */
+  .art img.logo {
+    position: absolute;
+    left: var(--space-3);
+    bottom: var(--space-3);
+    width: auto;
+    height: auto;
+    max-width: 55%;
+    max-height: 38%;
+    object-fit: contain;
+    object-position: left bottom;
+    filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.75));
+    opacity: 0;
+    transition: opacity var(--dur-mid) var(--ease-out);
+    pointer-events: none;
+  }
+
+  .art img.logo.loaded {
+    opacity: 1;
+  }
+
+  .name {
+    transition: opacity var(--dur-mid) var(--ease-out);
+  }
+
+  .name.replaced {
+    opacity: 0;
   }
 
   .progress {
