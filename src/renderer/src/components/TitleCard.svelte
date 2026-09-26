@@ -13,10 +13,11 @@
    * would blur every glyph in the panel, and the panel is mostly text. Growing
    * the box means the text is laid out at its natural size and stays crisp.
    *
-   * **Nothing happens until the pointer has settled.** Sweeping across a row
-   * would otherwise expand every card in turn and fire a trailer lookup for
-   * each. `--hover-intent` is the delay before expanding; the trailer waits
-   * longer still, because it is the expensive part.
+   * **Nothing visible happens until the pointer has settled.** Sweeping across
+   * a row would otherwise expand every card in turn and start a trailer in
+   * each. The card expands after `EXPAND_DELAY_MS`, and the trailer starts at
+   * that same moment — see `onEnter` for why it no longer waits longer, and
+   * why the trailer *lookup* starts earlier than either.
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
@@ -47,8 +48,17 @@
   let trailerKey = $state<string | null>(null)
   let showTrailer = $state(false)
 
+  /** How long the pointer must rest on a card before it expands and its trailer starts. */
+  const EXPAND_DELAY_MS = 340
+
   let expandTimer: ReturnType<typeof setTimeout> | null = null
-  let trailerTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * The TMDB lookup for this card's trailer, shared by every hover of it.
+   *
+   * Kept as the promise rather than the result so a lookup already in flight
+   * when the card expands is awaited instead of being sent a second time.
+   */
+  let trailerRequest: Promise<string | null> | null = null
 
   /**
    * Landscape art, falling back to the poster.
@@ -64,9 +74,7 @@
 
   function clearTimers(): void {
     if (expandTimer) clearTimeout(expandTimer)
-    if (trailerTimer) clearTimeout(trailerTimer)
     expandTimer = null
-    trailerTimer = null
   }
 
   function onEnter(): void {
@@ -86,15 +94,34 @@
     if (!canHover()) return
 
     clearTimers()
+
+    /**
+     * The lookup starts now, while the pointer is still deciding.
+     *
+     * It is one small request that the main process caches for ten minutes,
+     * and it used to run *after* the expansion delay, adding its whole round
+     * trip — 130–200 ms measured — to every preview. Started here it finishes
+     * inside the delay instead. A pointer sweeping across a row does now send
+     * one lookup per card it crosses; that is the price, and it buys nothing
+     * visible — no expansion, no iframe — for the cards merely passed over.
+     */
+    void requestTrailer()
+
     expandTimer = setTimeout(() => {
       expanded = true
-      // The trailer is a network request and an iframe; it waits until the
-      // user has clearly settled on this card rather than passed over it.
-      // Short, though: the embed no longer hides behind a still that had to
-      // fade before anything was visible, so this delay is now the whole wait
-      // rather than the first part of a longer one.
-      trailerTimer = setTimeout(() => void loadTrailer(), 220)
-    }, 340)
+      /**
+       * The trailer starts with the expansion, not after a further wait.
+       *
+       * There used to be another 220 ms here, to keep an iframe from appearing
+       * as a black box on a card the pointer might still leave. The embed no
+       * longer draws anything until its first video frame — its page is made
+       * transparent, see `main/embedchrome.ts` — so the artwork stays in view
+       * until there is motion to replace it, and the wait only delayed that
+       * motion. Measured: pointer-to-moving went from about 1.56 s to about
+       * 1.2 s with this and the early lookup together.
+       */
+      void startTrailer()
+    }, EXPAND_DELAY_MS)
   }
 
   function onLeave(): void {
@@ -105,29 +132,30 @@
     previewAudio.release(audioId)
   }
 
-  async function loadTrailer(): Promise<void> {
+  function requestTrailer(): Promise<string | null> {
     // IMDB-sourced results have no TMDB id yet, and TMDB is where trailers
     // come from. They simply keep their artwork until opened.
-    if (media.tmdbId === 0) return
-    try {
-      trailerKey ??= await window.wta.tmdb.trailer(media.tmdbId, media.type)
-      // The pointer may have left while the request was in flight.
-      if (trailerKey && expanded) {
-        showTrailer = true
-        // Hovering a card is a deliberate act, so it takes the sound from
-        // whatever was playing ambiently behind it.
-        previewAudio.claim(audioId)
-      }
-    } catch {
-      // A missing trailer is not worth surfacing — the artwork stays.
-    }
+    if (media.tmdbId === 0) return Promise.resolve(null)
+    trailerRequest ??= window.wta.tmdb.trailer(media.tmdbId, media.type).catch(() => {
+      // A missing trailer is not worth surfacing — the artwork stays. Forget
+      // the failure so the next hover asks again rather than inheriting it.
+      trailerRequest = null
+      return null
+    })
+    return trailerRequest
   }
 
-  /**
-   * `youtube-nocookie` because the standard embed sets tracking cookies before
-   * playback is even requested. The parameters strip every affordance: this is
-   * wallpaper, not a video player.
-   */
+  async function startTrailer(): Promise<void> {
+    const key = await requestTrailer()
+    // The pointer may have left while the request was in flight.
+    if (!key || !expanded) return
+    trailerKey = key
+    showTrailer = true
+    // Hovering a card is a deliberate act, so it takes the sound from
+    // whatever was playing ambiently behind it.
+    previewAudio.claim(audioId)
+  }
+
   const audioId = previewId('card')
   /**
    * Silent unless the user wants sound *and* this card is the surface that
@@ -135,8 +163,6 @@
    * both play out loud. See `lib/preview.svelte.ts`.
    */
   const muted = $derived(!library.settings.previewAudio || !previewAudio.holds(audioId))
-
-
 
   function stop(event: MouseEvent): void {
     // The card itself opens the detail view; quick actions must not.
@@ -170,7 +196,13 @@
   role="presentation"
 >
   <div class="inner">
-    <button class="hit" onclick={() => onselect?.(media)} title={media.title}>
+    <!--
+      `aria-label`, not `title`. A `title` puts the browser's own tooltip in the
+      middle of the card within a second of the pointer resting — which is
+      exactly when the trailer starts, so every preview played under a grey
+      label box. The name is already printed on the card itself.
+    -->
+    <button class="hit" onclick={() => onselect?.(media)} aria-label={media.title}>
       <div class="art">
         {#if art}
           <img
