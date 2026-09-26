@@ -637,3 +637,71 @@ describe('the 1–10 rating scale', () => {
     })
   })
 })
+
+describe('stored provider scans', () => {
+  const scanned = (scan: Record<string, unknown>) =>
+    migrate({ ...emptyStore(), providerScans: [{ titleKey: 'tv:tt1', at: 1_000, ...scan }] })
+      .providerScans[0]
+
+  it('keeps the time a streaming provider took to start', () => {
+    const scan = scanned({ verdicts: { a: 'stream', b: 'dead' }, timings: { a: 3_800 } })
+    expect(scan?.timings).toEqual({ a: 3_800 })
+  })
+
+  it('drops a time beside any verdict but stream', () => {
+    // A timing next to "dead" describes a moment that did not happen, and
+    // would print as "no stream · 3.8 s".
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'dead', c: 'unsure' },
+      timings: { a: 2_000, b: 3_000, c: 4_000, gone: 5_000 },
+    })
+    expect(scan?.timings).toEqual({ a: 2_000 })
+  })
+
+  it('drops a time that is not a duration', () => {
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'stream', c: 'stream', d: 'stream' },
+      timings: { a: '3800', b: -1, c: Number.NaN, d: 1_500 },
+    })
+    expect(scan?.timings).toEqual({ d: 1_500 })
+  })
+
+  it('reads a scan saved before times were recorded as having none', () => {
+    const scan = scanned({ verdicts: { a: 'stream' } })
+    expect(scan?.verdicts).toEqual({ a: 'stream' })
+    expect(scan?.timings).toEqual({})
+  })
+})
+
+describe('the source order setting', () => {
+  it('defaults to the user list first, which changes nothing for an existing install', () => {
+    expect(migrate({ ...emptyStore(), settings: { skipIntro: false } }).settings.sourceOrder).toEqual([
+      'list',
+      'speed',
+      'quality',
+    ])
+  })
+
+  it('repairs a stored order rather than trusting it', () => {
+    const doc = migrate({ ...emptyStore(), settings: { sourceOrder: ['speed', 'nonsense'] } })
+    expect(doc.settings.sourceOrder).toEqual(['speed', 'list', 'quality'])
+  })
+})
+
+describe('stored scan qualities', () => {
+  const scanned = (scan: Record<string, unknown>) =>
+    migrate({ ...emptyStore(), providerScans: [{ titleKey: 'movie:tt1', at: 1_000, ...scan }] })
+      .providerScans[0]
+
+  it('keeps a quality class beside a streaming verdict', () => {
+    expect(scanned({ verdicts: { a: 'stream' }, qualities: { a: 1080 } })?.qualities).toEqual({ a: 1080 })
+  })
+
+  it('drops a quality that is not a class a label can show, or sits beside no stream', () => {
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'stream', c: 'dead' },
+      qualities: { a: 800, b: '1080', c: 1080 },
+    })
+    expect(scan?.qualities).toEqual({})
+  })
+})

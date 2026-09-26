@@ -30,8 +30,24 @@
    * source is also a green one, and "this is where you were" is what the user
    * is looking for when they open this list mid-series. Everything below blue
    * is decided by `providerDot`, which is derived from `providerRank` — the
-   * same function that orders Automatic's fallback chain, so the list reads top
-   * to bottom in the order the app will actually try.
+   * same function that orders Automatic's fallback chain.
+   *
+   * ## The order of the rows
+   *
+   * Automatic's own order, sent by main with the dots (`state.order`): working
+   * sources at the top, "may work" in the middle, dead ones at the bottom, and
+   * within each group the user's favourites and then their provider order. So
+   * the list reads top to bottom in the order the app will actually try.
+   *
+   * The rows do not move while a test is running. The order is re-read when it
+   * finishes, so the dots fill in where the user is looking and the list
+   * re-sorts once, at the end, rather than shuffling under the pointer.
+   * A source that streamed also shows how long it took to start and, where its
+   * stream says, the best quality it offers.
+   *
+   * Within each group the order is the user's to choose — speed, quality, or
+   * their own list first — under Settings → Source order. It is Automatic's
+   * order either way, because the same setting drives both.
    *
    * ## Testing every source
    *
@@ -45,10 +61,11 @@
    * yesterday may work today, and the user's judgement has to be able to
    * override ours — so a red row stays clickable.
    */
+  import { flip } from 'svelte/animate'
   import type { ProbeVerdict, TitleProviderState, TitleRef } from '@shared/ipc'
-  import { providerDot } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
-  import { menuIn, menuOut } from '../lib/motion'
+  import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
 
   interface Props {
@@ -71,7 +88,12 @@
   const { selected, media, episode = null, onselect }: Props = $props()
 
   let open = $state(false)
-  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null, scan: null })
+  let sourceState = $state<TitleProviderState>({
+    outcomes: {},
+    lastUsed: null,
+    scan: null,
+    order: [],
+  })
 
   /**
    * The verdicts to draw, live run preferred over the stored one.
@@ -84,6 +106,15 @@
    */
   const verdicts = $derived<Record<string, ProbeVerdict>>(
     scan.matches(media) ? scan.verdicts : (sourceState.scan?.verdicts ?? {}),
+  )
+
+  /** How long each streaming source took to start, from the same run as `verdicts`. */
+  const timings = $derived<Record<string, number>>(
+    scan.matches(media) ? scan.timings : (sourceState.scan?.timings ?? {}),
+  )
+  /** The best quality each streaming source offers, where its stream says. Same run again. */
+  const qualities = $derived<Record<string, number>>(
+    scan.matches(media) ? scan.qualities : (sourceState.scan?.qualities ?? {}),
   )
 
   /** True while a scan of the title this picker is showing is running. */
@@ -129,6 +160,25 @@
   const enabled = $derived(
     library.orderedProviders.filter((p) => library.activeProviderIds.includes(p.id)),
   )
+
+  /**
+   * What the last test measured about one source, for the end of its label:
+   * " · 3.8 s · 1080p". Only for a source that streamed; either part may be
+   * missing, and a missing quality means the stream did not say, not that it
+   * is poor.
+   */
+  function measurement(id: string): string {
+    if (verdicts[id] !== 'stream') return ''
+    const ms = timings[id]
+    const quality = qualities[id]
+    return (
+      (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
+      (quality !== undefined ? ` · ${formatQuality(quality)}` : '')
+    )
+  }
+
+  /** The rows, in Automatic's order. See "The order of the rows" above. */
+  const rows = $derived(inScanOrder(enabled, sourceState.order))
 
   const selectedName = $derived(
     selected ? (enabled.find((p) => p.id === selected)?.name ?? 'Automatic') : 'Automatic',
@@ -235,22 +285,50 @@
       style:left="{menuPos.left}px"
       style:max-height="{menuPos.maxHeight}px"
     >
-      <button class="item" class:active={selected === null} onclick={() => choose(null)}>
-        <span class="dot" style:background="var(--accent)"></span>
-        <span class="name">Automatic</span>
-        <span class="hint">Best available</span>
-      </button>
+      <!--
+        Automatic and the test, pinned together at the head.
 
-      <div class="divider"></div>
+        The test used to sit at the foot, on the reasoning that the list is what
+        the user came for. It was easy to miss there, and it is what makes the
+        list worth reading: until it runs, most dots are empty. Sticky, so it
+        stays in reach while a long list scrolls beneath it.
+      -->
+      <div class="head">
+        <button class="item" class:active={selected === null} onclick={() => choose(null)}>
+          <span class="dot" style:background="var(--accent)"></span>
+          <span class="name">Automatic</span>
+          <span class="hint">Best available</span>
+        </button>
+        {#if enabled.length > 0}
+          <button class="scan" class:running={scanning} onclick={runScan}>
+            <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+            {#if scanLabel}
+              <span class="hint">{scanLabel}</span>
+            {:else if scanSummary}
+              <span class="hint">{scanSummary}</span>
+            {:else}
+              <span class="hint">About a minute</span>
+            {/if}
+          </button>
+          {#if scanning && scan.total > 0}
+            <div class="progress" role="progressbar" aria-valuenow={scan.done} aria-valuemin={0} aria-valuemax={scan.total}>
+              <div class="bar" style:width="{(scan.done / scan.total) * 100}%"></div>
+            </div>
+          {/if}
+        {/if}
+        <div class="divider"></div>
+      </div>
 
-      {#each enabled as provider (provider.id)}
+      {#each rows as provider (provider.id)}
         {@const resume = provider.id === sourceState.lastUsed}
         {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
         {@const testing = scanning && scan.current === provider.name}
+        {@const time = measurement(provider.id)}
         <button
           class="item"
           class:active={selected === provider.id}
           onclick={() => choose(provider.id)}
+          animate:flip={{ duration: duration(DUR_MID) }}
         >
           <!--
             An empty slot, not a grey dot, when the provider has never been
@@ -266,43 +344,19 @@
           {/if}
           <span class="name">{provider.name}</span>
           {#if resume}
-            <span class="hint resume">resume</span>
+            <span class="hint resume">resume{time}</span>
           {:else if testing}
             <!-- The one being measured right now, so the list shows progress
                  moving down it rather than only a counter changing. -->
             <span class="hint testing">testing…</span>
           {:else if dot.label}
-            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}</span>
+            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
           {/if}
         </button>
       {/each}
 
       {#if enabled.length === 0}
         <p class="empty">No providers enabled. Turn one on in the Providers panel.</p>
-      {:else}
-        <div class="divider"></div>
-        <!--
-          The button that fills the dots in.
-          
-          At the foot of the menu rather than the head: the list is what the
-          user came for, and a title that has already been scanned needs this
-          control less than it needs the answer.
-        -->
-        <button class="scan" class:running={scanning} onclick={runScan}>
-          <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
-          {#if scanLabel}
-            <span class="hint">{scanLabel}</span>
-          {:else if scanSummary}
-            <span class="hint">{scanSummary}</span>
-          {:else}
-            <span class="hint">About a minute</span>
-          {/if}
-        </button>
-        {#if scanning && scan.total > 0}
-          <div class="progress" role="progressbar" aria-valuenow={scan.done} aria-valuemin={0} aria-valuemax={scan.total}>
-            <div class="bar" style:width="{(scan.done / scan.total) * 100}%"></div>
-          </div>
-        {/if}
       {/if}
     </div>
   {/if}
@@ -400,9 +454,11 @@
     flex: 1;
   }
 
+  /* Never wraps: "works · 3.8 s" broken across two lines reads as two claims. */
   .hint {
     color: var(--text-tertiary);
     font-size: var(--text-xs);
+    white-space: nowrap;
   }
 
   .hint.bad {
@@ -466,6 +522,20 @@
     /* Providers settle at wildly different speeds, so an un-eased bar jumps.
        The transition is what makes it read as progress rather than as glitching. */
     transition: width 240ms ease;
+  }
+
+  /*
+    Stuck to the top of the scrolling menu. The negative offset and matching
+    padding cover the menu's own padding, so rows scrolling underneath do not
+    show through the gap above it.
+  */
+  .head {
+    position: sticky;
+    top: calc(-1 * var(--space-2));
+    z-index: 1;
+    margin-top: calc(-1 * var(--space-2));
+    padding-top: var(--space-2);
+    background: var(--bg-raised);
   }
 
   .divider {

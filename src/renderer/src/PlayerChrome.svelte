@@ -22,7 +22,7 @@
   CastDevice,
   CastStatus,
 } from '@shared/ipc'
-  import { providerDot } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
   import { untrack } from 'svelte'
   import type { Episode } from '@shared/types'
   import { clock } from './lib/format'
@@ -114,9 +114,15 @@
    *
    * Worth more here than there, because this list is the one people reach for
    * *after* a source has just disappointed them: the point is to pick the next
-   * one without guessing.
+   * one without guessing. Listed in Automatic's order, as there, for the same
+   * reason — so the top of the list is the next one worth trying.
    */
-  let sourceState = $state<TitleProviderState>({ outcomes: {}, lastUsed: null, scan: null })
+  let sourceState = $state<TitleProviderState>({
+    outcomes: {},
+    lastUsed: null,
+    scan: null,
+    order: [],
+  })
 
   /* ── Testing every source ─────────────────────────────────────────────────
    *
@@ -129,6 +135,8 @@
    * to `window.wta`, and this document only has `window.wtaChrome`.
    */
   let scanVerdicts = $state<Record<string, ProbeVerdict>>({})
+  let scanTimings = $state<Record<string, number>>({})
+  let scanQualities = $state<Record<string, number>>({})
   let scanning = $state(false)
   let scanDone = $state(0)
   let scanTotal = $state(0)
@@ -138,6 +146,8 @@
   $effect(() =>
     api?.onProviderScan((progress) => {
       scanVerdicts = progress.verdicts
+      scanTimings = progress.timings
+      scanQualities = progress.qualities
       scanDone = progress.done
       scanTotal = progress.total
       scanCurrent = progress.providerName
@@ -150,6 +160,32 @@
   const verdicts = $derived<Record<string, ProbeVerdict>>(
     Object.keys(scanVerdicts).length > 0 ? scanVerdicts : (sourceState.scan?.verdicts ?? {}),
   )
+  /** Time to stream for the sources that streamed, from the same run as `verdicts`. */
+  const timings = $derived<Record<string, number>>(
+    Object.keys(scanVerdicts).length > 0 ? scanTimings : (sourceState.scan?.timings ?? {}),
+  )
+  const qualities = $derived<Record<string, number>>(
+    Object.keys(scanVerdicts).length > 0 ? scanQualities : (sourceState.scan?.qualities ?? {}),
+  )
+
+  /** " · 3.8 s · 1080p" for a source that streamed; see `SourcePicker.svelte`. */
+  function measurement(id: string): string {
+    if (verdicts[id] !== 'stream') return ''
+    const ms = timings[id]
+    const quality = qualities[id]
+    return (
+      (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
+      (quality !== undefined ? ` · ${formatQuality(quality)}` : '')
+    )
+  }
+
+  /**
+   * The menu's rows, in Automatic's order as of the last re-read.
+   *
+   * Not re-sorted while a test runs — `sourceState` is re-read only when it
+   * finishes — so the rows hold still while their dots fill in.
+   */
+  const sourceRows = $derived(inScanOrder(context?.providers ?? [], sourceState.order))
 
   async function toggleScan(): Promise<void> {
     if (context === null) return
@@ -469,7 +505,7 @@
       .catch(() => {
         // No record is a fair answer: every dot is simply blank, which is what
         // "never tried" looks like anyway.
-        sourceState = { outcomes: {}, lastUsed: null, scan: null }
+        sourceState = { outcomes: {}, lastUsed: null, scan: null, order: [] }
       })
   }
 
@@ -1069,10 +1105,29 @@
 
     {#if panel === 'sources'}
       <div class="panel sources">
-        {#each context?.providers ?? [] as provider (provider.id)}
+        <!--
+          Pinned at the head, as in the detail view's picker: at the foot it was
+          easy to miss, and it is what fills the dots in. Sticky, so it stays in
+          reach while the list scrolls.
+        -->
+        <div class="sources-head">
+          <button class="source test" class:playing={scanning} onclick={toggleScan}>
+            <span class="dot none"></span>
+            <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+            {#if scanning}
+              <span class="tag"
+                >{#if scanConfirming}re-checking {scanCurrent}{:else}{scanCurrent ?? '…'}
+                  {scanDone + 1}/{scanTotal}{/if}</span
+              >
+            {/if}
+          </button>
+          <div class="sources-divider"></div>
+        </div>
+        {#each sourceRows as provider (provider.id)}
           {@const resume = provider.id === sourceState.lastUsed}
           {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
           {@const testing = scanning && scanCurrent === provider.name}
+          {@const time = measurement(provider.id)}
           <button
             class="source"
             class:playing={provider.id === context?.providerId}
@@ -1095,32 +1150,17 @@
             {/if}
             <span class="name">{provider.name}</span>
             {#if provider.id === context?.providerId}
-              <span class="tag">Playing</span>
+              <span class="tag">Playing{time}</span>
             {:else if resume}
-              <span class="tag resume">resume</span>
+              <span class="tag resume">resume{time}</span>
             {:else if testing}
               <span class="tag">testing…</span>
             {:else if dot.label}
-              <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}</span>
+              <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
             {/if}
           </button>
         {/each}
 
-        <!--
-          Offered at the foot of the list, for the same reason as in the detail
-          view: the list is what the user opened this menu for, and the button
-          is what to do when the list has nothing useful in it.
-        -->
-        <button class="source test" class:playing={scanning} onclick={toggleScan}>
-          <span class="dot none"></span>
-          <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
-          {#if scanning}
-            <span class="tag"
-              >{#if scanConfirming}re-checking {scanCurrent}{:else}{scanCurrent ?? '…'}
-                {scanDone + 1}/{scanTotal}{/if}</span
-            >
-          {/if}
-        </button>
       </div>
     {/if}
   </div>
@@ -1420,6 +1460,22 @@
     width: 260px;
     margin-left: auto;
     margin-right: 14px;
+  }
+
+  /* Covers the list's 6px padding, so rows scrolling under it do not show above it. */
+  .sources-head {
+    position: sticky;
+    top: -6px;
+    z-index: 1;
+    margin: -6px -6px 0;
+    padding: 6px 6px 0;
+    background: rgba(8, 8, 12, 0.98);
+  }
+
+  .sources-divider {
+    height: 1px;
+    margin: 4px 0;
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .source {

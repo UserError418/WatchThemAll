@@ -59,7 +59,8 @@
 
 import type { Provider } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
-import { probeStream, type ProbeSubject, type StreamVerdict } from './streamprobe'
+import type { ProbeSubject, StreamVerdict } from './streamprobe'
+import { probeQuality } from './qualityprobe'
 import { providerRank } from '@shared/scanrank'
 
 /**
@@ -88,6 +89,13 @@ const VERDICT: Record<StreamVerdict, ProbeVerdict> = {
   empty: 'dead',
   unreachable: 'dead',
   'no-template': 'dead',
+}
+
+/** What one probe of one provider settles. */
+interface Measured {
+  verdict: ProbeVerdict
+  ms: number | null
+  quality: number | null
 }
 
 export interface ScanServiceOptions {
@@ -173,6 +181,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
       const providers = options.providers()
       const verdicts: Record<string, ProbeVerdict> = {}
+      /** Milliseconds to the first media request, kept for streaming providers only. */
+      const timings: Record<string, number> = {}
+      /** Best quality class offered, for streaming providers whose stream says. */
+      const qualities: Record<string, number> = {}
       const total = providers.length
 
       let confirming = false
@@ -184,15 +196,48 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
+          timings: { ...timings },
+          qualities: { ...qualities },
           confirming,
           finished,
           cancelled: finished && token !== mine,
         })
       }
 
-      const probe = async (provider: Provider): Promise<ProbeVerdict> => {
-        const result = await probeStream(provider, subject, { timeoutMs, frameUrl: options.frameUrl })
-        return VERDICT[result.verdict]
+      /**
+       * One measurement: the verdict, how long the stream took to appear, and
+       * the best quality it offers.
+       *
+       * The time is the probe's own `timeToMediaMs` — from the start of the
+       * load to the first media request — which is the moment the source
+       * stopped being a page and started being a stream. Measured under the
+       * fan-out's contention, so it is fair between providers of one scan
+       * rather than a figure for a quiet line.
+       *
+       * The quality is `probeQuality`'s scan reading, which stops where the
+       * probe always stopped; see `QualityMode` for why it must not linger.
+       */
+      const probe = async (provider: Provider): Promise<Measured> => {
+        const result = await probeQuality(provider, subject, {
+          mode: 'scan',
+          timeoutMs,
+          frameUrl: options.frameUrl,
+        })
+        const verdict = VERDICT[result.verdict]
+        const streamed = verdict === 'stream'
+        return {
+          verdict,
+          ms: streamed ? result.timeToMediaMs : null,
+          quality: streamed ? result.judgement.best : null,
+        }
+      }
+
+      const settle = (provider: Provider, measured: Measured): void => {
+        verdicts[provider.id] = measured.verdict
+        if (measured.ms !== null) timings[provider.id] = measured.ms
+        else delete timings[provider.id]
+        if (measured.quality !== null) qualities[provider.id] = measured.quality
+        else delete qualities[provider.id]
       }
 
       publish(providers[0] ?? null, false)
@@ -214,12 +259,12 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           if (!provider) return
 
           publish(provider, false)
-          const verdict = await probe(provider)
+          const measured = await probe(provider)
 
           // Checked again after the await: the user may have cancelled during
           // the probe, and a late write would corrupt the next run's verdicts.
           if (token !== mine) return
-          verdicts[provider.id] = verdict
+          settle(provider, measured)
           publish(provider, false)
         }
       }
@@ -246,14 +291,14 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         publish(provider, false)
         const second = await probe(provider)
         if (token !== mine) break
-        if (providerRank(undefined, second) < providerRank(undefined, verdicts[provider.id])) {
-          verdicts[provider.id] = second
+        if (providerRank(undefined, second.verdict) < providerRank(undefined, verdicts[provider.id])) {
+          settle(provider, second)
         }
         publish(provider, false)
       }
       confirming = false
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings, qualities }
       if (token === mine) running = false
       publish(null, true)
       return scan

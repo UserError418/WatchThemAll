@@ -173,6 +173,31 @@ the scan fetches the newest few captured requests with their original headers,
 a dozen at most per provider, and reads the content type and first line, which
 is how the cast feature already decides what it can hand a television.
 
+**Quality comes from the stream, never from the page.** Once a provider
+streams, the scan reads its oldest few captured playlists the same way — the
+master comes first, and it is the only playlist that lists renditions with
+their sizes — and parses them with the desktop's own parser
+(`src/shared/streamquality.ts`). A source with no master serves one rendition,
+and that rendition states its own size in its first bytes: the fMP4 init
+segment, or the H.264 header at the start of the first MPEG-TS segment. The
+scan fetches the first 64 KB of it (`capture.peekBytes`, which asks
+`fetchText` for base64 so the binary arrives intact) and reads it with the
+shared parsers (`src/shared/streamheader.ts`), but only from a playlist at least
+ten minutes long, since an ad served as its own playlist states its size just
+as plainly. Playlists are read whole for that (`capture.read`), not from the
+16 KB peek, which a film's media playlist runs past. Because the playlist
+that proved the stream is not always one that can be read, the scan keeps
+looking for up to four seconds after the stream's time was taken.
+
+Two gaps, both measured on the emulator (2026-09-26): the desktop can also read
+the picture's size off the provider's `<video>`, which is the answer for a
+source serving one whole MP4 or MKV file. The phone cannot reach into a
+cross-origin frame, so those sources show no quality here. And VidSrc's
+playlists answer every re-request from the phone with 403 "ip … not in range",
+so VidSrc shows no quality on the phone while the desktop reads its ladder.
+Videasy (fMP4 init segment), VidFlix and 111Movies (first TS segment) read the
+same on both.
+
 **The probe surface is visible because it has to be.** Several providers resolve
 no stream until something clicks, and a cross-origin iframe can only be clicked
 by a real touch at real coordinates — `ScanPlugin.tap` dispatches a

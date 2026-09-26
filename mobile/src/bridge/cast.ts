@@ -49,6 +49,8 @@ interface CastNative {
     url: string
     headers: Record<string, string>
     limitBytes?: number
+    /** `base64` returns the raw bytes, encoded; see `capture.peekBytes`. */
+    encoding?: 'text' | 'base64'
   }): Promise<{ status: number; contentType: string; body: string }>
   startProxy(options: {
     playlists: Record<string, string>
@@ -125,10 +127,52 @@ export const capture = {
       limitBytes: PEEK_LIMIT_BYTES,
     })
   },
+  /**
+   * Fetch a captured playlist whole, replaying its headers.
+   *
+   * For the scan's quality reading, where `peek`'s 16 KB is not enough: a
+   * film's media playlist runs past it, and the length the reading checks
+   * against the title (see `lengthVerdict`) is the sum of every segment's.
+   */
+  read(candidate: Candidate): Promise<{ status: number; contentType: string; body: string }> {
+    return Cast.fetchText({
+      url: candidate.url,
+      headers: replayable(candidate.headers),
+      limitBytes: SNIFF_LIMIT_BYTES,
+    })
+  },
+  /**
+   * Fetch the first bytes of a URL a captured request led to, as bytes.
+   *
+   * For the scan's quality reading: a media playlist's init segment, or the
+   * head of its first segment, is where the stream states its picture size.
+   * Neither is in the capture buffer by then, necessarily, so this takes the
+   * URL from the playlist and the headers from the playlist's own request —
+   * the same player asked the same host a moment earlier.
+   */
+  async peekBytes(
+    url: string,
+    via: Candidate,
+    range: { offset: number; length: number },
+  ): Promise<{ status: number; bytes: Uint8Array }> {
+    const response = await Cast.fetchText({
+      url,
+      headers: { ...replayable(via.headers), Range: `bytes=${range.offset}-${range.offset + range.length - 1}` },
+      limitBytes: range.length,
+      encoding: 'base64',
+    })
+    const binary = atob(response.body)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return { status: response.status, bytes }
+  },
 }
 
-/** Enough for a playlist's first lines and a response type; see `capture.peek`. */
-const PEEK_LIMIT_BYTES = 16 * 1024
+/**
+ * Enough for a playlist's first lines and a response type; see `capture.peek`.
+ * Exported so a caller can tell a whole body from one this cut short.
+ */
+export const PEEK_LIMIT_BYTES = 16 * 1024
 
 /**
  * How much of a candidate to read while deciding what it is.

@@ -25,9 +25,10 @@ import type {
   WatchedEntry,
   WatchlistEntry,
 } from '@shared/types'
-import { resumeKey } from '@shared/types'
+import { resumeKey, type SourceSortKey } from '@shared/types'
 import { legacyRatingOf, ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
+import { DEFAULT_SETTINGS } from '@shared/store/core'
 
 /** `crypto.randomUUID` needs a secure context; file:// in Electron qualifies. */
 const newId = (): string => crypto.randomUUID()
@@ -80,14 +81,9 @@ class Library {
   watched = $state<WatchedEntry[]>([])
   /** The user's own 1–10 ratings, which steer the tailored Browse row. */
   ratings = $state<TitleRating[]>([])
-  settings = $state<StoreShape['settings']>({
-    releaseCheckMinutes: 60,
-    notificationsEnabled: true,
-    defaultProviderId: null,
-    previewAudio: true,
-    historyCollapsed: false,
-    skipIntro: true,
-  })
+  // The store's own defaults rather than a copy: a copy here already lacked a
+  // field once, and the renderer would have shown the wrong order until load.
+  settings = $state<StoreShape['settings']>({ ...DEFAULT_SETTINGS, sourceOrder: [...DEFAULT_SETTINGS.sourceOrder] })
 
   loaded = $state(false)
 
@@ -1077,6 +1073,15 @@ class Library {
    */
   setSkipIntro(on: boolean): void {
     this.settings = { ...this.settings, skipIntro: on }
+    void this.persist({ settings: this.settings })
+  }
+
+  /**
+   * How sources are ordered inside each group — works, may work, does not
+   * work — for the source lists and Automatic alike. See `scanAwareOrder`.
+   */
+  setSourceOrder(order: SourceSortKey[]): void {
+    this.settings = { ...this.settings, sourceOrder: [...order] }
     void this.persist({ settings: this.settings })
   }
 }

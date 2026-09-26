@@ -23,6 +23,8 @@ import { isLegacyRating, isRatingValue, legacyRatingOf, valueOfLegacy } from '..
 import { SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
 import { DEFAULT_SETTINGS, emptyDocument } from './core'
+import { normalizeSourceOrder } from '../scanrank'
+import { QUALITY_CLASSES } from '../streamquality'
 
 /** Seasons and episodes are 1-based; anything else is a parse failure. */
 function clampPosition(value: number | null | undefined): number {
@@ -149,6 +151,8 @@ function fromTyped(
    * why.
    */
   doc.settings = { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) }
+  // Validated rather than trusted: it decides what Automatic plays.
+  doc.settings.sourceOrder = normalizeSourceOrder(doc.settings.sourceOrder)
 
   doc.activeProviderIds = stringList(raw.activeProviderIds)
   doc.knownProviderIds = stringList(raw.knownProviderIds)
@@ -312,7 +316,30 @@ function providerScans(value: unknown): ProviderScan[] {
         if (PROBE_VERDICTS.has(verdict as ProbeVerdict)) verdicts[id] = verdict as ProbeVerdict
       }
     }
-    return [{ titleKey: scan.titleKey, at, verdicts }]
+
+    // Kept only where they can mean something: a finite, non-negative duration
+    // for a provider this scan says streamed. A timing beside any other verdict
+    // describes a moment that did not happen.
+    const timings: Record<string, number> = {}
+    if (scan.timings && typeof scan.timings === 'object') {
+      for (const [id, ms] of Object.entries(scan.timings as Record<string, unknown>)) {
+        if (verdicts[id] === 'stream' && typeof ms === 'number' && Number.isFinite(ms) && ms >= 0) {
+          timings[id] = ms
+        }
+      }
+    }
+
+    // The same rule for quality, and only the classes a label can show: a
+    // stored 800 would print as "800p", which no player's menu says.
+    const qualities: Record<string, number> = {}
+    if (scan.qualities && typeof scan.qualities === 'object') {
+      for (const [id, quality] of Object.entries(scan.qualities as Record<string, unknown>)) {
+        if (verdicts[id] === 'stream' && QUALITY_CLASSES.includes(quality as number)) {
+          qualities[id] = quality as number
+        }
+      }
+    }
+    return [{ titleKey: scan.titleKey, at, verdicts, timings, qualities }]
   })
 }
 

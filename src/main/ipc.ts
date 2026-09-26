@@ -90,10 +90,13 @@ export interface IpcDeps {
    */
   sync: SyncService | null
   /**
-   * The enabled providers ordered by what has actually streamed for this
-   * request, with the fallback chain spread across distinct backends.
+   * The enabled providers in the order Automatic tries them for this title.
+   *
+   * Takes a title rather than a whole play request because the ordering only
+   * ever depended on which title it is — and the source pickers need the same
+   * order for a title nobody has pressed play on yet.
    */
-  orderProviders: (req: PlayRequest) => Provider[]
+  orderProviders: (media: TitleRef) => Provider[]
   /** Move the inline player's video to the rectangle the renderer reserved. */
   setPlayerBounds: (bounds: PlayerBounds) => void
   /** Stop playing and put the app's chrome back. */
@@ -198,6 +201,9 @@ export function registerIpc(deps: IpcDeps): void {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
       scan: freshScan(providerScans, key),
+      // From the same store read a moment later, by the function Automatic
+      // itself calls — so the rows and the fallback chain cannot disagree.
+      order: deps.orderProviders(media).map((provider) => provider.id),
     }
   })
 
@@ -229,10 +235,10 @@ export function registerIpc(deps: IpcDeps): void {
         season: target?.season,
         episode: target?.episode,
         label: key,
-        // Only `runtimecheck` reads this, and the network probe does not run it
-        // — a scan asks whether a stream exists, not whether it is the right
-        // programme. Inventing a number here would imply a check that is not
-        // happening.
+        // A scan asks whether a stream exists, not whether it is the right
+        // programme, so it has no runtime and invents none. The one reader is
+        // the quality reading's `lengthVerdict`, which without it still
+        // refuses an ad's size, just not a wrong programme's.
         runtimeMinutes: null,
       })
 

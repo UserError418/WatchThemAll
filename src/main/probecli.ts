@@ -28,6 +28,8 @@ import {
 } from './streamprobe'
 import { extractStream, type ExtractResult } from './streamextract'
 import { probeThroughPlayer, score, type UiProbeResult, type UiProbeScore } from './probeui'
+import { probeQuality, type QualityProbeResult } from './qualityprobe'
+import type { QualityOutcome } from '@shared/streamquality'
 import { playerShellUrl, startRendererServer, stopRendererServer } from './localserver'
 
 /**
@@ -693,11 +695,150 @@ export async function runUiProbeCli(providers: Provider[], argv: string[]): Prom
   }
 }
 
+/**
+ * The `--probe-quality` mode: can the app tell each source's best quality?
+ *
+ * The measurement that decides whether a quality label is worth building — see
+ * `qualityprobe.ts` for how one reading is taken and `judgeQuality` for what
+ * each outcome means. Sequential, like the other modes, and for the same
+ * reason: providers sharing a line would starve each other, and a starved
+ * adaptive player picks a lower rung, which here would read as lower quality.
+ *
+ *   npm run probe:quality -- --canaries content
+ *   npm run probe:quality -- --canaries content --only vidsrc-me --json q.json
+ *   npm run probe:quality -- --canaries content --scan-mode   # exactly as the scan reads it
+ */
+export async function runQualityCli(providers: Provider[], argv: string[]): Promise<void> {
+  const options = parseArgs(argv)
+  const catalogue = options.catalog ? readCandidateCatalog(options.catalog) : providers
+  const targets = options.only.length
+    ? catalogue.filter((p) => options.only.includes(p.id))
+    : catalogue
+  const subjects = options.canaries.slice(0, Math.max(1, options.titles ?? options.canaries.length))
+
+  console.log(`\nReading the best quality of ${targets.length} provider(s) on ${subjects.length} titles.`)
+  console.log(
+    'L ladder · P player\'s own list · F one file · R one rendition · U HLS naming no sizes · S sealed · ? unreadable · - no stream\n',
+  )
+
+  const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
+  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl)
+  const results: QualityProbeResult[] = []
+
+  for (const [index, provider] of targets.entries()) {
+    process.stderr.write(`\n[${index + 1}/${targets.length}] ${provider.id}\n`)
+    const mine: QualityProbeResult[] = []
+    for (const subject of subjects) {
+      const result = await probeQuality(provider, subject, {
+        mode: argv.includes('--scan-mode') ? 'scan' : 'measure',
+        // The scan's own budget, so "no stream" means what it means there.
+        timeoutMs: options.timeoutMs ?? 18_000,
+        frameUrl,
+        verbose: options.verbose,
+      })
+      mine.push(result)
+      results.push(result)
+      process.stderr.write(`      ${describeQuality(result)}\n`)
+    }
+
+    const marks = mine.map((r) => QUALITY_MARK[r.judgement.outcome]).join(' ')
+    const known = mine.map((r) => r.judgement.best).filter((b): b is number => b !== null)
+    const streamed = mine.filter((r) => r.judgement.outcome !== 'no-stream').length
+    const best = known.length > 0 ? `${Math.max(...known)}p` : '—'
+    console.log(
+      `  ${marks}  ${provider.id.padEnd(16)} best ${best.padEnd(6)} known on ${known.length}/${streamed} streamed`,
+    )
+  }
+
+  stopRendererServer()
+  summariseQuality(results)
+
+  if (options.json) {
+    await writeFile(options.json, JSON.stringify(results, null, 2))
+    console.log(`\nFull report written to ${options.json}`)
+  }
+}
+
+const QUALITY_MARK: Record<QualityOutcome, string> = {
+  ladder: 'L',
+  player: 'P',
+  'single-file': 'F',
+  'single-rendition': 'R',
+  unlabelled: 'U',
+  sealed: 'S',
+  unreadable: '?',
+  'no-stream': '-',
+}
+
+/** One title's line of progress: the outcome, then the evidence behind it. */
+function describeQuality(r: QualityProbeResult): string {
+  const j = r.judgement
+  const parts = [QUALITY_MARK[j.outcome], r.subject.padEnd(26), j.outcome.padEnd(11)]
+  parts.push(j.best !== null ? `best ${j.best}p` : 'best ?')
+  if (r.video) {
+    const minutes = Number.isFinite(r.video.duration) ? `${Math.round(r.video.duration / 60)}m` : 'live'
+    parts.push(`playing ${r.video.width}x${r.video.height} ${minutes}`)
+  }
+  if (j.decoy) parts.push('DECOY (length does not fit)')
+  if (j.contradiction) parts.push('CONTRADICTION (picture above ladder)')
+  const statuses = r.playlists.map((p) => `${p.kind}:${p.status}`).join(',')
+  if (statuses) parts.push(`[${statuses}]`)
+  // What each stream's header declared, beside the picture, so the two can be compared.
+  const headers = r.playlists
+    .filter((p) => p.header && p.header.status !== null)
+    .map((p) => {
+      const h = p.header!
+      return `${h.source}:${h.size ? `${h.size.width}x${h.size.height}` : `${h.status}?${h.lead?.slice(0, 8) ?? ''}`}`
+    })
+  if (headers.length) parts.push(headers.join(','))
+  if (r.wholeFiles.length) parts.push(`files:${r.wholeFiles.length}`)
+  return parts.join('  ')
+}
+
+/**
+ * The answer to the question the mode exists for.
+ *
+ * Counted per provider, because the label would be per provider: one that names
+ * its best quality on every title it streams could carry one, one that never
+ * does could not, and one that sometimes does is the case to look at by hand.
+ */
+function summariseQuality(results: QualityProbeResult[]): void {
+  const byProvider = new Map<string, QualityProbeResult[]>()
+  for (const r of results) byProvider.set(r.providerId, [...(byProvider.get(r.providerId) ?? []), r])
+
+  const always: string[] = []
+  const sometimes: string[] = []
+  const never: string[] = []
+  const silent: string[] = []
+  for (const [id, mine] of byProvider) {
+    const streamed = mine.filter((r) => r.judgement.outcome !== 'no-stream')
+    const known = streamed.filter((r) => r.judgement.best !== null)
+    if (streamed.length === 0) silent.push(id)
+    else if (known.length === streamed.length) always.push(id)
+    else if (known.length > 0) sometimes.push(id)
+    else never.push(id)
+  }
+
+  const streaming = byProvider.size - silent.length
+  console.log('\n─── Best quality readable ───')
+  console.log(`  on every title it streamed  ${always.length}/${streaming}  ${always.join(' ')}`)
+  console.log(`  on some titles              ${sometimes.length}/${streaming}  ${sometimes.join(' ')}`)
+  console.log(`  never                       ${never.length}/${streaming}  ${never.join(' ')}`)
+  console.log(`  streamed nothing            ${silent.length}  ${silent.join(' ')}`)
+
+  const flagged = results.filter((r) => r.judgement.decoy || r.judgement.contradiction)
+  if (flagged.length) {
+    console.log('\n─── Readings to look at by hand ───')
+    for (const r of flagged) console.log(`  ${r.providerId.padEnd(16)} ${describeQuality(r)}`)
+  }
+}
+
 export function isProbeRun(argv: string[]): boolean {
   return (
     argv.includes('--probe-providers') ||
     argv.includes('--extract-streams') ||
-    argv.includes('--probe-ui')
+    argv.includes('--probe-ui') ||
+    argv.includes('--probe-quality')
   )
 }
 
@@ -706,6 +847,7 @@ export async function probeAndQuit(providers: Provider[], argv: string[]): Promi
   try {
     if (argv.includes('--extract-streams')) await runExtractCli(providers, argv)
     else if (argv.includes('--probe-ui')) await runUiProbeCli(providers, argv)
+    else if (argv.includes('--probe-quality')) await runQualityCli(providers, argv)
     else await runProbeCli(providers, argv)
   } catch (err) {
     console.error('[probe] failed:', err)

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import type { Provider } from '@shared/types'
+import type { Provider, SourceSortKey } from '@shared/types'
 import type { ProviderScan } from '@shared/ipc'
 import {
   MAX_SCANS,
@@ -139,6 +139,77 @@ describe('scanAwareOrder', () => {
       },
     )
     expect(order.map((p) => p.id)).toEqual(['measured', 'played', 'unknown', 'broken'])
+  })
+})
+
+/**
+ * The user's chain of keys inside each tier: `Settings.sourceOrder`.
+ *
+ * Five streaming providers, listed a–e, with start times and qualities chosen
+ * so every key gives a different answer — a test that passes under the wrong
+ * key proves nothing.
+ */
+describe('scanAwareOrder with a source order', () => {
+  const five = ['a', 'b', 'c', 'd', 'e'].map(provider)
+  const measured = (
+    timings: Record<string, number>,
+    qualities: Record<string, number> = {},
+    verdicts: ProviderScan['verdicts'] = { a: 'stream', b: 'stream', c: 'stream', d: 'stream', e: 'stream' },
+  ): ProviderScan => ({ ...scanOf(verdicts), timings, qualities })
+  const ids = (list: Provider[]): string[] => list.map((p) => p.id)
+  const run = (scan: ProviderScan, sourceOrder: SourceSortKey[], favouriteIds: string[] = []) =>
+    ids(scanAwareOrder(five, {}, { order: ['a', 'b', 'c', 'd', 'e'], favouriteIds, scan, sourceOrder }))
+
+  it('ignores speed and quality while the list comes first, which is the default', () => {
+    const scan = measured({ a: 9_000, b: 1_000 }, { a: 480, b: 1080 })
+    expect(run(scan, ['list', 'speed', 'quality'])).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('puts the fastest first when speed leads', () => {
+    const scan = measured({ a: 9_000, b: 1_000, c: 4_000, d: 2_000, e: 14_000 })
+    expect(run(scan, ['speed', 'quality', 'list'])).toEqual(['b', 'd', 'c', 'a', 'e'])
+  })
+
+  it('lets the next key decide between sources of about the same speed', () => {
+    // b and d are within 30% of each other; d offers the better picture.
+    const scan = measured({ b: 3_000, d: 3_600, a: 9_000 }, { b: 720, d: 1080 })
+    expect(run(scan, ['speed', 'quality', 'list']).slice(0, 3)).toEqual(['d', 'b', 'a'])
+  })
+
+  it('measures "the same speed" from the fastest of a group, so the answer does not drift', () => {
+    // 1.0 is close to 1.25, and 1.25 to 1.6, but 1.6 is not close to 1.0.
+    const scan = measured({ c: 1_600, b: 1_250, a: 1_000 }, { c: 1080, b: 480, a: 480 })
+    expect(run(scan, ['speed', 'quality', 'list']).slice(0, 3)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('treats starts less than half a second apart as the same speed', () => {
+    // 0.7 s and 1.1 s are 57% apart, but the phone cannot time finer than 0.5 s.
+    const scan = measured({ a: 1_100, b: 700 }, { a: 1080, b: 720 })
+    expect(run(scan, ['speed', 'quality', 'list']).slice(0, 2)).toEqual(['a', 'b'])
+  })
+
+  it('breaks the last ties with favourites, then the provider order', () => {
+    const scan = measured({ a: 2_000, b: 2_100, c: 2_050 })
+    expect(run(scan, ['speed', 'quality', 'list'], ['c'])).toEqual(['c', 'a', 'b', 'd', 'e'])
+  })
+
+  it('orders by quality first when asked, and by speed among equals', () => {
+    const scan = measured({ a: 5_000, b: 1_000, c: 2_000 }, { a: 1080, b: 720, c: 1080 })
+    expect(run(scan, ['quality', 'speed', 'list']).slice(0, 3)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('puts a source with no measurement after the measured ones in its tier', () => {
+    const scan = measured({ c: 3_000 }, { e: 1080 })
+    expect(run(scan, ['speed', 'list', 'quality'])[0]).toBe('c')
+    expect(run(scan, ['quality', 'list', 'speed'])[0]).toBe('e')
+  })
+
+  it('never lets speed lift a source out of its tier', () => {
+    // "may work" is below "works" however it is sorted inside.
+    const scan = measured({ a: 500, b: 12_000 }, {}, { a: 'unsure', b: 'stream', c: 'dead' })
+    const order = run(scan, ['speed', 'quality', 'list'])
+    expect(order.indexOf('b')).toBeLessThan(order.indexOf('a'))
+    expect(order.at(-1)).toBe('c')
   })
 })
 

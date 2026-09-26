@@ -51,7 +51,7 @@
  * and the `lint-imports` contract that guards it.
  */
 
-import type { Provider } from '@shared/types'
+import type { Provider, SourceSortKey } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 
@@ -155,57 +155,144 @@ export function pruneScans(
 export { providerRank } from '@shared/scanrank'
 
 export interface ScanOrderOptions {
-  /** The user's global provider order, best first. The baseline, not a tiebreak. */
+  /** The user's global provider order, best first. */
   order?: readonly string[]
-  /** Providers the user starred. They lead each tier. */
+  /** Providers the user starred. They lead their tier when `list` decides. */
   favouriteIds?: readonly string[]
   /** The fresh scan for this title, if there is one. */
   scan?: ProviderScan | null
+  /**
+   * What decides within a tier, in priority order — `Settings.sourceOrder`.
+   * Defaults to the user's list alone, which is the order before the setting
+   * existed.
+   */
+  sourceOrder?: readonly SourceSortKey[]
 }
+
+/**
+ * Two start times count as the same speed within this factor of the faster.
+ *
+ * Relative, not absolute, because that is how the measurement wobbles: the
+ * same provider has started in 12 s and in 15 s on consecutive runs, while a
+ * fast one moves by a few tenths. A fixed 0.3 s would split slow providers on
+ * noise and still call 0.8 s and 1.0 s different.
+ */
+export const SAME_SPEED_FACTOR = 1.3
+
+/**
+ * ...and never closer than this. The phone times a stream to the poll that
+ * noticed it, every half second, so it cannot tell two starts apart any finer.
+ */
+export const SAME_SPEED_FLOOR_MS = 500
 
 /**
  * Order providers for Automatic, best first, using measurement where it exists.
  *
- * This is `automaticOrder` with a scan folded in, and it degrades to exactly
- * that function's behaviour when there is no scan: without verdicts every
- * provider lands in tier 1, 3 or 4, which is the same worked-first-then-rest
- * split, with the user's order and favourites deciding within each.
+ * Two layers. The outer one is fixed: `providerRank`'s tiers, so a source that
+ * works always comes before one that may work, and that before one that does
+ * not — a preference for speed or quality is not a licence to try a dead
+ * source first. It degrades to `automaticOrder` when there is no scan: without
+ * verdicts every provider lands in tier 1, 3 or 4, the same worked-first split.
  *
- * The user's order remains the baseline inside every tier. That is the rule the
- * Providers panel promises, and a measurement is not a licence to break it —
- * the scan decides which *group* a provider is in, never where it sits among
- * its equals.
+ * The inner layer is the user's `sourceOrder`: a chain of keys, each deciding
+ * only among the providers the keys before it left tied. Speed groups sources
+ * that started within `SAME_SPEED_FACTOR` of each other; quality groups by
+ * class; the list — favourites first, then the provider order — orders
+ * completely. With the default chain, list first, this is exactly the order
+ * the Providers panel promises and the scan decides nothing but the tier.
+ *
+ * A provider with no measurement for a key sorts after those with one, inside
+ * its group: known evidence before no evidence, as in the tiers.
  */
 export function scanAwareOrder(
   providers: Provider[],
   titleOutcomes: Record<string, TitleOutcome>,
   options: ScanOrderOptions = {},
 ): Provider[] {
-  const { order = [], favouriteIds = [], scan = null } = options
+  const { order = [], favouriteIds = [], scan = null, sourceOrder = ['list'] } = options
   const favourites = new Set(favouriteIds)
   const place = new Map(order.map((id, index) => [id, index]))
 
-  return providers
+  // Everything starts in list order, so every grouping below is stable with
+  // respect to it and `list` needs no work of its own when it is reached.
+  const inListOrder = providers
     .map((provider, index) => ({ provider, index }))
-    .sort((a, b) => {
-      const rankA = providerRank(titleOutcomes[a.provider.id], scan?.verdicts[a.provider.id])
-      const rankB = providerRank(titleOutcomes[b.provider.id], scan?.verdicts[b.provider.id])
-      if (rankA !== rankB) return rankA - rankB
-
-      // Favourites lead their tier, not the whole list: a starred provider that
-      // was just measured dead must not be tried before one measured working.
-      const favA = favourites.has(a.provider.id) ? 0 : 1
-      const favB = favourites.has(b.provider.id) ? 0 : 1
-      if (favA !== favB) return favA - favB
-
-      return (
+    .sort(
+      (a, b) =>
+        (favourites.has(a.provider.id) ? 0 : 1) - (favourites.has(b.provider.id) ? 0 : 1) ||
         (place.get(a.provider.id) ?? order.length) - (place.get(b.provider.id) ?? order.length) ||
         // Catalogue order decides between two providers the user has not
         // placed, so the result does not depend on sort implementation.
-        a.index - b.index
-      )
-    })
+        a.index - b.index,
+    )
     .map((entry) => entry.provider)
+
+  const tiers = new Map<number, Provider[]>()
+  for (const provider of inListOrder) {
+    const rank = providerRank(titleOutcomes[provider.id], scan?.verdicts[provider.id])
+    tiers.set(rank, [...(tiers.get(rank) ?? []), provider])
+  }
+
+  const measured = {
+    speed: (id: string) => scan?.timings?.[id],
+    quality: (id: string) => scan?.qualities?.[id],
+  }
+  return [...tiers.entries()]
+    .sort(([a], [b]) => a - b)
+    .flatMap(([, tier]) => orderWithin(tier, sourceOrder, measured))
+}
+
+/** Order one tier by the chain of keys, each breaking only the ties of the last. */
+function orderWithin(
+  providers: Provider[],
+  keys: readonly SourceSortKey[],
+  measured: Record<'speed' | 'quality', (id: string) => number | undefined>,
+): Provider[] {
+  const [key, ...rest] = keys
+  // `list` is the order they arrived in, and it leaves no ties behind.
+  if (key === undefined || key === 'list' || providers.length < 2) return providers
+  const groups = key === 'speed' ? bySpeed(providers, measured.speed) : byQuality(providers, measured.quality)
+  return groups.flatMap((group) => orderWithin(group, rest, measured))
+}
+
+/**
+ * Fastest first, in groups that count as the same speed.
+ *
+ * Grouped from the fastest down, each group holding everything within the
+ * factor of its own first member. Pairwise "close enough" is not transitive —
+ * 1.0, 1.25 and 1.55 s would each be close to the next — so the group's
+ * fastest is the one reference, which keeps the answer the same whatever order
+ * the providers arrive in.
+ */
+function bySpeed(providers: Provider[], ms: (id: string) => number | undefined): Provider[][] {
+  const timed = providers
+    .filter((p) => ms(p.id) !== undefined)
+    .sort((a, b) => (ms(a.id) ?? 0) - (ms(b.id) ?? 0))
+  const groups: Provider[][] = []
+  let limit = -Infinity
+  for (const provider of timed) {
+    const time = ms(provider.id) ?? 0
+    if (time > limit) {
+      groups.push([])
+      limit = Math.max(time * SAME_SPEED_FACTOR, time + SAME_SPEED_FLOOR_MS)
+    }
+    groups[groups.length - 1]?.push(provider)
+  }
+  // Each group back into list order, so the next key sees ties as the user
+  // placed them rather than as the clock happened to fall.
+  const listed = (group: Provider[]): Provider[] => providers.filter((p) => group.includes(p))
+  const untimed = providers.filter((p) => ms(p.id) === undefined)
+  return [...groups.map(listed), ...(untimed.length ? [untimed] : [])]
+}
+
+/** Best quality first, one group per class. */
+function byQuality(providers: Provider[], quality: (id: string) => number | undefined): Provider[][] {
+  const classes = [...new Set(providers.map((p) => quality(p.id)).filter((q): q is number => q !== undefined))]
+  const unknown = providers.filter((p) => quality(p.id) === undefined)
+  return [
+    ...classes.sort((a, b) => b - a).map((c) => providers.filter((p) => quality(p.id) === c)),
+    ...(unknown.length ? [unknown] : []),
+  ]
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "watchthemall",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "description": "Desktop client for navigating video embed providers, with a TMDB browse surface and episode release tracking.",
   "main": "out/main/index.js",
   "scripts": {
@@ -23,7 +23,8 @@
     "apk": "scripts/build-apk.sh",
     "probe:streams": "electron-vite build && electron . --no-sandbox --extract-streams",
     "probe:playback": "scripts/probe-playback.py",
-    "probe:ui": "electron-vite build && electron . --no-sandbox --probe-ui"
+    "probe:ui": "electron-vite build && electron . --no-sandbox --probe-ui",
+    "probe:quality": "electron-vite build && electron . --no-sandbox --probe-quality"
   },
   "build": {
     "appId": "net.watchthemall.app",

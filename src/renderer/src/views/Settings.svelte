@@ -24,6 +24,7 @@
   import MalImportDialog from '../components/MalImportDialog.svelte'
   import { library } from '../lib/library.svelte'
   import type { MalPreview } from '@shared/ipc'
+  import type { SourceSortKey } from '@shared/types'
 
   let note = $state<string | null>(null)
   /** Shown after Import is pressed, until a source is chosen or dismissed. */
@@ -58,6 +59,37 @@
     // would keep showing the pre-import catalogue.
     await library.reload()
     note = 'Catalogue imported.'
+  }
+
+  /** What each ordering key means, in the words the Settings card uses. */
+  const SORT_KEY_TEXT: Record<SourceSortKey, { name: string; detail: string }> = {
+    speed: {
+      name: 'Speed',
+      detail: 'How fast the stream started in the last test. Within 30% counts as the same.',
+    },
+    quality: {
+      name: 'Quality',
+      detail: 'The best quality the stream offers, where it says so.',
+    },
+    list: {
+      name: 'Your list',
+      detail: 'Favourites first, then your order in the Providers panel.',
+    },
+  }
+
+  const sourceOrder = $derived(library.settings.sourceOrder)
+  /**
+   * Keys below "Your list" never get a say: it orders completely. Shown dimmed
+   * rather than hidden, so moving one up is an obvious thing to try.
+   */
+  const listAt = $derived(sourceOrder.indexOf('list'))
+
+  function moveSortKey(index: number, by: -1 | 1): void {
+    const target = index + by
+    if (target < 0 || target >= sourceOrder.length) return
+    const next = [...sourceOrder]
+    ;[next[index], next[target]] = [next[target] as SourceSortKey, next[index] as SourceSortKey]
+    library.setSourceOrder(next)
   }
 
   async function importMal(): Promise<void> {
@@ -109,6 +141,43 @@
   <section class="card">
     <h2>Sync</h2>
     <SyncPanel />
+  </section>
+
+  <section class="card">
+    <h2>Source order</h2>
+    <p class="hint">
+      Sources that work always come first, then those that may work, then those that do not.
+      Within each group, this decides the order — in the source lists and for Automatic. Speed
+      and quality come from <strong>Test all sources</strong>.
+    </p>
+
+    <ol class="sort-keys">
+      {#each sourceOrder as key, index (key)}
+        <li class:moot={index > listAt}>
+          <span class="rank">{index + 1}</span>
+          <span class="what">
+            <strong>{SORT_KEY_TEXT[key].name}</strong>
+            <span>
+              {index > listAt
+                ? 'No effect while below Your list, which already decides every tie.'
+                : SORT_KEY_TEXT[key].detail}
+            </span>
+          </span>
+          <button
+            class="move"
+            aria-label="Move {SORT_KEY_TEXT[key].name} up"
+            disabled={index === 0}
+            onclick={() => moveSortKey(index, -1)}>↑</button
+          >
+          <button
+            class="move"
+            aria-label="Move {SORT_KEY_TEXT[key].name} down"
+            disabled={index === sourceOrder.length - 1}
+            onclick={() => moveSortKey(index, 1)}>↓</button
+          >
+        </li>
+      {/each}
+    </ol>
   </section>
 
   <section class="card">
@@ -239,6 +308,69 @@
     align-items: center;
     gap: var(--space-2, 8px);
     font-size: var(--text-sm, 13px);
+  }
+
+  .sort-keys {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2, 8px);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .sort-keys li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3, 12px);
+    padding: var(--space-2, 8px) var(--space-3, 12px);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    border-radius: var(--radius-md, 10px);
+    background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  }
+
+  /* Below "Your list": still movable, visibly not in effect. */
+  .sort-keys li.moot {
+    opacity: 0.55;
+  }
+
+  .rank {
+    width: 1.5em;
+    color: var(--text-tertiary, var(--text-secondary));
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .what {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--text-sm, 13px);
+  }
+
+  .what span {
+    color: var(--text-secondary);
+    font-size: var(--text-xs, 12px);
+  }
+
+  .move {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    border-radius: var(--radius-sm, 6px);
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .move:hover:not(:disabled) {
+    border-color: var(--accent, #ffce6a);
+  }
+
+  .move:disabled {
+    opacity: 0.3;
+    cursor: default;
   }
 
   .note {

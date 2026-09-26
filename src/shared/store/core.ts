@@ -90,6 +90,9 @@ export const DEFAULT_SETTINGS: Settings = {
   previewAudio: true,
   historyCollapsed: false,
   skipIntro: true,
+  // The user's own order first: exactly the behaviour before this setting
+  // existed, so nobody's Automatic changes until they choose otherwise.
+  sourceOrder: ['list', 'speed', 'quality'],
 }
 
 export function emptyDocument(deviceId = newDeviceId()): StoreDocument {
