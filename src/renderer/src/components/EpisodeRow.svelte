@@ -7,7 +7,7 @@
    * dimmed and not clickable, everything else is available.
    */
   import type { Episode } from '@shared/types'
-  import { airDate, countdown, episodeCode, hasAired, runtime } from '../lib/format'
+  import { airDate, countdown, countdownParts, episodeCode, hasAired, runtime } from '../lib/format'
   import { stillUrl } from '../lib/images'
   import Score from './Score.svelte'
 
@@ -54,6 +54,7 @@
   const aired = $derived(hasAired(episode.airDate))
   const still = $derived(stillUrl(episode.stillPath))
   const remaining = $derived(next && !aired ? countdown(episode.airDate, now) : '')
+  const parts = $derived(next && !aired ? countdownParts(episode.airDate, now) : null)
 </script>
 
 <!--
@@ -78,7 +79,8 @@
   >
     {#if still}
       <img src={still} alt="" loading="lazy" decoding="async" width="150" height="84" />
-    {:else}
+    {:else if !parts}
+      <!-- Not under the countdown: the number showed through it as a ghost "3". -->
       <div class="thumb-empty" aria-hidden="true">{episode.episode}</div>
     {/if}
     {#if aired}<span class="play" aria-hidden="true">▶</span>{/if}
@@ -91,10 +93,17 @@
         <span class="progress-fill" style:width={`${progress.percent}%`}></span>
       </span>
     {/if}
-    {#if remaining}
-      <span class="countdown">
-        <span class="value">{remaining}</span>
-        <span class="label">until air</span>
+    {#if parts}
+      <span class="countdown" aria-label="Airs in {remaining}">
+        <span class="cd-eyebrow" aria-hidden="true">Airs in</span>
+        <span class="cd-parts" aria-hidden="true">
+          {#each parts as part (part.unit)}
+            <span class="cd-part">
+              <span class="cd-value">{part.value}</span>
+              <span class="cd-unit">{part.unit}</span>
+            </span>
+          {/each}
+        </span>
       </span>
     {/if}
   </button>
@@ -201,28 +210,63 @@
     opacity: 1;
   }
 
-  /* Covers the still — usually absent for an unaired episode, so this sits on
-     the empty placeholder rather than obscuring artwork. */
+  /*
+   * The countdown tile for the next episode.
+   *
+   * Opaque, and the placeholder number is not drawn under it: the tile used
+   * to be a translucent wash over the episode number, which showed through as
+   * a ghost digit behind "UNTIL AIR". Set as a clock — each figure large, its
+   * unit small beneath — because a countdown is read at a glance, and "5d 7h"
+   * in body type had to be read.
+   */
   .countdown {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-content: center;
-    gap: 2px;
-    background: linear-gradient(160deg, var(--accent-muted), rgba(0, 0, 0, 0.72));
-    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background:
+      radial-gradient(120% 90% at 0% 0%, rgb(232 176 75 / 0.3), transparent 60%),
+      linear-gradient(160deg, var(--bg-elevated), var(--bg-base));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: inherit;
   }
 
-  .countdown .value {
-    font-size: var(--text-base);
-    font-weight: 700;
+  .cd-eyebrow {
+    font-size: 9px;
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .cd-parts {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .cd-part {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 26px;
+  }
+
+  .cd-value {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: var(--weight-bold);
+    line-height: 1;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
   }
 
-  .countdown .label {
-    font-size: 10px;
-    letter-spacing: 0.08em;
+  .cd-unit {
+    margin-top: 2px;
+    font-size: 9px;
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
     color: var(--text-tertiary);
   }

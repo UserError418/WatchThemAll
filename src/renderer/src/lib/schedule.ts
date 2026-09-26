@@ -103,7 +103,7 @@ export interface Timeline {
 }
 
 /** "Fri 26 Sep" — short enough to sit inline on a timeline spine. */
-function compactDate(at: number): string {
+export function compactDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
     weekday: 'short',
     day: 'numeric',
@@ -125,6 +125,22 @@ export function dayHeading(at: number, now = Date.now()): string {
   if (at === today + DAY_MS) return 'Tomorrow'
   if (at === today - DAY_MS) return 'Yesterday'
   return compactDate(at)
+}
+
+/**
+ * How long ago a past air day was, for the line under its heading.
+ *
+ * Whole days, because an air date has no time of day. Null for yesterday,
+ * whose heading already says exactly that. This replaced `timeAgo`, which
+ * turns into a locale date after a week — so an older day read "Wed 16 Sep"
+ * over "9/16/2026", the same fact twice.
+ */
+export function daysAgo(at: number, now = Date.now()): string | null {
+  // Rounded rather than floored: across a clock change a day is 23 or 25
+  // hours, and the difference between two midnights is not a whole number.
+  const days = Math.round((startOfDay(now) - at) / DAY_MS)
+  if (days <= 1) return null
+  return `${days} days ago`
 }
 
 /**

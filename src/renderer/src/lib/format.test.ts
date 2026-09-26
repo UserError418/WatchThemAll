@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { airDate, clock, countdown, episodeCode, hasAired, runtime, timeAgo, year } from './format'
+import { airDate, clock, countdown, countdownParts, episodeCode, hasAired, runtime, timeAgo, year } from './format'
 
 /**
  * These are the strings the user actually reads. They are worth testing because
@@ -70,8 +70,8 @@ describe('countdown', () => {
     expect(countdown('2026-06-11', now)).toMatch(/^\d+h \d+m$|^\d+m$/)
   })
 
-  it('says it is airing once the date has passed', () => {
-    expect(countdown('2026-06-01', now)).toBe('Airing now')
+  it('says today once the day has come, not a time nobody knows', () => {
+    expect(countdown('2026-06-01', now)).toBe('Today')
   })
 
   it('returns empty for a missing or unparseable date', () => {
@@ -134,5 +134,37 @@ describe('clock', () => {
     expect(clock(undefined)).toBe('0:00')
     expect(clock(-5)).toBe('0:00')
     expect(clock(Number.POSITIVE_INFINITY)).toBe('0:00')
+  })
+})
+
+describe('countdownParts', () => {
+  // Local time on purpose: air dates are local midnight, so this is exact.
+  const now = new Date(2026, 5, 10, 17, 0, 0).getTime()
+
+  it('splits days and hours for the tile', () => {
+    expect(countdownParts('2026-06-15', now)).toEqual([
+      { value: 4, unit: 'days' },
+      { value: 7, unit: 'hrs' },
+    ])
+  })
+
+  it('uses the singular for one', () => {
+    expect(countdownParts('2026-06-12', new Date(2026, 5, 10, 23, 0, 0).getTime())).toEqual([
+      { value: 1, unit: 'day' },
+      { value: 1, unit: 'hr' },
+    ])
+  })
+
+  it('drops to hours and minutes inside a day', () => {
+    expect(countdownParts('2026-06-11', now)).toEqual([
+      { value: 7, unit: 'hrs' },
+      { value: 0, unit: 'min' },
+    ])
+  })
+
+  it('is null once the day has come, or without a date', () => {
+    expect(countdownParts('2026-06-10', now)).toBeNull()
+    expect(countdownParts(null, now)).toBeNull()
+    expect(countdownParts('soon', now)).toBeNull()
   })
 })

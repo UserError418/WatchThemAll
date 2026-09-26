@@ -5,6 +5,7 @@ import {
   buildTimeline,
   countEpisodes,
   dayHeading,
+  daysAgo,
   nextUp,
   seriesRun,
   trackerRows,
@@ -449,5 +450,24 @@ describe('nextUp', () => {
 
   it('reports nothing when nothing is scheduled', () => {
     expect(nextUp(buildTimeline([], { now: NOW }))).toBeNull()
+  })
+})
+
+describe('how long ago an air day was', () => {
+  const midnight = (offset: number): number => airDayAt(isoDay(offset))!
+
+  it('counts whole days back from today', () => {
+    expect(daysAgo(midnight(-2), NOW)).toBe('2 days ago')
+    expect(daysAgo(midnight(-12), NOW)).toBe('12 days ago')
+  })
+
+  it('says nothing for yesterday, whose heading already does', () => {
+    expect(daysAgo(midnight(-1), NOW)).toBeNull()
+  })
+
+  it('stays a whole number across a clock change', () => {
+    // 25 October 2026 is a 25-hour day in Europe; the count must not read 7.04.
+    const after = new Date(2026, 9, 28, 12, 0).getTime()
+    expect(daysAgo(new Date(2026, 9, 21, 0, 0).getTime(), after)).toBe('7 days ago')
   })
 })

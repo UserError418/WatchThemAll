@@ -49,14 +49,20 @@ export function clock(seconds: number | null | undefined): string {
   return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`
 }
 
-/** `3d 4h`, `4h 12m`, `12m`, `Airing now`, or an empty string. */
+/**
+ * `3d 4h`, `4h 12m`, `12m`, `Today`, or an empty string.
+ *
+ * "Today" rather than the "Airing now" this used to say: TMDB gives an air
+ * date without a time, so all that is known is the day, and "now" beside a
+ * "Today" heading read as two different moments when they are one.
+ */
 export function countdown(date: string | null | undefined, now = Date.now()): string {
   if (!date) return ''
   const target = new Date(`${date}T00:00:00`).getTime()
   if (Number.isNaN(target)) return ''
 
   const diff = target - now
-  if (diff <= 0) return 'Airing now'
+  if (diff <= 0) return 'Today'
 
   const days = Math.floor(diff / 86_400_000)
   const hours = Math.floor((diff % 86_400_000) / 3_600_000)
@@ -65,6 +71,34 @@ export function countdown(date: string | null | undefined, now = Date.now()): st
   if (days > 0) return `${days}d ${hours}h`
   if (hours > 0) return `${hours}h ${minutes}m`
   return `${minutes}m`
+}
+
+export interface CountdownPart {
+  value: number
+  /** "days", "hrs", "min" — short enough to sit under a number in a tile. */
+  unit: string
+}
+
+/**
+ * `countdown` as its two leading parts, for a display that sets each number
+ * large with its unit beneath. Null once the date has come, or when there is
+ * no date, so the caller draws its "airs today" state instead.
+ */
+export function countdownParts(date: string | null | undefined, now = Date.now()): CountdownPart[] | null {
+  if (!date) return null
+  const target = new Date(`${date}T00:00:00`).getTime()
+  if (Number.isNaN(target)) return null
+  const diff = target - now
+  if (diff <= 0) return null
+
+  const days = Math.floor(diff / 86_400_000)
+  const hours = Math.floor((diff % 86_400_000) / 3_600_000)
+  const minutes = Math.floor((diff % 3_600_000) / 60_000)
+  const unit = (n: number, one: string, many: string): CountdownPart => ({ value: n, unit: n === 1 ? one : many })
+
+  if (days > 0) return [unit(days, 'day', 'days'), unit(hours, 'hr', 'hrs')]
+  if (hours > 0) return [unit(hours, 'hr', 'hrs'), unit(minutes, 'min', 'min')]
+  return [unit(Math.max(1, minutes), 'min', 'min')]
 }
 
 /** `just now`, `12m ago`, `3h ago`, `5d ago`, then an absolute date. */

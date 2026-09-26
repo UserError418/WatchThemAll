@@ -8,17 +8,22 @@
    * asks "how much have I watched lately", where no individual event is worth
    * naming and density over time is the whole point — a heat grid. This asks
    * "what airs when", where every single event *is* the point and the exact
-   * day matters. So: a spine with real day markers, and a rule for now.
+   * day matters. So: a spine with real day markers, and a marker for today.
    *
    * ## The axis runs one way, and now is the middle of it
    *
    * Everything on the spine descends through time: furthest ahead at the top,
-   * tomorrow immediately above the rule, yesterday immediately below it, then
+   * tomorrow immediately above today, yesterday immediately below it, then
    * back through the fortnight. The first cut ran upcoming the other way, and
    * the two days either side of this moment — which are the entire reason
    * anyone opens this tab — ended up as far apart as the page could put them.
    *
-   * The page therefore opens *anchored on the rule* rather than at its top.
+   * The page therefore opens *anchored on today* rather than at its top.
+   *
+   * Today is one marker, not two. It used to be a "Today" day heading in the
+   * upcoming half *and* a "now" rule under it, which read as two different
+   * moments when they are the same one — and the rule had lost its styling
+   * at some point, so it was the bare word "now" floating over the list.
    * Scrolling up is looking further ahead and scrolling down is looking
    * further back, which is the only reading of a vertical time axis that does
    * not need a legend.
@@ -42,10 +47,12 @@
   import type { MediaSummary, ReleaseTracker } from '@shared/types'
   import { library } from '../lib/library.svelte'
   import { posterUrl } from '../lib/images'
-  import { countdown, episodeCode, timeAgo } from '../lib/format'
+  import { countdown, episodeCode } from '../lib/format'
   import {
     buildTimeline,
+    compactDate,
     countEpisodes,
+    daysAgo,
     nextUp,
     seriesRun,
     trackerRows,
@@ -57,6 +64,7 @@
   import { fly } from 'svelte/transition'
   import Score from '../components/Score.svelte'
   import { survivingTrackers } from '@shared/store/trackers'
+  import PageHeader from '../components/PageHeader.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -90,7 +98,13 @@
   const trackers = $derived(survivingTrackers(library.trackers))
 
   const timeline = $derived(buildTimeline(trackers, { now, windowDays }))
-  const upcomingCount = $derived(countEpisodes(timeline.upcoming))
+  /**
+   * Today apart from the days ahead of it: it is drawn at the marker, not as
+   * one more day in the upcoming half.
+   */
+  const todayDay = $derived(timeline.upcoming.find((day) => day.isToday) ?? null)
+  const ahead = $derived(timeline.upcoming.filter((day) => !day.isToday))
+  const upcomingCount = $derived(countEpisodes(ahead))
   const laterCount = $derived(countEpisodes(timeline.later))
   const recentCount = $derived(countEpisodes(timeline.recent))
 
@@ -102,7 +116,7 @@
   const behind = $derived(tracking.reduce((total, row) => total + row.unwatched, 0))
 
   /**
-   * Put the now rule on screen on arrival, once.
+   * Put today on screen on arrival, once.
    *
    * Without this the page opens on the *furthest* scheduled day, which is the
    * least interesting row on it. Once, because the countdown re-renders this
@@ -322,7 +336,7 @@
       <span class="dot" class:pulse={day.isToday}></span>
       <span class="label">{day.label}</span>
       <span class="when">
-        {#if past}{timeAgo(day.at, now)}{:else}{countdown(day.episodes[0]?.episode.airDate ?? null, now)}{/if}
+        {#if past}{daysAgo(day.at, now) ?? ''}{:else}{countdown(day.episodes[0]?.episode.airDate ?? null, now)}{/if}
       </span>
     </div>
     <ul class="episodes">
@@ -334,42 +348,37 @@
 {/snippet}
 
 <div class="view">
-  <header class="head">
-    <div>
-      <h2>Releases</h2>
-      <p class="lede">
-        <!-- "a notification", not "a desktop notification": this renderer is
-             also the Android app, where the same sentence was describing a
-             platform the reader is not on. -->
-        {trackers.length} series tracked. New episodes raise a notification when they air.
-      </p>
+  <!-- "a notification", not "a desktop notification": this renderer is also
+       the Android app, where the same sentence was describing a platform the
+       reader is not on. -->
+  <PageHeader
+    title="Releases"
+    lede="{trackers.length} series tracked. New episodes raise a notification when they air."
+  >
+    <!-- The window reaches equally in both directions, so it belongs to the
+         page rather than to the half it used to sit in. -->
+    <div class="windows" role="group" aria-label="How far either side of today to show">
+      {#each WINDOWS as days (days)}
+        <button class:active={windowDays === days} onclick={() => (windowDays = days)}
+          >±{days}d</button
+        >
+      {/each}
     </div>
-    <div class="tools">
-      <!-- The window reaches equally in both directions, so it belongs to the
-           page rather than to the half it used to sit in. -->
-      <div class="windows" role="group" aria-label="How far either side of now to show">
-        {#each WINDOWS as days (days)}
-          <button class:active={windowDays === days} onclick={() => (windowDays = days)}
-            >±{days}d</button
-          >
-        {/each}
-      </div>
-      <label class="toggle">
-        <input
-          type="checkbox"
-          checked={library.settings.notificationsEnabled}
-          onchange={(e) => library.setNotificationsEnabled(e.currentTarget.checked)}
-        />
-        Notifications
-      </label>
-      <button class="check" onclick={checkNow} disabled={checking || trackers.length === 0}>
-        {checking ? 'Checking…' : '↻ Check now'}
-      </button>
-      {#if checkResult}
-        <span class="check-result" role="status">{checkResult}</span>
-      {/if}
-    </div>
-  </header>
+    <label class="toggle">
+      <input
+        type="checkbox"
+        checked={library.settings.notificationsEnabled}
+        onchange={(e) => library.setNotificationsEnabled(e.currentTarget.checked)}
+      />
+      Notifications
+    </label>
+    <button class="check" onclick={checkNow} disabled={checking || trackers.length === 0}>
+      {checking ? 'Checking…' : '↻ Check now'}
+    </button>
+    {#if checkResult}
+      <span class="check-result" role="status">{checkResult}</span>
+    {/if}
+  </PageHeader>
 
   {#if trackers.length === 0}
     <p class="state">
@@ -401,16 +410,40 @@
         {/if}
 
         <!-- ── Upcoming, furthest first ───────────────────────────────── -->
-        {#if timeline.upcoming.length === 0}
+        {#if ahead.length === 0}
           <p class="state thin">Nothing scheduled. Check back, or press <em>Check now</em>.</p>
         {:else}
-          {#each timeline.upcoming as day, index (day.key)}
+          {#each ahead as day, index (day.key)}
             {@render dayBlock(day, index, false, false)}
           {/each}
         {/if}
 
-        <!-- ── The now rule, and the page's anchor ────────────────────── -->
-        <div class="rule" bind:this={ruleEl}><span>now</span></div>
+        <!-- ── Today: the page's anchor, and the day it is about ─────── -->
+        <div class="today-rule" bind:this={ruleEl}>
+          <span class="dot pulse" aria-hidden="true"></span>
+          <span class="today-name">Today</span>
+          <span class="today-date">{compactDate(todayDay?.at ?? now)}</span>
+          <span class="today-line" aria-hidden="true"></span>
+          <span class="today-note">
+            {#if todayDay}
+              {todayDay.episodes.length === 1 ? '1 episode' : `${todayDay.episodes.length} episodes`} today
+            {:else}
+              Nothing airs today
+            {/if}
+          </span>
+        </div>
+
+        <!-- Aired today counts as aired, as everywhere else, so these can be played. -->
+        {#if todayDay}
+          <section class="day today-episodes">
+            <span aria-hidden="true"></span>
+            <ul class="episodes">
+              {#each todayDay.episodes as item (item.tmdbId + ':' + item.episode.season + ':' + item.episode.episode)}
+                {@render episodeRow(item, true)}
+              {/each}
+            </ul>
+          </section>
+        {/if}
 
         <!-- ── Recently aired ────────────────────────────────────────── -->
         <div class="section-label">
@@ -552,32 +585,6 @@
     gap: var(--space-5);
   }
 
-  .head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--text-lg);
-  }
-
-  .lede {
-    margin: var(--space-1) 0 0;
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-  }
-
-  .tools {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-
   .toggle {
     display: flex;
     align-items: center;
@@ -694,6 +701,45 @@
   .windows button.active {
     background: var(--accent);
     color: var(--text-on-accent);
+  }
+
+  /*
+   * Today, across the whole timeline.
+   *
+   * On the spine like every day marker — the pulsing dot sits exactly where
+   * the other days' dots do — and then a rule to the far edge, so it reads as
+   * the line the page is divided by rather than as one more row.
+   */
+  .today-rule {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-4) 0 var(--space-3) calc(var(--space-5) * -1);
+    scroll-margin: 40vh;
+  }
+
+  .today-name {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .today-date {
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+
+  .today-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 8%, transparent));
+  }
+
+  .today-note {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
   }
 
   /*
