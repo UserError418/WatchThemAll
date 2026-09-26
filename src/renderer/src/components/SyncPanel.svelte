@@ -188,9 +188,9 @@
   .hint,
   .lead {
     margin: 0;
-    font-size: var(--text-xs);
-    line-height: 1.5;
-    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
   }
 
   .lead {

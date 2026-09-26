@@ -96,6 +96,24 @@
     scrolled = (event.currentTarget as HTMLElement).scrollTop > 24
   }
 
+  let mainEl = $state<HTMLElement | null>(null)
+
+  /**
+   * Every surface opens at its top.
+   *
+   * All of them scroll the one `<main>`, so without this a tab opened wherever
+   * the last one was left: Releases scrolls itself to its Today marker on
+   * arrival, and the Watchlist opened after it started halfway down its second
+   * band. Keyed on what is shown rather than done in `goTo`, because the digit
+   * shortcuts and the palette change tabs too. Releases still reaches its
+   * marker — it scrolls a frame later, after this.
+   */
+  $effect(() => {
+    void tab
+    void searching
+    if (mainEl) mainEl.scrollTop = 0
+  })
+
   const trackedCount = $derived(library.trackers.length)
   const watchlistCount = $derived(library.listedWatchlist.length)
   const watchedCount = $derived(library.watched.length)
@@ -340,7 +358,7 @@
     </div>
   </nav>
 
-  <main class:under-hero={tab === 'browse' && !searching} onscroll={onMainScroll}>
+  <main bind:this={mainEl} class:under-hero={tab === 'browse' && !searching} onscroll={onMainScroll}>
     {#if loadError}
       <p class="fatal" role="alert">{loadError}</p>
     {:else if !ready}

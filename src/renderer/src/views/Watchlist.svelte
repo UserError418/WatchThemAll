@@ -23,6 +23,8 @@
   import { fly } from 'svelte/transition'
   import { stagger } from '../lib/motion'
   import WatchlistCard from '../components/WatchlistCard.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
+  import FilterField from '../components/FilterField.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -32,10 +34,16 @@
 
   type Filter = 'all' | 'tv' | 'movie'
   let filter = $state<Filter>('all')
+  let query = $state('')
 
-  const entries = $derived(
-    filter === 'all' ? library.listedWatchlist : library.listedWatchlist.filter((w) => w.type === filter),
-  )
+  const entries = $derived.by(() => {
+    const needle = query.trim().toLowerCase()
+    return library.listedWatchlist.filter(
+      (w) =>
+        (filter === 'all' || w.type === filter) &&
+        (needle === '' || w.title.toLowerCase().includes(needle)),
+    )
+  })
 
   const groups = $derived(
     bandWatchlist(entries, library.history, (tmdbId) => {
@@ -55,19 +63,16 @@
 </script>
 
 <div class="view">
-  <header class="head">
-    <div class="lead">
-      <h2>Watchlist</h2>
-      {#if library.listedWatchlist.length > 0}
-        <span class="count">{library.listedWatchlist.length}</span>
-      {/if}
-    </div>
+  <PageHeader title="Watchlist" count={library.listedWatchlist.length || null}>
+    {#if library.listedWatchlist.length > 0}
+      <FilterField bind:value={query} label="Filter the watchlist by title" />
+    {/if}
     <div class="filters">
       {#each FILTERS as [id, label] (id)}
         <button class:active={filter === id} onclick={() => (filter = id)}>{label}</button>
       {/each}
     </div>
-  </header>
+  </PageHeader>
 
   {#if library.listedWatchlist.length === 0}
     <p class="state">
@@ -103,33 +108,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-7);
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  .lead {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--text-lg);
-  }
-
-  .count {
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    background: var(--bg-raised);
-    border-radius: var(--radius-full);
-    padding: 2px var(--space-2);
   }
 
   .filters {
