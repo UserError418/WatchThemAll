@@ -269,8 +269,9 @@
           <span>
             Use my MAL scores as ratings
             <em>Each score carries over as it is, 1 to 10. A 👍 or 👎 from before ratings had a
-              scale is replaced by the exact score when the two agree; anything you have rated
-              on the 1–10 scale is never overwritten.</em
+              scale, on the show or any of its seasons, is replaced by the exact score unless the
+              two contradict each other; anything you have rated on the 1–10 scale is never
+              overwritten.</em
             >
           </span>
         </label>

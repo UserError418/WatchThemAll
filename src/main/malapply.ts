@@ -114,6 +114,7 @@ export async function applyMalImport(
   const haveWatchlist = new Set(watchlist.map(titleKey))
   const haveWatched = new Set(watched.map(titleKey))
   const haveTracker = new Set(trackers.map((t) => t.tmdbId))
+  const haveMalIds = new Set(watched.map((w) => w.malId))
 
   /** Every MAL score that resolved to a title, collected before any is applied. */
   const scored = new Map<string, ScoredTitle>()
@@ -142,10 +143,15 @@ export async function applyMalImport(
      * record that the user saw this, and the title alone carries that. A
      * watchlist entry or a release tracker without an id cannot be played or
      * checked, so it would be a row that does nothing forever.
+     *
+     * Once per MAL entry. With no id to dedupe on, every re-import used to
+     * add the same card again. A deleted one counts too, the same as a
+     * deleted match does.
      */
     if (!match) {
       summary.unmatched.push(entry.title)
-      if (target !== 'watched') continue
+      if (target !== 'watched' || haveMalIds.has(entry.malId)) continue
+      haveMalIds.add(entry.malId)
 
       watched.push(stamp({
         id: newId(),

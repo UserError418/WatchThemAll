@@ -107,6 +107,25 @@ describe('applyMalImport', () => {
     expect(summary.unmatched).toEqual(['Something Obscure'])
   })
 
+  it('adds an unmatched title once, however often the list is imported', async () => {
+    const obscure = [entry({ malId: 41487, title: 'Something Obscure', status: 'completed' })]
+    const first = await applyMalImport(emptyStore(), obscure, decisions(), resolveNone)
+    const again = await applyMalImport(first.store, obscure, decisions(), resolveNone)
+
+    expect(again.store.watched).toHaveLength(1)
+    expect(again.summary).toMatchObject({ watched: 0, unmatched: ['Something Obscure'] })
+  })
+
+  it('does not bring back an unmatched card the user deleted', async () => {
+    const obscure = [entry({ malId: 41487, title: 'Something Obscure', status: 'completed' })]
+    const first = await applyMalImport(emptyStore(), obscure, decisions(), resolveNone)
+    const deleted = { ...first.store, watched: first.store.watched.map((w) => ({ ...w, deletedAt: 5 })) }
+
+    const again = await applyMalImport(deleted, obscure, decisions(), resolveNone)
+
+    expect(again.store.watched).toEqual(deleted.watched)
+  })
+
   it('does not create an unmatched watchlist entry or tracker', async () => {
     // Both would be a row that can never play or check anything.
     const { store, summary } = await applyMalImport(
