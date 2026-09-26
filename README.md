@@ -37,7 +37,10 @@ ones you point it at and keeps the part that matters: your library.
 - **Test every source for a title.** One button tries each provider in the
   background and marks the ones that actually stream what you're about to
   watch, so you pick from what works instead of finding out one by one.
-  Automatic uses the same result.
+  Automatic uses the same result, and with sync on, a source one of your
+  devices found working shows up on the others.
+- **Play it on your TV.** Cast to a Chromecast from the player, choosing from
+  the sources known to play on it.
 - **Automatic failover.** If a source stalls, the app moves to the next one on
   a five-second countdown you can cancel.
 - **Skip intros** using community-maintained timestamps, shown only when the
