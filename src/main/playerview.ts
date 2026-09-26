@@ -50,7 +50,7 @@ import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
 import type { PlayCandidate } from './providers'
 import { shouldSeek } from './resume'
 import { createPointerZoneWatcher } from './pointerzone'
-import { isProviderFailure, mayAutoSwitch, streamResolved, type LoadEvidence, type OfferKind } from './switchoffer'
+import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type OfferKind } from './switchoffer'
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
 
@@ -1104,6 +1104,16 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let evidence: LoadEvidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
   /** The first failure the provider's own backend reported this load, for the offer's wording. */
   let backendFailure: string | null = null
+  /** When the page last finished a request, of any kind. See `judgeSilence`. */
+  let lastActivityAt = Date.now()
+  /**
+   * The silence check found the page idle with nothing wrong — most likely a
+   * poster waiting to be clicked. The next request it finishes starts the
+   * grace period over, so a click that leads nowhere is still caught.
+   */
+  let idleSinceCheck = false
+  /** Requests sent and not yet answered, by id. See `PageActivity.pendingRequests`. */
+  const inFlight = new Set<number>()
 
   const clearPendingVerdicts = (): void => {
     if (silenceTimer) {
@@ -1178,6 +1188,42 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   /**
+   * Nothing has played by the end of the grace period: decide what that means.
+   *
+   * The rule is `judgeSilence`; this is the wiring and the wording.
+   */
+  const checkSilence = (): void => {
+    silenceTimer = null
+    const name = currentCandidate()?.provider.name ?? 'This source'
+    evidence.videoElement = lastPosition !== null
+    const activity = { idleForMs: Date.now() - lastActivityAt, pendingRequests: inFlight.size }
+    switch (judgeSilence(evidence, backendFailure !== null, activity)) {
+      case 'resolved':
+        console.log(`[player] ${name} has its stream ready and is not playing; not offering to switch`)
+        return
+      case 'waiting':
+        idleSinceCheck = true
+        console.log(
+          `[player] ${name} is idle with nothing wrong (${Math.round(activity.idleForMs / 1000)} s); ` +
+            'waiting for the user rather than offering to switch',
+        )
+        return
+      case 'failing':
+        suggest(
+          evidence.refusedStatus !== null
+            ? `${name} refused its own video (${evidence.refusedStatus})`
+            : (backendFailure ?? `${name} has not started playing`),
+          'silence',
+        )
+        return
+      case 'loading':
+        console.log(`[player] ${name} is still loading (${activity.pendingRequests} requests unanswered)`)
+        suggest(`${name} is still loading after ${Math.round(SILENCE_GRACE_MS / 1000)} s`, 'silence')
+        return
+    }
+  }
+
+  /**
    * Restart the clocks for a freshly-issued load.
    *
    * Called at every point that navigates the view. Not driven off
@@ -1198,22 +1244,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
     evidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
     backendFailure = null
+    lastActivityAt = Date.now()
+    idleSinceCheck = false
+    // Whatever the previous page left open is aborted by the navigation.
+    inFlight.clear()
 
-    silenceTimer = setTimeout(() => {
-      silenceTimer = null
-      const name = currentCandidate()?.provider.name ?? 'This source'
-      evidence.videoElement = lastPosition !== null
-      if (streamResolved(evidence)) {
-        // Found its stream and is waiting for the user to press play.
-        console.log(`[player] ${name} has its stream ready and is not playing; not offering to switch`)
-        return
-      }
-      const reason =
-        evidence.refusedStatus !== null
-          ? `${name} refused its own video (${evidence.refusedStatus})`
-          : (backendFailure ?? `${name} has not started playing`)
-      suggest(reason, 'silence')
-    }, SILENCE_GRACE_MS)
+    silenceTimer = setTimeout(checkSilence, SILENCE_GRACE_MS)
 
     stallWatch = beginStallWatch(Date.now())
     /**
@@ -1341,7 +1377,19 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * It *offers* rather than switches. A failed backend call is strong evidence
    * and nothing more: some of these pages retry the same endpoint and recover.
    */
+  contents.session.webRequest.onSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    // A socket is open by design for as long as the page lives, and a video
+    // holds its range request open while paused; neither is a load waiting on
+    // an answer. See `PageActivity.pendingRequests`.
+    if (details.resourceType === 'webSocket' || details.resourceType === 'media') return
+    inFlight.add(details.id)
+  })
+  contents.session.webRequest.onErrorOccurred({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    inFlight.delete(details.id)
+  })
+
   contents.session.webRequest.onCompleted({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    inFlight.delete(details.id)
     const candidate = currentCandidate()
 
     let providerOrigin: string | null = null
@@ -1354,6 +1402,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     }
 
     noteStreamEvidence(details)
+    noteActivity()
 
     // The rule, and its reasoning, are in `switchoffer.ts` — extracted so the
     // cases that matter can be tested rather than waited for.
@@ -1375,6 +1424,18 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // `isProviderFailure` for why an immediate offer was wrong.
     backendFailure ??= `${candidate.provider.name} API returned ${details.statusCode}`
   })
+
+  /**
+   * The page finished a request. If it had gone idle, it is doing something
+   * again — usually because the user clicked its poster — so give it a fresh
+   * grace period and judge it afresh at the end of that.
+   */
+  const noteActivity = (): void => {
+    lastActivityAt = Date.now()
+    if (!idleSinceCheck || playing || silenceTimer) return
+    idleSinceCheck = false
+    silenceTimer = setTimeout(checkSilence, SILENCE_GRACE_MS)
+  }
 
   /**
    * Keep `evidence` current from one completed response.

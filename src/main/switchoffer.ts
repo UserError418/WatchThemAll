@@ -116,6 +116,67 @@ export function streamResolved(evidence: LoadEvidence): boolean {
 }
 
 /**
+ * How long a page must have finished no request at all to count as idle.
+ *
+ * Longer than the gaps inside a load that is still working (a player walking
+ * its backend's sources pauses a second or two between calls), far shorter
+ * than a poster sits waiting. VidSrc on its poster finished its last request
+ * 1.2 s after opening and nothing for the next nineteen.
+ */
+export const PAGE_IDLE_MS = 5_000
+
+/** What the page's network was doing when the grace period ran out. */
+export interface PageActivity {
+  /** Since the page last finished a request. */
+  idleForMs: number
+  /**
+   * Requests sent and not yet answered, sockets and media excluded. A page
+   * waiting on its backend finishes nothing while it waits: CinemaOS sat on
+   * "Fetching Prism" for nineteen seconds with its scrape call open, and
+   * counting only finished requests read that as idle.
+   */
+  pendingRequests: number
+}
+
+/**
+ * What nothing having played by the end of the grace period means.
+ *
+ * - `resolved` — the stream is there, waiting for the user. No offer.
+ * - `failing` — the provider said it cannot: a refused segment, a failed
+ *   backend call. Offer.
+ * - `loading` — still busy at the deadline: slow at best. Offer.
+ * - `waiting` — idle, with nothing wrong. No offer; look again once the page
+ *   does something.
+ *
+ * `waiting` is the case the first fix missed. Several providers build no
+ * player at all until their poster is clicked — VidSrc's frames hold no
+ * `<video>`, fetch no playlist, and go quiet — so there is no stream to find,
+ * and the old rule read "nothing arrived" as "nothing will". Measured
+ * 2026-09-26: VidSrc was switched away from at 29 s while showing Fight Club's
+ * poster with a play button on it, which is the owner's report exactly. Videasy
+ * is the same, and loads its stream the moment it is clicked.
+ *
+ * The cost is on the other side: a page that fails without saying so and then
+ * goes quiet is also `waiting`, and gets no offer. That is the right way round
+ * — the user sees a dead page and has the source menu, while a switch away
+ * from a working source is what they could not undo by looking. So is a page
+ * holding a long-poll open, which reads as `loading`; none of the ten
+ * providers measured does.
+ */
+export type SilenceJudgement = 'resolved' | 'failing' | 'loading' | 'waiting'
+
+export function judgeSilence(
+  evidence: LoadEvidence,
+  backendFailed: boolean,
+  activity: PageActivity,
+): SilenceJudgement {
+  if (streamResolved(evidence)) return 'resolved'
+  if (evidence.refusedStatus !== null || backendFailed) return 'failing'
+  const idle = activity.pendingRequests === 0 && activity.idleForMs >= PAGE_IDLE_MS
+  return idle ? 'waiting' : 'loading'
+}
+
+/**
  * Why an offer is being made.
  *
  * - `silence` — nothing has played within the grace period.

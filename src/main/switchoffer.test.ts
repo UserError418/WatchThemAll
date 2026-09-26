@@ -9,10 +9,13 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  PAGE_IDLE_MS,
   isProviderFailure,
+  judgeSilence,
   mayAutoSwitch,
   streamResolved,
   type LoadEvidence,
+  type PageActivity,
   type RequestVerdictInput,
 } from './switchoffer'
 
@@ -134,6 +137,43 @@ describe('whether a source that is not playing has found its stream', () => {
 
   it('has, when some video arrived despite a refused segment', () => {
     expect(streamResolved({ playlistOk: true, videoOk: true, refusedStatus: 403, videoElement: true })).toBe(true)
+  })
+})
+
+describe('what nothing having played means at the deadline', () => {
+  const nothing: LoadEvidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
+  const idle = (idleForMs: number, pendingRequests = 0): PageActivity => ({ idleForMs, pendingRequests })
+
+  it('is waiting when the page went idle with nothing wrong — VidSrc on its poster', () => {
+    // Last request 1.2 s after opening, nothing for the next nineteen, no
+    // <video> in any frame until the poster is clicked.
+    expect(judgeSilence(nothing, false, idle(23_000))).toBe('waiting')
+  })
+
+  it('is loading when the page is still busy at the deadline — CinemaOS collecting streams', () => {
+    expect(judgeSilence(nothing, false, idle(800))).toBe('loading')
+  })
+
+  it('is loading while a request is unanswered, however long since one finished — CinemaOS on "Fetching Prism"', () => {
+    expect(judgeSilence(nothing, false, idle(19_000, 1))).toBe('loading')
+  })
+
+  it('is failing when the backend said it could not, however quiet the page is since — VidFast', () => {
+    expect(judgeSilence(nothing, true, idle(20_000))).toBe('failing')
+  })
+
+  it('is failing when a segment was refused', () => {
+    expect(judgeSilence({ ...nothing, playlistOk: true, refusedStatus: 403 }, false, idle(20_000))).toBe('failing')
+  })
+
+  it('is resolved when the stream is there, busy or not, and whatever failed on the way', () => {
+    expect(judgeSilence({ ...nothing, playlistOk: true }, false, idle(0, 3))).toBe('resolved')
+    expect(judgeSilence({ ...nothing, videoOk: true }, true, idle(0))).toBe('resolved')
+  })
+
+  it('draws the idle line at PAGE_IDLE_MS', () => {
+    expect(judgeSilence(nothing, false, idle(PAGE_IDLE_MS - 1))).toBe('loading')
+    expect(judgeSilence(nothing, false, idle(PAGE_IDLE_MS))).toBe('waiting')
   })
 })
 
