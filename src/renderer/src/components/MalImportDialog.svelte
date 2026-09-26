@@ -266,14 +266,7 @@
 
         <label class="scores">
           <input type="checkbox" bind:checked={applyScores} />
-          <span>
-            Use my MAL scores as ratings
-            <em>Each score carries over as it is, 1 to 10. A 👍 or 👎 from before ratings had a
-              scale, on the show or any of its seasons, is replaced by the exact score unless the
-              two contradict each other; anything you have rated on the 1–10 scale is never
-              overwritten.</em
-            >
-          </span>
+          <span>Use my MAL scores as ratings</span>
         </label>
       </div>
 
@@ -445,19 +438,10 @@
 
   .scores {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: var(--space-3);
     margin-top: var(--space-5);
     font-size: var(--text-sm);
-  }
-
-  .scores em {
-    display: block;
-    margin-top: 2px;
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    font-style: normal;
-    line-height: 1.5;
   }
 
   footer {
