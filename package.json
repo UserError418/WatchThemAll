@@ -35,8 +35,10 @@
     },
     "files": [
       "out/**",
+      "!out/mobile/**",
       "icons/**",
-      "package.json"
+      "package.json",
+      "!node_modules/@capacitor/**"
     ],
     "linux": {
       "target": [
