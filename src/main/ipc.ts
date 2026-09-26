@@ -24,6 +24,7 @@ import type {
   ProviderScan,
   TitleProviderState,
   TitleRef,
+  WatchlistTestStatus,
 } from '@shared/ipc'
 import type { MediaSummary, MediaType, StoreShape } from '@shared/types'
 import type { Store } from './store'
@@ -33,7 +34,7 @@ import { buildPlayUrl } from './providers'
 import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
-import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
+import { lastPlayedAt, lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
 import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
@@ -105,6 +106,8 @@ export interface IpcDeps {
   switchPlayerProvider: (providerId: string) => boolean
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
+  /** The user, or the countdown, took the offer to switch. False if there was none. */
+  acceptSuggestion: () => boolean
   /** Reload the embed currently playing, in place. */
   reloadPlayer: () => void
   /**
@@ -140,6 +143,8 @@ export interface IpcDeps {
    * exist.
    */
   scan: ScanService
+  /** The watchlist tester's state, for Settings. */
+  backgroundStatus: () => WatchlistTestStatus
 }
 
 /**
@@ -199,7 +204,7 @@ export function registerIpc(deps: IpcDeps): void {
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       // From the same store read a moment later, by the function Automatic
       // itself calls — so the rows and the fallback chain cannot disagree.
       order: deps.orderProviders(media).map((provider) => provider.id),
@@ -250,6 +255,7 @@ export function registerIpc(deps: IpcDeps): void {
   )
 
   ipcMain.handle(CH.providersScanCancel, () => deps.scan.cancel())
+  ipcMain.handle(CH.providersBackgroundStatus, () => deps.backgroundStatus())
   ipcMain.handle(CH.dataDir, () => store.dir)
 
   /**
@@ -401,6 +407,7 @@ export function registerIpc(deps: IpcDeps): void {
     deps.switchPlayerProvider(providerId),
   )
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
+  ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())
 
   ipcMain.handle(CH.dataExport, async () => {

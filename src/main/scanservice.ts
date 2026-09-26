@@ -58,44 +58,30 @@
  */
 
 import type { Provider } from '@shared/types'
-import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
-import type { ProbeSubject, StreamVerdict } from './streamprobe'
+import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
+import type { ProbeSubject } from './streamprobe'
 import { probeQuality } from './qualityprobe'
 import { providerRank } from '@shared/scanrank'
+import { verdictForReason } from '@shared/scanreason'
 
 /**
- * What each network verdict means for the user's dot.
+ * What each network verdict means for the user's dot is decided by its reason,
+ * in `scanreason.ts`: a stream is green, a bot check amber, and everything the
+ * test saw fail — a backend error, a refused segment, a timeout — red.
  *
- * The grouping is by *what the user should do about it*, which is not the same
- * as how severe it sounds:
- *
- * - `stream` is the only green. Media was fetched; the source works.
- * - `blocked` and `api-error` are amber, because both are the provider having a
- *   bad moment rather than the provider lacking the title. A challenge page
- *   often passes in the real player, which carries cookies this throwaway
- *   session does not, and a 500 from the provider's own API is usually gone in
- *   an hour. Telling the user to give up on those would be wrong.
- * - Everything else is red. `no-media` is the common, genuine case — the
- *   player's backend answered and had nothing to serve, which is a catalogue
- *   gap and precisely the fact the user wants surfaced. `no-template` is
- *   definitive rather than transient: the provider cannot express this request
- *   at all.
+ * That used to be softer. A 500 from the provider's own API was amber, on the
+ * theory that it "is usually gone in an hour". the owner's months of use said
+ * otherwise — VidFast answered 500 on every title for days — and on
+ * 2026-09-26 he asked for red. What keeps red safe is the re-check below: any
+ * red is probed again alone, with a longer budget, before it is believed.
  */
-const VERDICT: Record<StreamVerdict, ProbeVerdict> = {
-  stream: 'stream',
-  blocked: 'unsure',
-  'api-error': 'unsure',
-  'no-media': 'dead',
-  empty: 'dead',
-  unreachable: 'dead',
-  'no-template': 'dead',
-}
-
 /** What one probe of one provider settles. */
 interface Measured {
   verdict: ProbeVerdict
   ms: number | null
   quality: number | null
+  /** Why it did not stream; null when it did. */
+  reason: ScanReason | null
 }
 
 export interface ScanServiceOptions {
@@ -105,8 +91,10 @@ export interface ScanServiceOptions {
   frameUrl: (providerUrl: string) => string
   /** Pushed after every provider settles, and once more at the end. */
   onProgress: (progress: ProviderScanProgress) => void
-  /** Per-provider budget, from navigation start. See the default below. */
+  /** Per-provider budget in the fan-out, from navigation start. See the default below. */
   timeoutMs?: number
+  /** Per-provider budget when probing alone — the re-check, and the background tester. */
+  soloTimeoutMs?: number
   /** How many providers to measure at once. See the header for the measurements. */
   concurrency?: number
 }
@@ -120,6 +108,15 @@ export interface ScanService {
    * measured.
    */
   run(titleKey: string, subject: ProbeSubject): Promise<ProviderScan>
+  /**
+   * Measure one provider alone, for the background tester.
+   *
+   * Resolves with a one-provider result to merge with `recordScan`, or null
+   * when a scan by hand started meanwhile: that scan measures this provider
+   * too, and a result taken while it competed for bandwidth is the kind of
+   * starved measurement the re-check exists to throw away.
+   */
+  probeOne(titleKey: string, subject: ProbeSubject, provider: Provider): Promise<ProviderScan | null>
   /** Stop scheduling further providers. */
   cancel(): void
   /** Whether a scan is in flight. */
@@ -128,23 +125,26 @@ export interface ScanService {
 
 export function createScanService(options: ScanServiceOptions): ScanService {
   /**
-   * Eighteen seconds, set by the slowest working provider rather than by the
-   * typical one.
+   * Twenty seconds in the fan-out, twenty-five alone.
    *
-   * It was twelve, the CLI probe's figure, until 111Movies' series pages were
-   * measured at 12.0–15.3 seconds to their first media request across twelve
-   * runs (its films: 7.5–9.1). Its player walks half a dozen sources in turn
-   * before one streams, with or without the ad blocker. At twelve, "Test all
-   * sources" marked it red on every series while it played each of them in the
-   * app — the one mistake this feature cannot afford, since a red source is one
-   * the user stops trying. Eighteen leaves the slowest run a fifth to spare,
-   * because six probes at once only make it slower.
+   * The fan-out's budget was eighteen, set by 111Movies' series pages at
+   * 12.0–15.3 s to their first media request. Two things moved it. A source
+   * now has to deliver video, not just a playlist, which adds the first
+   * segment to every start. And the owner asked on 2026-09-26 for sources slower
+   * than 20–25 s to be called out as a timeout rather than a vague "may work".
+   *
+   * The re-check gets the upper end of that range because it is where a false
+   * red is caught, and slow sources exist: VidLux, probed alone on five titles,
+   * streamed on all five at 8.5–19.2 s, after two of its own lookups failed
+   * within the first second. CinemaOS, at 35.6 and 59.9 s when it streamed at
+   * all, stays a timeout either way — which is the point.
    *
    * The budget is a ceiling, so a provider that streams sooner still finishes
    * sooner; what the extra seconds cost is the wait on providers that never
    * stream at all.
    */
-  const timeoutMs = options.timeoutMs ?? 18_000
+  const timeoutMs = options.timeoutMs ?? 20_000
+  const soloTimeoutMs = options.soloTimeoutMs ?? 25_000
   /**
    * Six, measured rather than chosen — see the table in the header. Wider is
    * not faster and is less accurate; narrower is three times slower for the
@@ -164,8 +164,54 @@ export function createScanService(options: ScanServiceOptions): ScanService {
   let token = 0
   let running = false
 
+  /**
+   * One measurement: the verdict, how long the stream took to appear, the best
+   * quality it offers, and why it failed if it did.
+   *
+   * The time is the probe's own `timeToMediaMs` — from the start of the load
+   * to the first video — which is the moment the source stopped being a page
+   * and started being a stream. Measured under the fan-out's contention, so it
+   * is fair between providers of one scan rather than a figure for a quiet
+   * line.
+   *
+   * The quality is `probeQuality`'s scan reading, which stops where the probe
+   * always stopped; see `QualityMode` for why it must not linger.
+   */
+  const probe = async (provider: Provider, subject: ProbeSubject, budget: number): Promise<Measured> => {
+    const result = await probeQuality(provider, subject, {
+      mode: 'scan',
+      timeoutMs: budget,
+      frameUrl: options.frameUrl,
+    })
+    const streamed = result.verdict === 'stream'
+    return {
+      verdict: streamed || !result.reason ? 'stream' : verdictForReason(result.reason),
+      ms: streamed ? result.timeToMediaMs : null,
+      quality: streamed ? result.judgement.best : null,
+      reason: streamed ? null : result.reason,
+    }
+  }
+
   return {
     busy: () => running,
+
+    async probeOne(titleKey, subject, provider) {
+      const before = token
+      const measured = await probe(provider, subject, soloTimeoutMs)
+      // A scan by hand started, or was cancelled, while this one ran.
+      if (token !== before || running) return null
+      const at = Date.now()
+      const scan: ProviderScan = {
+        titleKey,
+        at,
+        verdicts: { [provider.id]: measured.verdict },
+        testedAt: { [provider.id]: at },
+      }
+      if (measured.ms !== null) scan.timings = { [provider.id]: measured.ms }
+      if (measured.quality !== null) scan.qualities = { [provider.id]: measured.quality }
+      if (measured.reason !== null) scan.reasons = { [provider.id]: measured.reason }
+      return scan
+    },
 
     cancel() {
       token += 1
@@ -185,6 +231,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const timings: Record<string, number> = {}
       /** Best quality class offered, for streaming providers whose stream says. */
       const qualities: Record<string, number> = {}
+      /** Why each provider that did not stream failed. */
+      const reasons: Record<string, ScanReason> = {}
+      /** When each provider's standing result was measured. */
+      const testedAt: Record<string, number> = {}
       const total = providers.length
 
       let confirming = false
@@ -198,42 +248,18 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           verdicts: { ...verdicts },
           timings: { ...timings },
           qualities: { ...qualities },
+          reasons: { ...reasons },
           confirming,
           finished,
           cancelled: finished && token !== mine,
         })
       }
 
-      /**
-       * One measurement: the verdict, how long the stream took to appear, and
-       * the best quality it offers.
-       *
-       * The time is the probe's own `timeToMediaMs` — from the start of the
-       * load to the first media request — which is the moment the source
-       * stopped being a page and started being a stream. Measured under the
-       * fan-out's contention, so it is fair between providers of one scan
-       * rather than a figure for a quiet line.
-       *
-       * The quality is `probeQuality`'s scan reading, which stops where the
-       * probe always stopped; see `QualityMode` for why it must not linger.
-       */
-      const probe = async (provider: Provider): Promise<Measured> => {
-        const result = await probeQuality(provider, subject, {
-          mode: 'scan',
-          timeoutMs,
-          frameUrl: options.frameUrl,
-        })
-        const verdict = VERDICT[result.verdict]
-        const streamed = verdict === 'stream'
-        return {
-          verdict,
-          ms: streamed ? result.timeToMediaMs : null,
-          quality: streamed ? result.judgement.best : null,
-        }
-      }
-
       const settle = (provider: Provider, measured: Measured): void => {
         verdicts[provider.id] = measured.verdict
+        testedAt[provider.id] = Date.now()
+        if (measured.reason !== null) reasons[provider.id] = measured.reason
+        else delete reasons[provider.id]
         if (measured.ms !== null) timings[provider.id] = measured.ms
         else delete timings[provider.id]
         if (measured.quality !== null) qualities[provider.id] = measured.quality
@@ -259,7 +285,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           if (!provider) return
 
           publish(provider, false)
-          const measured = await probe(provider)
+          const measured = await probe(provider, subject, timeoutMs)
 
           // Checked again after the await: the user may have cancelled during
           // the probe, and a late write would corrupt the next run's verdicts.
@@ -272,16 +298,18 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker))
 
       /**
-       * Re-check the dead ones, alone.
+       * Re-check the reds, alone, with the longer budget.
        *
        * The fan-out above is the only thing that could have starved them, so
        * this pass removes that variable rather than adding a retry for its own
        * sake — a provider genuinely without the title fails here too, and keeps
        * its red dot.
        *
-       * The better of the two results stands. Streaming under either condition
-       * proves the source can serve this title, and the question the dot
-       * answers is whether it is worth the user's click.
+       * The better of the two results stands: streaming under either
+       * condition proves the source can serve this title, and the question the
+       * dot answers is whether it is worth the user's click. When both fail,
+       * the solo result's reason stands, because it had the source to itself
+       * and the longer budget — "timeout (25 s)" is the truer sentence.
        */
       confirming = true
       for (const provider of providers) {
@@ -289,16 +317,16 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         if (verdicts[provider.id] !== 'dead') continue
 
         publish(provider, false)
-        const second = await probe(provider)
+        const second = await probe(provider, subject, soloTimeoutMs)
         if (token !== mine) break
-        if (providerRank(undefined, second.verdict) < providerRank(undefined, verdicts[provider.id])) {
+        if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
           settle(provider, second)
         }
         publish(provider, false)
       }
       confirming = false
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, timings, qualities }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons }
       if (token === mine) running = false
       publish(null, true)
       return scan

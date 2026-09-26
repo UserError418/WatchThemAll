@@ -9,24 +9,46 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Provider } from '@shared/types'
+import type { Provider, ScanReason } from '@shared/types'
 import type { ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import type { ProbeSubject, StreamVerdict } from './streamprobe'
 import type { QualityProbeResult } from './qualityprobe'
 
 /** Each provider's answers, in the order its probes will be asked for them. */
-const script = new Map<string, Array<{ verdict: StreamVerdict; ms: number | null; quality?: number }>>()
+const script = new Map<
+  string,
+  Array<{ verdict: StreamVerdict; ms: number | null; quality?: number; reason?: ScanReason; hold?: Promise<void> }>
+>()
+/** The budget each probe was given, in call order, per provider. */
+const budgets = new Map<string, number[]>()
+
+/** What `streamReason` would say for a verdict, where a test does not care which. */
+const DEFAULT_REASON: Record<StreamVerdict, ScanReason | null> = {
+  stream: null,
+  refused: { kind: 'refused', status: 403 },
+  timeout: { kind: 'timeout', seconds: 20 },
+  'no-media': { kind: 'no-stream' },
+  empty: { kind: 'no-stream' },
+  'api-error': { kind: 'error', status: 500 },
+  blocked: { kind: 'blocked' },
+  unreachable: { kind: 'unreachable' },
+  'no-template': { kind: 'unsupported' },
+}
 
 vi.mock('./qualityprobe', () => ({
-  probeQuality: async (provider: Provider): Promise<QualityProbeResult> => {
+  probeQuality: async (provider: Provider, _subject: unknown, options: { timeoutMs: number }): Promise<QualityProbeResult> => {
+    budgets.set(provider.id, [...(budgets.get(provider.id) ?? []), options.timeoutMs])
     const answer = script.get(provider.id)?.shift()
     if (!answer) throw new Error(`no scripted answer left for ${provider.id}`)
+    // Lets a test keep this probe in flight while something else happens.
+    await answer.hold
     const best = answer.quality ?? null
     return {
       providerId: provider.id,
       providerName: provider.name,
       subject: 'Test',
       verdict: answer.verdict,
+      reason: answer.reason ?? DEFAULT_REASON[answer.verdict],
       timeToMediaMs: answer.ms,
       mediaSamples: [],
       playlists: [],
@@ -59,6 +81,7 @@ const subject: ProbeSubject = { imdbId: 'tt1', tmdbId: 1, type: 'movie', label: 
 /** A scan service over `providers`, and every progress update it sends. */
 function scanOf(providers: Provider[]): {
   run: () => Promise<ProviderScan>
+  probeOne: (provider: Provider) => Promise<ProviderScan | null>
   progress: ProviderScanProgress[]
 } {
   const progress: ProviderScanProgress[] = []
@@ -67,11 +90,18 @@ function scanOf(providers: Provider[]): {
     frameUrl: (url) => url,
     onProgress: (update) => progress.push(update),
   })
-  return { run: () => service.run('movie:tt1', subject), progress }
+  return {
+    run: () => service.run('movie:tt1', subject),
+    probeOne: (one) => service.probeOne('movie:tt1', subject, one),
+    progress,
+  }
 }
 
 describe('scan timings and qualities', () => {
-  beforeEach(() => script.clear())
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
 
   it('records the time to stream for providers that streamed, and nothing for the rest', async () => {
     script.set('fast', [{ verdict: 'stream', ms: 2_300 }])
@@ -123,5 +153,90 @@ describe('scan timings and qualities', () => {
     expect(last?.timings).toEqual({ a: 3_800 })
     // Published as copies: a later settle must not rewrite an update already sent.
     expect(progress[0]?.timings).toEqual({})
+  })
+})
+
+describe('why a source failed', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  it('paints a backend 500 red and says so, as the owner asked', async () => {
+    script.set('vidfast', [
+      { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },
+      { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },
+    ])
+    const scan = await scanOf([provider('vidfast')]).run()
+    expect(scan.verdicts).toEqual({ vidfast: 'dead' })
+    expect(scan.reasons).toEqual({ vidfast: { kind: 'error', status: 500 } })
+  })
+
+  it('keeps a bot check amber: the player carries cookies the test does not', async () => {
+    script.set('guarded', [{ verdict: 'blocked', ms: null }])
+    const scan = await scanOf([provider('guarded')]).run()
+    expect(scan.verdicts).toEqual({ guarded: 'unsure' })
+    expect(scan.reasons).toEqual({ guarded: { kind: 'blocked' } })
+  })
+
+  it('re-checks every red alone with the longer budget, and the solo reason stands', async () => {
+    script.set('slow', [
+      { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },
+      { verdict: 'timeout', ms: null, reason: { kind: 'timeout', seconds: 25 } },
+    ])
+    const scan = await scanOf([provider('slow')]).run()
+    expect(budgets.get('slow')).toEqual([20_000, 25_000])
+    expect(scan.reasons).toEqual({ slow: { kind: 'timeout', seconds: 25 } })
+  })
+
+  it('drops the reason when the re-check streamed', async () => {
+    script.set('starved', [
+      { verdict: 'timeout', ms: null },
+      { verdict: 'stream', ms: 19_200 },
+    ])
+    const scan = await scanOf([provider('starved')]).run()
+    expect(scan.verdicts).toEqual({ starved: 'stream' })
+    expect(scan.reasons).toEqual({})
+  })
+
+  it('records when each provider was tested', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 1_000 }])
+    const before = Date.now()
+    const scan = await scanOf([provider('a')]).run()
+    expect(scan.testedAt?.a).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('testing one provider for the background tester', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  it('probes alone with the longer budget and returns a one-provider result', async () => {
+    script.set('a', [{ verdict: 'timeout', ms: null, reason: { kind: 'timeout', seconds: 25 } }])
+    const result = await scanOf([provider('a')]).probeOne(provider('a'))
+    expect(budgets.get('a')).toEqual([25_000])
+    expect(result?.verdicts).toEqual({ a: 'dead' })
+    expect(result?.reasons).toEqual({ a: { kind: 'timeout', seconds: 25 } })
+    expect(result?.testedAt?.a).toBe(result?.at)
+  })
+
+  it('throws its result away when a scan by hand started meanwhile', async () => {
+    // A result taken while competing with a full scan is the starved kind the
+    // re-check exists to discard; the scan by hand measures it properly anyway.
+    let release: () => void = () => {}
+    const hold = new Promise<void>((resolve) => (release = resolve))
+    // The background probe is held open; the scan by hand runs to completion
+    // meanwhile; only then does the background probe finish.
+    script.set('a', [
+      { verdict: 'stream', ms: 1_000, hold },
+      { verdict: 'stream', ms: 1_000 },
+    ])
+    const { run, probeOne } = scanOf([provider('a')])
+    const pending = probeOne(provider('a'))
+    await run()
+    release()
+    expect(await pending).toBeNull()
   })
 })

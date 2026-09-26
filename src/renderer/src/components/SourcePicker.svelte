@@ -62,7 +62,7 @@
    * override ours — so a red row stays clickable.
    */
   import { flip } from 'svelte/animate'
-  import type { ProbeVerdict, TitleProviderState, TitleRef } from '@shared/ipc'
+  import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
   import { formatQuality, formatStreamTime, inScanOrder, providerDot } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
   import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
@@ -115,6 +115,10 @@
   /** The best quality each streaming source offers, where its stream says. Same run again. */
   const qualities = $derived<Record<string, number>>(
     scan.matches(media) ? scan.qualities : (sourceState.scan?.qualities ?? {}),
+  )
+  /** Why each source that did not stream failed, where the test could tell. Same run again. */
+  const reasons = $derived<Record<string, ScanReason>>(
+    scan.matches(media) ? scan.reasons : (sourceState.scan?.reasons ?? {}),
   )
 
   /** True while a scan of the title this picker is showing is running. */
@@ -321,7 +325,7 @@
 
       {#each rows as provider (provider.id)}
         {@const resume = provider.id === sourceState.lastUsed}
-        {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
+        {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
         {@const testing = scanning && scan.current === provider.name}
         {@const time = measurement(provider.id)}
         <button

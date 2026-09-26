@@ -12,8 +12,10 @@ import type { Provider, SourceSortKey } from '@shared/types'
 import type { ProviderScan } from '@shared/ipc'
 import {
   MAX_SCANS,
-  SCAN_TTL_MS,
+  RESULT_TTL_MS,
+  RETEST_AFTER_MS,
   freshScan,
+  isRetestDue,
   providerRank,
   pruneScans,
   recordScan,
@@ -237,31 +239,86 @@ describe('scanEpisode', () => {
 
 describe('freshScan', () => {
   const now = 1_700_000_000_000
+  const day = 24 * 60 * 60 * 1000
 
-  it('returns a scan taken within the window', () => {
+  it('returns results taken within the window', () => {
     const scans = [scanOf({ a: 'stream' }, now - 60_000)]
     expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'stream' })
   })
 
+  it('keeps a result for thirty days, as the owner set', () => {
+    const scans = [scanOf({ a: 'dead' }, now - 29 * day)]
+    expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'dead' })
+  })
+
   it('discards one that has aged out rather than showing it faded', () => {
-    // An expired measurement describes a service that may no longer exist, and
-    // the user cannot tell a stale dot from a current one.
-    const scans = [scanOf({ a: 'stream' }, now - SCAN_TTL_MS - 1)]
+    const scans = [scanOf({ a: 'stream' }, now - RESULT_TTL_MS - 1)]
     expect(freshScan(scans, 'tv:tt1', now)).toBeNull()
   })
 
+  it('ages each provider on its own clock, keeping the rest of the row', () => {
+    const row: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: now - day,
+      verdicts: { old: 'stream', recent: 'dead' },
+      testedAt: { old: now - RESULT_TTL_MS - 1, recent: now - day },
+      reasons: { recent: { kind: 'error', status: 500 } },
+    }
+    const fresh = freshScan([row], 'tv:tt1', now)
+    expect(fresh?.verdicts).toEqual({ recent: 'dead' })
+    expect(fresh?.reasons).toEqual({ recent: { kind: 'error', status: 500 } })
+    expect(fresh?.at).toBe(now - day)
+  })
+
+  it('lets a real play since the test overrule a red or amber result', () => {
+    // Nobody clicks a red source, so without this a wrong red would hide a
+    // working one for a month — and a red outranks play history.
+    const scans = [scanOf({ red: 'dead', amber: 'unsure', green: 'stream' }, now - 2 * day)]
+    const fresh = freshScan(scans, 'tv:tt1', now, { red: now - day, amber: now - day, green: now - day })
+    expect(fresh?.verdicts).toEqual({ green: 'stream' })
+  })
+
+  it('keeps a red that is newer than the last play', () => {
+    const scans = [scanOf({ red: 'dead' }, now - day)]
+    expect(freshScan(scans, 'tv:tt1', now, { red: now - 2 * day })?.verdicts).toEqual({ red: 'dead' })
+  })
+
   it('returns null for a title that has never been scanned', () => {
-    expect(freshScan([scanOf({}, now)], 'movie:tt9', now)).toBeNull()
+    expect(freshScan([scanOf({ a: 'stream' }, now)], 'movie:tt9', now)).toBeNull()
   })
 })
 
 describe('recordScan', () => {
-  it('replaces the previous scan of the same title rather than merging it', () => {
-    // A merged row would show this morning's "working" beside just now's
-    // "dead", a state that was never true at any single moment.
-    const first = { titleKey: 'tv:tt1', at: 1, verdicts: { a: 'stream' as const } }
-    const second = { titleKey: 'tv:tt1', at: 2, verdicts: { b: 'dead' as const } }
-    expect(recordScan([first], second)).toEqual([second])
+  it('merges per provider: a new result replaces only the providers it measured', () => {
+    // The background tester writes one provider at a time; a row replaced
+    // whole would forget every other provider each time.
+    const first: ProviderScan = { titleKey: 'tv:tt1', at: 1, verdicts: { a: 'stream', b: 'dead' } }
+    const second: ProviderScan = { titleKey: 'tv:tt1', at: 2, verdicts: { b: 'stream' } }
+    const [merged] = recordScan([first], second)
+    expect(merged?.verdicts).toEqual({ a: 'stream', b: 'stream' })
+    // Each keeps its own test time; an old row's providers were tested at its `at`.
+    expect(merged?.testedAt).toEqual({ a: 1, b: 2 })
+    expect(merged?.at).toBe(2)
+  })
+
+  it("replaces a re-tested provider's details entirely, clearing stale ones", () => {
+    const first: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: 1,
+      verdicts: { a: 'dead', b: 'stream' },
+      timings: { b: 900 },
+      reasons: { a: { kind: 'timeout', seconds: 20 } },
+    }
+    const second: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: 2,
+      verdicts: { a: 'stream', b: 'dead' },
+      timings: { a: 1200 },
+      reasons: { b: { kind: 'error', status: 500 } },
+    }
+    const [merged] = recordScan([first], second)
+    expect(merged?.timings).toEqual({ a: 1200 })
+    expect(merged?.reasons).toEqual({ b: { kind: 'error', status: 500 } })
   })
 
   it('keeps scans of other titles', () => {
@@ -270,7 +327,7 @@ describe('recordScan', () => {
     expect(next.map((s) => s.titleKey)).toEqual(['movie:tt2', 'tv:tt1'])
   })
 
-  it('drops the oldest once full', () => {
+  it('drops the least recently updated once full', () => {
     let scans: ProviderScan[] = []
     for (let i = 0; i < MAX_SCANS + 5; i += 1) {
       scans = recordScan(scans, { titleKey: `tv:tt${i}`, at: i, verdicts: {} })
@@ -280,14 +337,53 @@ describe('recordScan', () => {
   })
 })
 
+describe('isRetestDue', () => {
+  const now = 1_700_000_000_000
+  const at = (verdict: ProviderScan['verdicts'][string], age: number): ProviderScan =>
+    scanOf({ a: verdict }, now - age)
+
+  it('is due for a provider never tested', () => {
+    expect(isRetestDue(undefined, 'a', now)).toBe(true)
+    expect(isRetestDue(scanOf({ b: 'stream' }, now), 'a', now)).toBe(true)
+  })
+
+  it('re-tests reds after three days, ambers after four, greens after thirty', () => {
+    expect(isRetestDue(at('dead', RETEST_AFTER_MS.dead - 1), 'a', now)).toBe(false)
+    expect(isRetestDue(at('dead', RETEST_AFTER_MS.dead), 'a', now)).toBe(true)
+    expect(isRetestDue(at('unsure', RETEST_AFTER_MS.unsure - 1), 'a', now)).toBe(false)
+    expect(isRetestDue(at('unsure', RETEST_AFTER_MS.unsure), 'a', now)).toBe(true)
+    expect(isRetestDue(at('stream', RESULT_TTL_MS - 1), 'a', now)).toBe(false)
+    expect(isRetestDue(at('stream', RESULT_TTL_MS), 'a', now)).toBe(true)
+  })
+
+  it("judges by the provider's own test time, not the row's", () => {
+    const row: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: now,
+      verdicts: { a: 'dead', b: 'dead' },
+      testedAt: { a: now - RETEST_AFTER_MS.dead, b: now },
+    }
+    expect(isRetestDue(row, 'a', now)).toBe(true)
+    expect(isRetestDue(row, 'b', now)).toBe(false)
+  })
+})
+
 describe('pruneScans', () => {
-  it('keeps the fresh and drops the expired', () => {
+  it('drops expired results, and rows left empty by that', () => {
     const now = 1_700_000_000_000
-    const scans = [
-      { titleKey: 'fresh', at: now - 1_000, verdicts: {} },
-      { titleKey: 'stale', at: now - SCAN_TTL_MS - 1, verdicts: {} },
+    const scans: ProviderScan[] = [
+      { titleKey: 'fresh', at: now - 1_000, verdicts: { a: 'stream' } },
+      { titleKey: 'stale', at: now - RESULT_TTL_MS - 1, verdicts: { a: 'stream' } },
+      {
+        titleKey: 'mixed',
+        at: now,
+        verdicts: { a: 'stream', b: 'dead' },
+        testedAt: { a: now, b: now - RESULT_TTL_MS - 1 },
+      },
     ]
-    expect(pruneScans(scans, now).map((s) => s.titleKey)).toEqual(['fresh'])
+    const pruned = pruneScans(scans, now)
+    expect(pruned.map((s) => s.titleKey)).toEqual(['fresh', 'mixed'])
+    expect(pruned[1]?.verdicts).toEqual({ a: 'stream' })
   })
 })
 

@@ -19,7 +19,7 @@
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { bandWatchlist } from '../lib/watchlistrank'
+  import { bandWatchlist } from '@shared/watchlistrank'
   import { fly } from 'svelte/transition'
   import { stagger } from '../lib/motion'
   import WatchlistCard from '../components/WatchlistCard.svelte'

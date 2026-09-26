@@ -20,7 +20,7 @@
   import TrailerEmbed from './TrailerEmbed.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
   import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
-  import { resumeAnchor } from '../lib/watchlistrank'
+  import { resumeAnchor } from '@shared/watchlistrank'
   import Score from './Score.svelte'
   import { seasonScore } from '@shared/score'
 

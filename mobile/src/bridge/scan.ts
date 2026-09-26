@@ -57,7 +57,7 @@
 
 import { registerPlugin } from '@capacitor/core'
 import type { Provider } from '@shared/types'
-import type { ProbeVerdict, ProviderScan, ProviderScanProgress } from '@shared/ipc'
+import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
 import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import type { PlayRequest } from '@shared/ipc'
@@ -269,6 +269,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       const timings: Record<string, number> = {}
       /** Best quality class offered, for streaming providers whose playlists say. */
       const qualities: Record<string, number> = {}
+      /** Why each provider that did not stream failed, where the phone can tell. */
+      const reasons: Record<string, ScanReason> = {}
       const total = providers.length
 
       const publish = (provider: Provider | null, finished: boolean): void => {
@@ -281,6 +283,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           verdicts: { ...verdicts },
           timings: { ...timings },
           qualities: { ...qualities },
+          reasons: { ...reasons },
           // Always false here. The re-check exists to undo starvation caused by
           // probing several providers at once, and this side cannot do that —
           // one capture buffer means one provider at a time, so nothing it

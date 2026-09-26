@@ -65,6 +65,7 @@ import { buildPlayUrl } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
+  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -988,7 +989,7 @@ export async function createBridge(): Promise<WtaApi> {
     return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       sourceOrder: settings.sourceOrder,
     })
   }
@@ -1007,7 +1008,7 @@ export async function createBridge(): Promise<WtaApi> {
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       order: orderedForRequest(media).map((provider) => provider.id),
     }
   }
@@ -1200,6 +1201,9 @@ export async function createBridge(): Promise<WtaApi> {
       outcomes: async (media: TitleRef): Promise<TitleProviderState> => providerStateFor(media),
       scan: (media, episode) => runProviderScan(media, episode),
       cancelScan: async () => scanRunner.cancel(),
+      // No background tester here: a probe needs the visible surface, and a
+      // phone testing sources on its own would spend battery and data unasked.
+      backgroundStatus: async () => null,
     },
 
     releases: {
@@ -1471,6 +1475,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
+      watchlistTest: () => () => {},
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),
     },

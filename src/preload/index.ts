@@ -54,6 +54,7 @@ const api: WtaApi = {
     scan: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
       ipcRenderer.invoke(CH.providersScan, media, episode ?? null),
     cancelScan: () => ipcRenderer.invoke(CH.providersScanCancel),
+    backgroundStatus: () => ipcRenderer.invoke(CH.providersBackgroundStatus),
   },
   releases: {
     checkNow: () => ipcRenderer.invoke(CH.releasesCheck),
@@ -112,6 +113,7 @@ const api: WtaApi = {
     playerSuggestion: (cb) => subscribe(EV.playerSuggestion, cb),
     playerPointerTop: (cb) => subscribe(EV.playerPointerTop, cb),
     providerScan: (cb) => subscribe(EV.providerScan, cb),
+    watchlistTest: (cb) => subscribe(EV.watchlistTest, cb),
     syncStatus: (cb) => subscribe(EV.syncStatus, cb),
     malProgress: (cb) => subscribe(EV.malProgress, cb),
   },

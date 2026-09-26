@@ -23,18 +23,22 @@
  */
 
 import { BrowserWindow, session, type WebContents } from 'electron'
-import type { Provider } from '@shared/types'
+import type { Provider, ScanReason } from '@shared/types'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
 import { renderTemplate } from './providers'
 import { isSameOrigin } from './sameorigin'
-import { isFalseWholeFile, isMediaRequest, totalBytesOf } from './mediarequest'
+import { mediaKind, totalBytesOf } from './mediarequest'
 
 /** What the probe concluded, worst last so a sort puts good providers first. */
 export type StreamVerdict =
-  /** A media manifest or segment was requested — the stream is real. */
+  /** Video arrived — a segment, a whole file, or the decoder started. The stream is real. */
   | 'stream'
+  /** A playlist loaded, but every video segment asked for was refused. */
+  | 'refused'
+  /** Nothing streamed, and the page was still busy loading when the budget ran out. */
+  | 'timeout'
   /** The player's own backend answered, but no media followed. Usually a catalogue gap. */
   | 'no-media'
   /** The page loaded but made no meaningful requests at all. A shell with nothing behind it. */
@@ -58,12 +62,22 @@ export interface StreamProbeResult {
   documentStatus: number | null
   /** Where the document ended up, when the provider redirected. Null if it did not. */
   redirectedTo: string | null
-  /** Milliseconds from navigation start to the first media request. */
+  /** Milliseconds from navigation start to the first video: a segment, a whole file, or decoding. */
   timeToMediaMs: number | null
   /** Total requests the page made, as a sanity check on `empty`. */
   requestCount: number
-  /** The media URLs seen, truncated — the evidence behind a `stream` verdict. */
+  /**
+   * The media URLs that answered, truncated, playlists included — the
+   * evidence behind a verdict. `stream` needs more than a playlist here; see
+   * `videoArrived`.
+   */
   mediaSamples: string[]
+  /** Whether video itself arrived, as opposed to only a playlist. What `stream` means. */
+  videoArrived: boolean
+  /** Statuses of refused segments and files, up to a few — what `refused` means. */
+  refusedSegments: number[]
+  /** Whether the page was still making requests when the budget ran out — what `timeout` means. */
+  stillLoading: boolean
   /** Failing requests to the provider's own origin, which is what `api-error` means. */
   apiErrors: { url: string; status: number }[]
   /** Populated for `unreachable`; the Chromium error description. */
@@ -226,13 +240,16 @@ export async function probeStream(
             timeToMediaMs: null,
             requestCount: 0,
             mediaSamples: [],
+            videoArrived: false,
+            refusedSegments: [],
+            stillLoading: false,
             apiErrors: [],
             error: `probe exceeded ${watchdogMs}ms watchdog`,
           })
           return
         }
         result.error ??= `probe exceeded ${watchdogMs}ms watchdog`
-        result.verdict = result.mediaSamples.length > 0 ? 'stream' : result.verdict
+        result.verdict = result.videoArrived ? 'stream' : result.verdict
         resolve(result)
       }, watchdogMs),
     ),
@@ -263,6 +280,9 @@ async function runProbe(
     timeToMediaMs: null,
     requestCount: 0,
     mediaSamples: [],
+    videoArrived: false,
+    refusedSegments: [],
+    stillLoading: false,
     apiErrors: [],
     error: null,
   }
@@ -347,7 +367,10 @@ async function runProbe(
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   const startedAt = Date.now()
+  /** When video first arrived; see `videoArrived`. A playlist alone does not set it. */
   let firstMediaAt: number | null = null
+  /** When the page last finished a request, for telling "still loading" from "gave up". */
+  let lastActivityAt = startedAt
 
   const filter = { urls: ['http://*/*', 'https://*/*'] }
 
@@ -379,6 +402,7 @@ async function runProbe(
 
   probeSession.webRequest.onCompleted(filter, (details) => {
     base.requestCount += 1
+    lastActivityAt = Date.now()
 
     const header = (name: string): string => {
       const entry = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === name)
@@ -386,9 +410,7 @@ async function runProbe(
     }
     const mime = header('content-type')
     const totalBytes = totalBytesOf(details.statusCode, header('content-range'), header('content-length'))
-    const looksLikeMedia =
-      isMediaRequest(details.url, details.resourceType, mime) &&
-      !isFalseWholeFile(details.url, details.resourceType, mime, totalBytes)
+    const kind = mediaKind(details.url, details.resourceType, mime, totalBytes)
 
     onResponse?.({
       url: details.url,
@@ -399,13 +421,20 @@ async function runProbe(
       headers: sentHeaders.get(details.url) ?? {},
     })
 
-    if (looksLikeMedia && details.statusCode < 400) {
-      firstMediaAt ??= Date.now()
+    if (kind !== null && details.statusCode < 400) {
       if (base.mediaSamples.length < 4) base.mediaSamples.push(details.url.slice(0, 160))
       if (onMedia && !mediaReported) {
         mediaReported = true
         onMedia({ url: details.url, headers: sentHeaders.get(details.url) ?? {}, mime })
       }
+      // Only video settles the verdict. A playlist is a promise of video, and
+      // Videasy broke that promise on every segment of two titles.
+      if (kind !== 'playlist') {
+        firstMediaAt ??= Date.now()
+        base.videoArrived = true
+      }
+    } else if (kind !== null && kind !== 'playlist' && details.statusCode !== 429) {
+      if (base.refusedSegments.length < 6) base.refusedSegments.push(details.statusCode)
     }
 
     /**
@@ -427,12 +456,19 @@ async function runProbe(
     }
 
     if (verbose) {
-      console.error(`    ${details.statusCode} ${details.resourceType.padEnd(10)} ${details.url.slice(0, 120)}`)
+      // Type and size too: several providers proxy video under names that say
+      // nothing, and these two columns are what tell a segment from a playlist.
+      const size = totalBytes === null ? '?' : `${Math.round(totalBytes / 1024)}K`
+      console.error(
+        `    ${details.statusCode} ${details.resourceType.padEnd(10)} ${(kind ?? '-').padEnd(8)} ` +
+          `${mime.split(';')[0]!.padEnd(28).slice(0, 28)} ${size.padStart(6)} ${details.url.slice(0, 100)}`,
+      )
     }
   })
 
   probeSession.webRequest.onErrorOccurred(filter, (details) => {
     base.requestCount += 1
+    lastActivityAt = Date.now()
     if (verbose) console.error(`    ERR ${details.error} ${details.url.slice(0, 120)}`)
   })
 
@@ -452,6 +488,7 @@ async function runProbe(
    */
   win.webContents.on('media-started-playing', () => {
     firstMediaAt ??= Date.now()
+    base.videoArrived = true
     if (base.mediaSamples.length < 4) base.mediaSamples.push('[media element began playing]')
   })
 
@@ -554,6 +591,7 @@ async function runProbe(
   }
 
   base.timeToMediaMs = firstMediaAt === null ? null : firstMediaAt - startedAt
+  base.stillLoading = firstMediaAt === null && Date.now() - lastActivityAt < STILL_LOADING_WINDOW_MS
   base.verdict = classify(base, title)
 
   if (inspect && !win.isDestroyed()) await inspect(win.webContents).catch(() => {})
@@ -586,18 +624,37 @@ async function runProbe(
 }
 
 /**
+ * How recently the page must have finished a request, when the budget runs
+ * out, to count as still loading rather than finished with nothing.
+ *
+ * The distinction is between "slow" and "gave up", which the user acts on
+ * differently: CinemaOS makes 120–176 requests and streams after 35–60 s,
+ * while VidFast answers one 500 and falls silent. Three seconds is several
+ * polls of a player's own retry loop, and far longer than the gap between the
+ * requests of a page that is actually working.
+ */
+const STILL_LOADING_WINDOW_MS = 3_000
+
+/**
  * Turn the observations into a verdict.
  *
- * Ordered most-conclusive first. A stream that was seen outranks every other
- * signal — a provider that served media while also 403-ing an analytics call is
- * working, and reporting it as blocked would delete a good entry.
+ * Ordered most-conclusive first. Video that arrived outranks every other
+ * signal — a provider that served it while also 403-ing an analytics call is
+ * working, and reporting it as blocked would delete a good entry. A refused
+ * segment is next: it is the provider saying no to the video itself, which
+ * no amount of waiting changes. Only then does "still busy" become a timeout —
+ * ahead of a backend error, because a page still loading after one of its
+ * lookups failed is usually trying the next source: VidLux fails two of its
+ * extractors within a second on every title, then plays.
  */
 function classify(result: StreamProbeResult, documentTitle: string): StreamVerdict {
-  if (result.mediaSamples.length > 0) return 'stream'
+  if (result.videoArrived) return 'stream'
 
   if (result.error && result.documentStatus === null) return 'unreachable'
   if (result.documentStatus !== null && result.documentStatus >= 500) return 'unreachable'
   if (result.documentStatus === 403 || BLOCK_PATTERN.test(documentTitle)) return 'blocked'
+  if (result.refusedSegments.length > 0) return 'refused'
+  if (result.stillLoading) return 'timeout'
   if (result.apiErrors.length > 0) return 'api-error'
 
   /**
@@ -612,6 +669,43 @@ function classify(result: StreamProbeResult, documentTitle: string): StreamVerdi
   if (result.requestCount <= 3) return 'empty'
 
   return 'no-media'
+}
+
+/**
+ * Why a probe that did not stream failed, in the terms the user is shown.
+ *
+ * `timeoutMs` is the budget this probe had, which is what "timeout (20 s)"
+ * reports. A document that answered 5xx is an `error` with its status rather
+ * than "unreachable", because the host was reached and said no. Null for a
+ * stream, which needs no explanation.
+ */
+export function streamReason(result: StreamProbeResult, timeoutMs: number): ScanReason | null {
+  switch (result.verdict) {
+    case 'stream':
+      return null
+    case 'refused':
+      return { kind: 'refused', status: result.refusedSegments[0] ?? 403 }
+    case 'timeout':
+      return { kind: 'timeout', seconds: Math.round(timeoutMs / 1000) }
+    case 'api-error':
+      return { kind: 'error', status: worstStatus(result.apiErrors.map((e) => e.status)) }
+    case 'unreachable':
+      return result.documentStatus !== null && result.documentStatus >= 500
+        ? { kind: 'error', status: result.documentStatus }
+        : { kind: 'unreachable' }
+    case 'blocked':
+      return { kind: 'blocked' }
+    case 'no-template':
+      return { kind: 'unsupported' }
+    case 'empty':
+    case 'no-media':
+      return { kind: 'no-stream' }
+  }
+}
+
+/** The status to name when a page failed several ways: a server error over a client one. */
+function worstStatus(statuses: number[]): number {
+  return statuses.find((status) => status >= 500) ?? statuses[0] ?? 500
 }
 
 /**

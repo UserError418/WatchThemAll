@@ -8,7 +8,13 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isProviderFailure, type RequestVerdictInput } from './switchoffer'
+import {
+  isProviderFailure,
+  mayAutoSwitch,
+  streamResolved,
+  type LoadEvidence,
+  type RequestVerdictInput,
+} from './switchoffer'
 
 const ORIGIN = 'https://player.videasy.to'
 
@@ -19,7 +25,6 @@ function request(over: Partial<RequestVerdictInput> = {}): RequestVerdictInput {
     url: `${ORIGIN}/api/sources`,
     providerOrigin: ORIGIN,
     playing: false,
-    offerPending: false,
     ...over,
   }
 }
@@ -88,10 +93,6 @@ describe('what is not evidence about this provider', () => {
   it('anything at all when there is no provider to blame', () => {
     expect(isProviderFailure(request({ providerOrigin: null }))).toBe(false)
   })
-
-  it('a second failure while an offer is already counting down', () => {
-    expect(isProviderFailure(request({ offerPending: true }))).toBe(false)
-  })
 })
 
 describe('origin matching', () => {
@@ -104,5 +105,51 @@ describe('origin matching', () => {
 
   it('matches the provider on any path', () => {
     expect(isProviderFailure(request({ url: `${ORIGIN}/deep/nested/call?x=1` }))).toBe(true)
+  })
+})
+
+describe('whether a source that is not playing has found its stream', () => {
+  const nothing: LoadEvidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
+
+  it('has not, when nothing arrived at all — the silence offer is right', () => {
+    expect(streamResolved(nothing)).toBe(false)
+  })
+
+  it('has, once video arrived, even with nothing playing (waiting for its play button)', () => {
+    expect(streamResolved({ ...nothing, videoOk: true })).toBe(true)
+  })
+
+  it('has, with a playlist loaded and nothing refused', () => {
+    expect(streamResolved({ ...nothing, playlistOk: true })).toBe(true)
+  })
+
+  it('has, when a <video> with a duration is sitting there paused', () => {
+    expect(streamResolved({ ...nothing, videoElement: true })).toBe(true)
+  })
+
+  it('has not, when its segments were refused — Videasy on Game of Thrones', () => {
+    // Playlist loaded, element built with a duration, every segment 403.
+    expect(streamResolved({ playlistOk: true, videoOk: false, refusedStatus: 403, videoElement: true })).toBe(false)
+  })
+
+  it('has, when some video arrived despite a refused segment', () => {
+    expect(streamResolved({ playlistOk: true, videoOk: true, refusedStatus: 403, videoElement: true })).toBe(true)
+  })
+})
+
+describe('whether an offer may switch by itself', () => {
+  it('counts down for silence and for a failed page, on an untested source', () => {
+    expect(mayAutoSwitch('silence', false)).toBe(true)
+    expect(mayAutoSwitch('failure', false)).toBe(true)
+  })
+
+  it('never counts down for a stall — the user may simply have paused', () => {
+    expect(mayAutoSwitch('stall', false)).toBe(false)
+  })
+
+  it('never counts down away from a source the tests found working', () => {
+    expect(mayAutoSwitch('silence', true)).toBe(false)
+    expect(mayAutoSwitch('failure', true)).toBe(false)
+    expect(mayAutoSwitch('stall', true)).toBe(false)
   })
 })

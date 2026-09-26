@@ -211,6 +211,8 @@ export function suspectCanaries(
 /** Single-character marks, so a wide table stays readable. */
 const MARK: Record<StreamVerdict, string> = {
   stream: '✓',
+  refused: 'R',
+  timeout: 'T',
   'no-media': '·',
   empty: '∅',
   'api-error': '!',
@@ -399,6 +401,8 @@ function summarise(results: StreamProbeResult[]): void {
   console.log('\n─── Summary ───')
   for (const verdict of [
     'stream',
+    'refused',
+    'timeout',
     'no-media',
     'api-error',
     'blocked',

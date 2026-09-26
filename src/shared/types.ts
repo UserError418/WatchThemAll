@@ -505,7 +505,7 @@ export interface StoreShape {
    * neither `COLLECTIONS` nor `PREFERENCE_KEYS` survives a merge untouched
    * rather than being dropped.
    *
-   * Pruned on load: see `SCAN_TTL_MS`.
+   * Pruned per provider as results are stored: see `RESULT_TTL_MS`.
    */
   providerScans: ProviderScan[]
   settings: Settings
@@ -601,14 +601,58 @@ export type ProbeVerdict =
   /** No template, no route to the host, or a page that made no real requests. */
   | 'dead'
 
-/** One completed scan: every enabled provider, measured at one moment. */
+/**
+ * Why a provider did not stream, in terms the user can act on.
+ *
+ * The verdict alone said "may work" or "no stream" whatever had happened, and
+ * that vagueness cost trust: a source whose backend answered 500 on every
+ * title and one that was still loading when the test gave up looked the same.
+ * Each reason maps to one verdict, decided in `scanreason.ts`, so the label
+ * and the dot colour cannot disagree.
+ */
+export type ScanReason =
+  /** The provider's page or its own backend answered with this status, and nothing streamed. */
+  | { kind: 'error'; status: number }
+  /** A playlist loaded, but the video segments it lists were refused with this status. */
+  | { kind: 'refused'; status: number }
+  /** Still loading when the test's budget ran out — slow, not necessarily broken. */
+  | { kind: 'timeout'; seconds: number }
+  /** A bot check or challenge page. The real player carries cookies the test does not. */
+  | { kind: 'blocked' }
+  /** The page settled without ever asking for a stream. */
+  | { kind: 'no-stream' }
+  /** The host could not be reached at all. */
+  | { kind: 'unreachable' }
+  /** The provider's link format cannot express this title or episode. */
+  | { kind: 'unsupported' }
+
+/**
+ * What the tests know about every provider for one title.
+ *
+ * It started as one scan measured at one moment and replaced whole. The
+ * background tester fills it one provider at a time instead, and re-tests each
+ * on its own schedule — so every provider now carries its own test time in
+ * `testedAt`, and a row mixing a result from this morning with one from last
+ * week says so rather than pretending to be a single measurement.
+ */
 export interface ProviderScan {
   /** `tv:tt0903747` or `movie:tt0137523` — `outcomes.titleKey`. */
   titleKey: string
-  /** Epoch ms the scan finished. Staleness is judged from this. */
+  /** Epoch ms of the newest result in the row. */
   at: number
-  /** Keyed by provider id. Absent means the scan never reached it. */
+  /** Keyed by provider id. Absent means no test has reached it. */
   verdicts: Record<string, ProbeVerdict>
+  /**
+   * When each provider was tested, epoch ms. Staleness and re-testing are
+   * judged per provider from this. Absent for scans stored before it existed,
+   * whose providers were all tested at `at`.
+   */
+  testedAt?: Record<string, number>
+  /**
+   * Why each provider that did not stream failed, where the test could tell.
+   * Absent for streaming providers and for scans stored before it existed.
+   */
+  reasons?: Record<string, ScanReason>
   /**
    * How long each streaming provider took to fetch its first media request,
    * in milliseconds from the start of its load. Only providers whose verdict

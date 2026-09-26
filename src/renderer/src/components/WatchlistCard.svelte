@@ -34,7 +34,7 @@
   import { findEpisode, loadSeason, peekSeason } from '../lib/episodecache'
   import { revealIn, revealOut } from '../lib/motion'
   import { resumeTarget } from '@shared/progress'
-  import { resumeAnchor, type Activity } from '../lib/watchlistrank'
+  import { resumeAnchor, type Activity } from '@shared/watchlistrank'
   import Score from './Score.svelte'
 
   interface Props {

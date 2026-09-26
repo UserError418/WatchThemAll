@@ -18,6 +18,7 @@ import type {
   ProbeVerdict,
   Provider,
   ProviderScan,
+  ScanReason,
   Season,
   StoreShape,
   StorePatch,
@@ -31,7 +32,7 @@ import type {
  * `TitleProviderState` and `ProviderScanProgress`, and importing the same
  * concept from two files is how a reader concludes there are two concepts.
  */
-export type { ProbeVerdict, ProviderScan }
+export type { ProbeVerdict, ProviderScan, ScanReason }
 import type { SyncStatus } from './sync/types'
 
 /** Invoke channels: renderer → main, with a reply. */
@@ -72,6 +73,7 @@ export const CH = {
   providersScan: 'providers:scan',
   /** Stop a scan in flight. Whatever it settled before stopping is kept. */
   providersScanCancel: 'providers:scan-cancel',
+  providersBackgroundStatus: 'providers:background-status',
   /** Ask main what to recommend. See TailoredRequest. */
   tmdbTailored: 'tmdb:tailored',
   playOpen: 'play:open',
@@ -85,6 +87,7 @@ export const CH = {
   playSwitchProvider: 'play:switch-provider',
   /** "Keep waiting": stop offering to leave the provider currently loading. */
   playDismissSuggestion: 'play:dismiss-suggestion',
+  playAcceptSuggestion: 'play:accept-suggestion',
   /** Reload the embed in place, for when a source hangs part-way. */
   playReload: 'play:reload',
   releasesCheck: 'releases:check',
@@ -259,6 +262,8 @@ export const EV = {
    * invisible waiting, which is not the improvement being sold.
    */
   providerScan: 'evt:provider-scan',
+  /** The watchlist tester's state, whenever it changes. See `WatchlistTestStatus`. */
+  watchlistTest: 'evt:watchlist-test',
 } as const
 
 /**
@@ -412,6 +417,8 @@ export interface ProviderScanProgress {
   timings: Record<string, number>
   /** Best quality class offered, for each streaming provider whose stream says. See `ProviderScan.qualities`. */
   qualities: Record<string, number>
+  /** Why each settled provider that did not stream failed. See `ProviderScan.reasons`. */
+  reasons: Record<string, ScanReason>
   /**
    * The scan is re-checking a provider that looked dead.
    *
@@ -425,6 +432,23 @@ export interface ProviderScanProgress {
   finished: boolean
   /** Set when the user stopped it, so the UI can say so rather than claim a result. */
   cancelled: boolean
+}
+
+/**
+ * What the desktop's background tester of the watchlist is doing, for the one
+ * line Settings shows about it. See `watchlisttester.ts`.
+ */
+export interface WatchlistTestStatus {
+  /** Testing now, waiting for its next turn, paused, or with nothing due. */
+  state: 'testing' | 'waiting' | 'paused' | 'idle'
+  /** Why it is paused, when it is. */
+  pausedFor: 'playback' | 'scan' | null
+  /** The title and source under test right now, when testing. */
+  title: string | null
+  providerName: string | null
+  /** Watchlist (title, source) pairs with a result not yet due for a re-test, of all pairs. */
+  done: number
+  total: number
 }
 
 /**
@@ -445,9 +469,9 @@ export interface TitleProviderState {
    *
    * Travels with the outcomes for the same reason `lastUsed` does: the dots are
    * drawn from both, and fetching them separately would let the two describe
-   * different instants. Null when the title has never been scanned, or when the
-   * last scan has aged past `SCAN_TTL_MS` — an expired measurement is discarded
-   * rather than shown faded, because the user cannot act on the difference.
+   * different instants. Null when the title has never been tested. Results
+   * older than `RESULT_TTL_MS`, and red or amber ones overtaken by a real play,
+   * are left out rather than shown faded — see `freshScan`.
    */
   scan: ProviderScan | null
   /**
@@ -573,6 +597,12 @@ export interface PlayerSuggestion {
   /** The one we would move to. */
   nextProviderId: string
   nextProviderName: string
+  /**
+   * Whether the offer switches by itself when its countdown runs out. False
+   * for a stall and for a source "Test all sources" found working: those only
+   * offer. See `mayAutoSwitch` in `switchoffer.ts`.
+   */
+  autoSwitch: boolean
 }
 
 export interface PlayRequest {
@@ -668,6 +698,12 @@ export interface WtaApi {
     scan(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<ProviderScan>
     /** Stop the scan in flight. Verdicts already settled are kept. */
     cancelScan(): Promise<void>
+    /**
+     * What the background tester of the watchlist is doing. Null on a platform
+     * that has none — the phone, where a probe needs a visible surface and a
+     * battery.
+     */
+    backgroundStatus(): Promise<WatchlistTestStatus | null>
   }
   releases: {
     /** Run a release sweep now. Resolves once every tracker has been checked. */
@@ -832,6 +868,8 @@ export interface WtaApi {
      * an event is what keeps them agreeing without either owning the state.
      */
     providerScan(cb: (progress: ProviderScanProgress) => void): () => void
+    /** The watchlist tester's state, whenever it changes. Never fires on the phone. */
+    watchlistTest(cb: (status: WatchlistTestStatus) => void): () => void
     /**
      * Sync state, whenever it changes.
      *
@@ -885,6 +923,12 @@ export interface WtaChromeApi {
   /** Progress of a scan, wherever it was started from. */
   onProviderScan(cb: (progress: ProviderScanProgress) => void): () => void
   dismissSuggestion(): Promise<void>
+  /**
+   * Take the offer on screen — "Switch now", or its countdown running out.
+   * Unlike `switchProvider`, marks the source being left as tried, so the
+   * next offer cannot point back at it.
+   */
+  acceptSuggestion(): Promise<boolean>
   /** Jump to this position, in seconds. Used only by the skip-intro button. */
   skipTo(seconds: number): void
   /** Size the skip view to exactly the button, so it covers nothing else. */

@@ -39,8 +39,8 @@
  */
 
 import type { WebContents } from 'electron'
-import type { Provider } from '@shared/types'
-import { probeStream, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
+import type { Provider, ScanReason } from '@shared/types'
+import { probeStream, streamReason, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
 import { isFalseWholeFile, WHOLE_FILE_URL } from './mediarequest'
 import { lengthVerdict } from './runtimecheck'
@@ -156,6 +156,8 @@ export interface QualityProbeResult {
   providerName: string
   subject: string
   verdict: StreamVerdict
+  /** Why it did not stream, or null when it did. See `streamReason`. */
+  reason: ScanReason | null
   timeToMediaMs: number | null
   /** What the scan counted as the stream — the evidence behind `verdict`. */
   mediaSamples: string[]
@@ -443,6 +445,7 @@ export async function probeQuality(
     providerName: provider.name,
     subject: subject.label,
     verdict: result.verdict,
+    reason: streamReason(result, options.timeoutMs),
     timeToMediaMs: result.timeToMediaMs,
     mediaSamples: result.mediaSamples,
     playlists: read,
