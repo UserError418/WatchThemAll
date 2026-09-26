@@ -73,9 +73,12 @@ export const CH = {
   providersScan: 'providers:scan',
   /** Stop a scan in flight. Whatever it settled before stopping is kept. */
   providersScanCancel: 'providers:scan-cancel',
+  /** The background watchlist tester's state, for Settings. See `WatchlistTestStatus`. */
   providersBackgroundStatus: 'providers:background-status',
-  /** Ask main what to recommend. See TailoredRequest. */
-  tmdbTailored: 'tmdb:tailored',
+  /** Which personalised rows Browse shows. See ForYouRow. */
+  tmdbForYouPlan: 'tmdb:for-you-plan',
+  /** One page of a personalised row. */
+  tmdbForYouRow: 'tmdb:for-you-row',
   playOpen: 'play:open',
   /** Move the video to where the renderer has made room for it. */
   playSetBounds: 'play:set-bounds',
@@ -336,33 +339,111 @@ export interface DiscoverRequest {
 }
 
 /**
- * The tailored row on Browse.
+ * One personalised row on Browse, as main planned it.
  *
- * Unlike every other row request, the renderer does **not** say what to fetch —
- * it asks main "what should I show this person", and main answers from the
- * taste profile. That inversion is the point: the profile is derived from the
- * store, the store lives in main, and having the renderer assemble genre ids to
- * send back would put the recommendation logic in the surface that renders it,
- * where the next surface that wants it would have to reimplement it.
+ * The renderer does **not** decide what these rows are — it asks main for a
+ * plan, renders the rows it gets back, and hands each one back to ask for its
+ * contents. That inversion is the point: the taste profile is derived from the
+ * store, the store lives in main, and a renderer that assembled genre ids or
+ * picked seed titles would be the recommendation logic, living in the surface
+ * that draws it, where the phone would have to reimplement it.
+ *
+ * A row carries its own heading because the heading is part of the
+ * recommendation. "Because you loved Frieren" is a claim the user can check
+ * against their own library; a row with no stated reason is unfalsifiable, and
+ * gets scrolled past.
+ *
+ * Handed back to main verbatim to fetch a page, so main re-validates it rather
+ * than trusting it — see `isForYouRow`.
  */
-export interface TailoredRequest {
-  tailored: true
-  page: number
+/**
+ * The three lanes Browse keeps apart: live-action and western-animated series,
+ * the same for films, and anime (Japanese animation, films included). A lane
+ * row only ever shows its lane, so one kind of title cannot crowd out the
+ * others however much of the library it is. See `foryou/lanes.ts`.
+ */
+export type ForYouLane = 'series' | 'films' | 'anime'
+
+/** A title the plan names by id, for a row to recommend from. */
+export interface ForYouSeed {
+  tmdbId: number
+  type: MediaType
 }
 
-/** What the tailored row came back with, and what it was based on. */
-export interface TailoredRow {
-  items: MediaSummary[]
+export type ForYouRow =
+  | {
+      kind: 'topPicks'
+      key: string
+      title: string
+      lane: ForYouLane
+      /**
+       * The favourites it pools, chosen at plan time — never ones that head a
+       * "Because you" row, or Top picks would claim that row's titles first.
+       * Empty for a lane the user has not rated yet: the row then comes from
+       * their taste in genres alone.
+       */
+      seeds: ForYouSeed[]
+    }
+  | {
+      kind: 'because'
+      key: string
+      title: string
+      lane: ForYouLane
+      /** The title the row is "because" of. */
+      seed: ForYouSeed
+    }
+  | {
+      kind: 'genre'
+      key: string
+      title: string
+      lane: ForYouLane
+      /** One genre concept, or two for a "both of these" shelf. See `taste.ts`. */
+      concepts: number[]
+    }
+  | {
+      /** A micro-genre: one TMDB keyword several of the user's favourites share. */
+      kind: 'theme'
+      key: string
+      title: string
+      lane: ForYouLane
+      keyword: number
+    }
+  | {
+      /**
+       * A discovery row across all three lanes, taking them in turn: new
+       * releases, little-known titles rated highly, or the acclaimed ones, in
+       * the genres the user likes in each lane.
+       */
+      kind: 'mixed'
+      key: string
+      title: string
+      flavour: 'new' | 'gems' | 'acclaimed'
+    }
+  | {
+      /** More like what the user plans to watch: intent, not history. */
+      kind: 'watchlist'
+      key: string
+      title: string
+      seeds: ForYouSeed[]
+    }
+
+export interface ForYouPlanRequest {
   /**
-   * The genres that drove it, strongest first, for the row's own label.
-   *
-   * A "for you" row with no stated reason reads as arbitrary. Naming the genre
-   * makes it checkable by the user, which is the difference between a
-   * recommendation they trust and one they scroll past.
+   * Stable for an app session; picks which of the user's favourites the
+   * "Because you watched" rows are about this time. Rotating them is what
+   * keeps Browse from being the same page on every launch.
    */
-  genreIds: number[]
-  /** False when there is too little history to say anything useful. */
-  ready: boolean
+  seed: number
+}
+
+export interface ForYouPlan {
+  /** In display order. Empty for a library with nothing to go on yet. */
+  rows: ForYouRow[]
+}
+
+export interface ForYouRowRequest {
+  row: ForYouRow
+  page: number
 }
 
 export interface Paged<T> {
@@ -527,6 +608,8 @@ export interface MalImportSummary {
   watched: number
   releases: number
   ratings: number
+  /** Converted thumbs replaced by the exact MAL score. See `malapply.ts`. */
+  refined: number
   unmatched: string[]
   skipped: number
 }
@@ -646,8 +729,10 @@ export interface WtaApi {
   }
   tmdb: {
     row(req: RowRequest | GenreRowRequest | DiscoverRequest): Promise<Paged<MediaSummary>>
-    /** The tailored Browse row. Main decides the contents; see TailoredRequest. */
-    tailored(req: TailoredRequest): Promise<TailoredRow>
+    /** The personalised rows Browse should show. Main decides; see ForYouRow. */
+    forYouPlan(req: ForYouPlanRequest): Promise<ForYouPlan>
+    /** One page of a planned row. */
+    forYouRow(req: ForYouRowRequest): Promise<Paged<MediaSummary>>
     search(query: string, page: number): Promise<Paged<MediaSummary>>
     detail(tmdbId: number, type: MediaType): Promise<MediaDetail | null>
     season(tmdbId: number, season: number): Promise<Season | null>

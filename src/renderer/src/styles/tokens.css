@@ -119,6 +119,22 @@
   --danger: #fb5c76;
   --resume: #5b9dfa;
 
+  /*
+   * The three bands of the user's own 1–10 rating (`ratingBand` in
+   * `@shared/rating`): 8–10 liked, 6–7 mixed, 1–5 disliked.
+   *
+   * Aliases, not new colours: liked and disliked keep the green and red the
+   * thumbs always used, so the upgrade does not repaint a library, and mixed
+   * takes the status amber, which already means "in between" in the source
+   * picker's three dots. Named for what they mean so a rating never borrows
+   * `--warning` directly — if the status palette moves, ratings follow on
+   * purpose rather than by accident. Deliberately not `--accent`, which is
+   * amber too but means "you can press this".
+   */
+  --rating-liked: var(--success);
+  --rating-mixed: var(--warning);
+  --rating-disliked: var(--danger);
+
   /* ══ Borders ════════════════════════════════════════════════════════════
    *
    * Light rather than dark, and this is the single biggest visual change here.

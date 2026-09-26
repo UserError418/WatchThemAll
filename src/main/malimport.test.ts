@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
+  findBestMatch,
   mediaTypeFor,
   parseMalExport,
   pickBestMatch,
@@ -161,23 +162,23 @@ describe('parseMalExport', () => {
 })
 
 describe('ratingFromScore', () => {
-  it('reads 8 and above as a like', () => {
-    expect(ratingFromScore(8)).toBe('like')
-    expect(ratingFromScore(10)).toBe('like')
+  /** The same 1–10 in the same hands; remapping would second-guess the user. */
+  it('maps every MAL score one to one', () => {
+    for (let score = 1; score <= 10; score += 1) expect(ratingFromScore(score)).toBe(score)
   })
 
-  it('reads 5 and below as a dislike', () => {
-    // MAL's community average sits near 7, so a 6 is mild disappointment
-    // rather than approval and the split is not down the middle of 1–10.
-    expect(ratingFromScore(1)).toBe('dislike')
-    expect(ratingFromScore(5)).toBe('dislike')
+  /**
+   * Kept now, where they used to be dropped as a shrug. With ratings centred
+   * on the user's own mean, a 6 or a 7 is exactly the calibration the taste
+   * model reads.
+   */
+  it('keeps the middle of the scale', () => {
+    expect(ratingFromScore(6)).toBe(6)
+    expect(ratingFromScore(7)).toBe(7)
   })
 
-  it('leaves the middle and the unrated alone', () => {
-    // A shrug is not a signal; treating it as one floods the taste profile.
-    expect(ratingFromScore(6)).toBeNull()
-    expect(ratingFromScore(7)).toBeNull()
-    expect(ratingFromScore(0)).toBeNull()
+  it("reads MAL's 0 as not scored, and anything off the scale as nothing", () => {
+    for (const score of [0, -1, 11, 7.5, NaN]) expect(ratingFromScore(score)).toBeNull()
   })
 })
 
@@ -345,5 +346,136 @@ describe('pickBestMatch', () => {
     ])
 
     expect(best).not.toBeNull()
+  })
+  /** Measured on a real export: an American crime drama shares the anime's exact title. */
+  it('considers only animated results when there are any', () => {
+    const best = pickBestMatch('Golden Boy', 'tv', [
+      { type: 'tv', title: 'Golden Boy', voteCount: 34, genreIds: [80, 18] },
+      { type: 'tv', title: 'Golden Boy', voteCount: 538, genreIds: [16, 35] },
+    ])
+
+    expect(best?.voteCount).toBe(538)
+  })
+
+  /** A 0-vote stub filed under the romanised title used to win rule 1 outright. */
+  it('lets an animated series beat an exact title that is not animated', () => {
+    const best = pickBestMatch('Tate no Yuusha no Nariagari', 'tv', [
+      { type: 'movie', title: 'Tate no Yuusha no Nariagari', voteCount: 0 },
+      { type: 'tv', title: 'The Rising of the Shield Hero', voteCount: 1593, genreIds: [16] },
+    ])
+
+    expect(best?.title).toBe('The Rising of the Shield Hero')
+  })
+
+  it('considers everything when nothing is animated', () => {
+    const best = pickBestMatch('Innocence', 'movie', [
+      { type: 'tv', title: 'Innocence', voteCount: 5 },
+      { type: 'movie', title: 'Innocence', voteCount: 110 },
+    ])
+
+    expect(best).toMatchObject({ type: 'movie', title: 'Innocence' })
+  })
+
+  it('prefers the requested type among several exact titles', () => {
+    // "Mob Psycho 100" is both the series and a film, and TMDB may list either first.
+    const best = pickBestMatch('Mob Psycho 100', 'tv', [
+      { type: 'movie', title: 'Mob Psycho 100', voteCount: 30 },
+      tv('Mob Psycho 100', 2000),
+    ])
+
+    expect(best?.type).toBe('tv')
+  })
+})
+
+describe('findBestMatch', () => {
+  type Result = RankableMatch & { id: number }
+  const ANIME = [16]
+  /** A TMDB search that answers from a table, recording what it was asked. */
+  function searchFrom(table: Record<string, Result[]>) {
+    const asked: string[] = []
+    const search = async (term: string): Promise<Result[]> => {
+      asked.push(term)
+      return table[term] ?? []
+    }
+    return { search, asked }
+  }
+
+  /**
+   * Measured on a real library: the full title finds only a recap film, and
+   * the shorter term finds the series. Stopping at the first term that found
+   * anything filed the film as the anime.
+   */
+  it('passes over a wrong-typed pick when a shorter term finds the right type', async () => {
+    const { search } = searchFrom({
+      'Shingeki no Kyojin Season 3': [
+        { id: 492999, type: 'movie', title: 'Attack on Titan: The Roar of Awakening', voteCount: 300, genreIds: ANIME },
+      ],
+      'Shingeki no Kyojin': [
+        { id: 295830, type: 'movie', title: 'Attack on Titan', voteCount: 500 },
+        { id: 1429, type: 'tv', title: 'Attack on Titan', voteCount: 7000, genreIds: ANIME },
+      ],
+    })
+
+    const best = await findBestMatch('Shingeki no Kyojin Season 3', 'tv', search)
+
+    expect(best?.id).toBe(1429)
+  })
+
+  it('still settles for the wrong type when no term finds the right one', async () => {
+    const { search } = searchFrom({
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'Some Special: The Movie', voteCount: 10, genreIds: ANIME }],
+    })
+
+    const best = await findBestMatch('Some Special Season 2', 'tv', search)
+
+    expect(best?.id).toBe(7)
+  })
+
+  it('takes the first wrong-typed pick as the fallback, not a later one', async () => {
+    const { search } = searchFrom({
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'First Film', voteCount: 10, genreIds: ANIME }],
+      'Some Special': [{ id: 8, type: 'movie', title: 'Second Film', voteCount: 900, genreIds: ANIME }],
+    })
+
+    expect((await findBestMatch('Some Special Season 2', 'tv', search))?.id).toBe(7)
+  })
+
+  /** An exact title still wins outright, whatever its type (`pickBestMatch` rule 1). */
+  it('stops at an exact title even when it is the other type', async () => {
+    const { search, asked } = searchFrom({
+      'Kimi no Na wa Season 2': [{ id: 372058, type: 'movie', title: 'Kimi no Na wa Season 2', voteCount: 9000, genreIds: ANIME }],
+      'Kimi no Na wa': [{ id: 1, type: 'tv', title: 'Something Else', voteCount: 10, genreIds: ANIME }],
+    })
+
+    expect((await findBestMatch('Kimi no Na wa Season 2', 'tv', search))?.id).toBe(372058)
+    expect(asked).toEqual(['Kimi no Na wa Season 2'])
+  })
+
+  it('stops searching at the first right-typed pick', async () => {
+    const { search, asked } = searchFrom({
+      'Mob Psycho 100 II': [{ id: 67075, type: 'tv', title: 'Mob Psycho 100', voteCount: 2000, genreIds: ANIME }],
+    })
+
+    expect((await findBestMatch('Mob Psycho 100 II', 'tv', search))?.id).toBe(67075)
+    expect(asked).toHaveLength(1)
+  })
+
+  /**
+   * A term that finds only a live-action namesake is no better than one that
+   * finds the wrong type: the anime may still turn up under a shorter term.
+   */
+  it('passes over a pick that is not animated when a shorter term finds one', async () => {
+    const { search } = searchFrom({
+      'Grand Blue Season 2': [{ id: 677602, type: 'tv', title: 'Grand Blue Live', voteCount: 24 }],
+      'Grand Blue': [{ id: 79166, type: 'tv', title: 'Grand Blue Dreaming', voteCount: 200, genreIds: ANIME }],
+    })
+
+    expect((await findBestMatch('Grand Blue Season 2', 'tv', search))?.id).toBe(79166)
+  })
+
+  it('returns null when no term finds anything', async () => {
+    const { search } = searchFrom({})
+
+    expect(await findBestMatch('Nothing Here', 'tv', search)).toBeNull()
   })
 })

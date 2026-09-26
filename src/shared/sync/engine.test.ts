@@ -121,6 +121,32 @@ describe('one sync', () => {
     expect(backend.pushes).toBe(0)
   })
 
+  /**
+   * The remote is whatever the last device pushed, which may be a build a
+   * release behind. `mergeDocuments` assumes both sides are current, so the
+   * pull is migrated first — without that, the old shape went straight into
+   * the live document and was written to disk that way.
+   */
+  it('migrates what it pulls before merging it', async () => {
+    const host = hostOf(doc('a'))
+    const behind = doc('b', ['tv-2'])
+    // Written by a build from before per-episode stamps: the watched list,
+    // but no marks for it.
+    const unmarked: Record<string, unknown> = { ...behind.watchlist[0]!, watchedEpisodes: ['1:1'] }
+    delete unmarked.episodeMarks
+    behind.watchlist = [unmarked as never]
+    const backend = backendOf({ document: behind, version: null })
+
+    await syncOnce(host, backend, 0)
+
+    const adopted = host.current.watchlist.find((w) => w.id === 'tv-2')
+    expect(adopted?.episodeMarks).toEqual({ '1:1': { watched: true, at: 1 } })
+    // And the remote is healed by the push, rather than staying behind.
+    expect(backend.stored?.document.watchlist[0]?.episodeMarks).toEqual({
+      '1:1': { watched: true, at: 1 },
+    })
+  })
+
   it('pushes without writing locally when only the remote is behind', async () => {
     const host = hostOf(doc('a', ['tv-1', 'tv-2']))
     const backend = backendOf({ document: doc('a', ['tv-1']), version: null })

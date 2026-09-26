@@ -312,7 +312,9 @@ function mergePreferences(
  * Both sides must already be migrated to the current schema — this deals with
  * two documents of the same shape, and handing it a version 1 document is a
  * programming error rather than a case to handle. `migrate` runs on load, and
- * a sync backend runs it on whatever it pulls before calling this.
+ * `syncOnce` runs it on whatever it pulls before calling this. It once did
+ * not, and a pulled document's old-shaped records went straight into the live
+ * one.
  *
  * Neither argument is mutated. The result keeps the local `deviceId`, since it
  * identifies this install and not the library.

@@ -68,6 +68,7 @@ interface TmdbListItem {
   first_air_date?: string
   release_date?: string
   genre_ids?: number[]
+  original_language?: string
 }
 
 interface TmdbPage {
@@ -108,6 +109,7 @@ function toSummary(item: TmdbListItem, fallbackType: MediaType): MediaSummary {
     voteCount: item.vote_count ?? 0,
     releaseDate: item.release_date ?? item.first_air_date ?? null,
     genreIds: item.genre_ids ?? [],
+    ...(item.original_language ? { originalLanguage: item.original_language } : {}),
   }
 }
 
@@ -192,22 +194,61 @@ function isDiscoverRow(
 }
 
 /**
- * Titles matching any of several genres.
+ * What a personal Browse row asks `/discover` for. Every field narrows; an
+ * absent one does not.
  *
- * `with_genres` joined by `|` is TMDB's OR; a comma would be AND, which for a
- * three-genre profile returns almost nothing. A vote floor keeps the row from
- * filling with titles that match the genres and nothing else.
+ * Genre strings are passed through in TMDB's own syntax, `,` for AND and `|`
+ * for OR, because the shelves need both, and a structured parameter here would
+ * just be that syntax spelled differently. Everything in a query is built from
+ * numbers in `foryou/`, never from anything the user typed.
  */
-export async function discoverByGenres(
+export interface DiscoverQuery {
+  withGenres?: string
+  withoutGenres?: string
+  /** TMDB keyword ids, same syntax as the genres. */
+  withKeywords?: string
+  /** ISO 639-1, as in `originalLanguage`. */
+  language?: string
+  /** `YYYY-MM-DD`: first aired (series) or first released (films) on or after. */
+  releasedAfter?: string
+  /**
+   * Fewer votes than this and a title is left out. Defaults to 80, which keeps
+   * a shelf from filling with titles that match the genres and nothing else
+   * while still admitting the long tail of a niche genre.
+   */
+  minVotes?: number
+  /** More votes than this and it is left out: how "hidden gems" stay hidden. */
+  maxVotes?: number
+  minRating?: number
+  sortBy?: 'popularity.desc' | 'vote_average.desc' | 'vote_count.desc'
+}
+
+const DEFAULT_MIN_VOTES = 80
+
+/**
+ * `/discover` for one catalogue.
+ *
+ * Refuses a query with neither genres nor keywords: that would be TMDB's whole
+ * catalogue by popularity, which is the charts further down Browse, not a
+ * personal row.
+ */
+export async function discover(
   type: MediaType,
-  genreIds: number[],
+  query: DiscoverQuery,
   page: number,
 ): Promise<Paged<MediaSummary>> {
-  if (genreIds.length === 0) return { items: [], page, totalPages: 0 }
+  if (!query.withGenres && !query.withKeywords) return { items: [], page, totalPages: 0 }
+  const date = type === 'tv' ? 'first_air_date.gte' : 'primary_release_date.gte'
   const res = await get<TmdbPage>(`/discover/${type}`, {
-    with_genres: genreIds.join('|'),
-    sort_by: 'popularity.desc',
-    'vote_count.gte': 80,
+    ...(query.withGenres ? { with_genres: query.withGenres } : {}),
+    ...(query.withoutGenres ? { without_genres: query.withoutGenres } : {}),
+    ...(query.withKeywords ? { with_keywords: query.withKeywords } : {}),
+    ...(query.language ? { with_original_language: query.language } : {}),
+    ...(query.releasedAfter ? { [date]: query.releasedAfter } : {}),
+    ...(query.maxVotes !== undefined ? { 'vote_count.lte': query.maxVotes } : {}),
+    ...(query.minRating !== undefined ? { 'vote_average.gte': query.minRating } : {}),
+    'vote_count.gte': query.minVotes ?? DEFAULT_MIN_VOTES,
+    sort_by: query.sortBy ?? 'popularity.desc',
     include_adult: 'false',
     page: Math.max(1, page),
   })
@@ -217,7 +258,7 @@ export async function discoverByGenres(
 /**
  * What TMDB thinks is like this title.
  *
- * The content-based half of the tailored row. `/recommendations` is computed
+ * The backbone of Top picks and the "Because you watched" rows. `/recommendations` is computed
  * from what people actually watch together as well as from metadata, so it
  * answers a question genre filtering cannot: two series can share every genre
  * tag and have nothing else in common, and `/discover` cannot tell them apart.
@@ -389,6 +430,44 @@ export async function season(tmdbId: number, seasonNumber: number): Promise<Seas
     rating: e.vote_average ?? 0,
   }))
   return { season: seasonNumber, name: s.name, episodes }
+}
+
+/**
+ * TMDB's keywords for a title: the tags under the genres ("time travel",
+ * "isekai", "heist"), which is what Browse's themed rows are made of.
+ *
+ * Films and series answer in different fields. Failures come back empty, for
+ * the same reason as `recommendations`: one title without keywords should cost
+ * that title's themes, not the plan.
+ */
+export async function keywords(
+  tmdbId: number,
+  type: MediaType,
+): Promise<Array<{ id: number; name: string }>> {
+  try {
+    const res = await get<{ keywords?: Array<{ id: number; name: string }>; results?: Array<{ id: number; name: string }> }>(
+      `/${type}/${tmdbId}/keywords`,
+    )
+    return res.keywords ?? res.results ?? []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * A title's original language, for telling anime from other animation among
+ * the user's own titles, which do not store it.
+ *
+ * Asked through `detail` rather than a lighter request so it shares a cache
+ * entry with the detail view: a title the user has opened costs nothing here.
+ * Null when TMDB cannot say.
+ */
+export async function originalLanguage(tmdbId: number, type: MediaType): Promise<string | null> {
+  try {
+    return (await detail(tmdbId, type)).originalLanguage ?? null
+  } catch {
+    return null
+  }
 }
 
 export async function genres(type: MediaType): Promise<Array<{ id: number; name: string }>> {

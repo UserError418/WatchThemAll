@@ -18,7 +18,8 @@ import type {
   MalDecisions,
   PlayRequest,
   RowRequest,
-  TailoredRequest,
+  ForYouPlanRequest,
+  ForYouRowRequest,
   TitleRef,
   WtaApi,
 } from '@shared/ipc'
@@ -38,7 +39,8 @@ const api: WtaApi = {
   },
   tmdb: {
     row: (req: RowRequest | GenreRowRequest | DiscoverRequest) => ipcRenderer.invoke(CH.tmdbRow, req),
-    tailored: (req: TailoredRequest) => ipcRenderer.invoke(CH.tmdbTailored, req),
+    forYouPlan: (req: ForYouPlanRequest) => ipcRenderer.invoke(CH.tmdbForYouPlan, req),
+    forYouRow: (req: ForYouRowRequest) => ipcRenderer.invoke(CH.tmdbForYouRow, req),
     search: (query: string, page: number) => ipcRenderer.invoke(CH.tmdbSearch, query, page),
     detail: (tmdbId: number, type: MediaType) => ipcRenderer.invoke(CH.tmdbDetail, tmdbId, type),
     season: (tmdbId: number, season: number) => ipcRenderer.invoke(CH.tmdbSeason, tmdbId, season),
