@@ -18,6 +18,7 @@
     PlayerContext,
     PlayerSuggestion,
     ProbeVerdict,
+    ScanInFlight,
     ScanReason,
     TitleProviderState,
   CastDevice,
@@ -142,8 +143,8 @@
   let scanning = $state(false)
   let scanDone = $state(0)
   let scanTotal = $state(0)
-  let scanCurrent = $state<string | null>(null)
-  let scanConfirming = $state(false)
+  /** Every source under test right now; the rows mark each one. */
+  let scanTesting = $state<ScanInFlight[]>([])
 
   $effect(() =>
     api?.onProviderScan((progress) => {
@@ -153,8 +154,7 @@
       scanReasons = progress.reasons
       scanDone = progress.done
       scanTotal = progress.total
-      scanCurrent = progress.providerName
-      scanConfirming = progress.confirming
+      scanTesting = progress.testing
       scanning = !progress.finished
     }),
   )
@@ -1133,9 +1133,11 @@
             <span class="dot none"></span>
             <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
             {#if scanning}
+              <!-- A count, not a name: the rows below mark every source under
+                   test, and the menu is too narrow for the three names. Once
+                   every source has a verdict only second tests remain. -->
               <span class="tag"
-                >{#if scanConfirming}re-checking {scanCurrent}{:else}{scanCurrent ?? '…'}
-                  {scanDone + 1}/{scanTotal}{/if}</span
+                >{#if scanTotal > 0 && scanDone >= scanTotal}double-checking{:else}{scanDone}/{scanTotal}{/if}</span
               >
             {/if}
           </button>
@@ -1144,7 +1146,7 @@
         {#each sourceRows as provider (provider.id)}
           {@const resume = provider.id === sourceState.lastUsed}
           {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
-          {@const testing = scanning && scanCurrent === provider.name}
+          {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
           {@const time = measurement(provider.id)}
           <button
             class="source"
@@ -1171,8 +1173,8 @@
               <span class="tag">Playing{time}</span>
             {:else if resume}
               <span class="tag resume">resume{time}</span>
-            {:else if testing}
-              <span class="tag">testing…</span>
+            {:else if test}
+              <span class="tag">{test.recheck ? 'testing again…' : 'testing…'}</span>
             {:else if dot.label}
               <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
             {/if}

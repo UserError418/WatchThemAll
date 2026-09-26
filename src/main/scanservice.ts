@@ -27,7 +27,7 @@
  * kills every cheaper approach: several providers resolve nothing at all until
  * something clicks.
  *
- * ## Fan out, then re-check anything that died
+ * ## Three at a time, reds tried twice
  *
  * Contention is real and it was measured, against the shipped catalogue on one
  * title, nine providers:
@@ -47,14 +47,22 @@
  *
  * A starved player is indistinguishable from a broken one, and the whole value
  * of the feature is the user trusting a red dot enough to stop trying that
- * source. So speed is taken from the fan-out and accuracy is bought back
- * afterwards: anything that comes back `dead` is probed again **on its own**,
- * with nothing to compete with, and the better of the two results stands.
+ * source. So a source that comes back `dead` is tested a second time with the
+ * longer budget, and the better of the two results stands.
  *
- * That keeps the common case — most sources working — at the fast path, and
- * only pays for the re-check on sources that looked broken, which are the ones
- * worth being right about. A title where everything is dead is the slow case,
- * and it is the case where being wrong is least acceptable.
+ * Until 2026-09-26 that meant six at once and then every red **alone**, one
+ * after another — and a scan with several reds spent most of its time in that
+ * single file, which is what the user saw: "why is it sequential now?" What
+ * they asked for instead is **three sources under test at every moment**, the
+ * re-checks included. So there is one pool: every provider's first test goes
+ * into a queue, a red goes back in for its second, and whenever a test ends
+ * the next one starts until the queue is empty.
+ *
+ * Three rather than six for the same reason re-checks existed at all: the
+ * table shows contention costing working sources their green at six and not
+ * at two. A re-check no longer has the line to itself, so it is not the
+ * clean-room test it was; what it keeps is the second, longer look, at half
+ * the contention the first pass used to run at.
  */
 
 import type { Provider } from '@shared/types'
@@ -84,6 +92,14 @@ interface Measured {
   reason: ScanReason | null
 }
 
+/** One test the pool runs: a provider's first, or the second a red gets. */
+interface Job {
+  provider: Provider
+  budgetMs: number
+  /** A second test of a provider whose first came back red. */
+  recheck: boolean
+}
+
 export interface ScanServiceOptions {
   /** The enabled providers, in the user's order. Read per run, not captured. */
   providers: () => Provider[]
@@ -93,9 +109,9 @@ export interface ScanServiceOptions {
   onProgress: (progress: ProviderScanProgress) => void
   /** Per-provider budget in the fan-out, from navigation start. See the default below. */
   timeoutMs?: number
-  /** Per-provider budget when probing alone — the re-check, and the background tester. */
-  soloTimeoutMs?: number
-  /** How many providers to measure at once. See the header for the measurements. */
+  /** The longer per-provider budget: a red's second test, and the background tester's. */
+  longTimeoutMs?: number
+  /** How many providers are under test at every moment. See the header. */
   concurrency?: number
 }
 
@@ -125,7 +141,7 @@ export interface ScanService {
 
 export function createScanService(options: ScanServiceOptions): ScanService {
   /**
-   * Twenty seconds in the fan-out, twenty-five alone.
+   * Twenty seconds for a first test, twenty-five for a second.
    *
    * The fan-out's budget was eighteen, set by 111Movies' series pages at
    * 12.0–15.3 s to their first media request. Two things moved it. A source
@@ -133,7 +149,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
    * segment to every start. And since 2026-09-26 a source slower than 20–25 s
    * is called out as a timeout rather than a vague "may work".
    *
-   * The re-check gets the upper end of that range because it is where a false
+   * The second test gets the upper end of that range because it is where a false
    * red is caught, and slow sources exist: VidLux, probed alone on five titles,
    * streamed on all five at 8.5–19.2 s, after two of its own lookups failed
    * within the first second. CinemaOS, at 35.6 and 59.9 s when it streamed at
@@ -144,13 +160,9 @@ export function createScanService(options: ScanServiceOptions): ScanService {
    * stream at all.
    */
   const timeoutMs = options.timeoutMs ?? 20_000
-  const soloTimeoutMs = options.soloTimeoutMs ?? 25_000
-  /**
-   * Six, measured rather than chosen — see the table in the header. Wider is
-   * not faster and is less accurate; narrower is three times slower for the
-   * same answer.
-   */
-  const concurrency = Math.max(1, options.concurrency ?? 6)
+  const longTimeoutMs = options.longTimeoutMs ?? 25_000
+  /** Three, as asked on 2026-09-26 — see the header for why not six. */
+  const concurrency = Math.max(1, options.concurrency ?? 3)
 
   /**
    * Identifies the run, so a cancelled scan's stragglers cannot write.
@@ -197,7 +209,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
     async probeOne(titleKey, subject, provider) {
       const before = token
-      const measured = await probe(provider, subject, soloTimeoutMs)
+      const measured = await probe(provider, subject, longTimeoutMs)
       // A scan by hand started, or was cancelled, while this one ran.
       if (token !== before || running) return null
       const at = Date.now()
@@ -237,19 +249,23 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const testedAt: Record<string, number> = {}
       const total = providers.length
 
-      let confirming = false
-      const publish = (provider: Provider | null, finished: boolean): void => {
+      /** What is under test right now, by provider, in the order it started. */
+      const inFlight = new Map<string, Job>()
+
+      const publish = (finished: boolean): void => {
         options.onProgress({
           titleKey,
-          providerId: provider?.id ?? null,
-          providerName: provider?.name ?? null,
+          testing: [...inFlight.values()].map((job) => ({
+            providerId: job.provider.id,
+            providerName: job.provider.name,
+            recheck: job.recheck,
+          })),
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
           timings: { ...timings },
           qualities: { ...qualities },
           reasons: { ...reasons },
-          confirming,
           finished,
           cancelled: finished && token !== mine,
         })
@@ -266,69 +282,67 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         else delete qualities[provider.id]
       }
 
-      publish(providers[0] ?? null, false)
-
       /**
-       * A shared queue rather than a chunked `Promise.all`.
+       * One test, and what its result means for the queue.
        *
-       * Chunking into pairs makes every pair wait for its slower half, and
-       * these differ by an order of magnitude — a dead host fails in under a
-       * second while a working provider uses its whole budget. Measured across
-       * the shipped catalogue that idles a worker for roughly a third of the
-       * run.
+       * A first test settles the provider's verdict at once, so its dot fills
+       * in, and a red goes back in the queue for a second test with the longer
+       * budget. The second test replaces the first only if it is at least as
+       * good — streaming under either condition proves the source can serve
+       * this title — and when both fail its reason stands, because it had the
+       * longer budget: "timeout (25 s)" is the truer sentence.
        */
-      let next = 0
-      const worker = async (): Promise<void> => {
-        while (token === mine) {
-          const provider = providers[next]
-          next += 1
-          if (!provider) return
+      const perform = async (job: Job): Promise<void> => {
+        const measured = await probe(job.provider, subject, job.budgetMs)
+        inFlight.delete(job.provider.id)
+        // Checked after the await: the user may have cancelled during the
+        // probe, and a late write would corrupt the next run's verdicts.
+        if (token !== mine) return
 
-          publish(provider, false)
-          const measured = await probe(provider, subject, timeoutMs)
-
-          // Checked again after the await: the user may have cancelled during
-          // the probe, and a late write would corrupt the next run's verdicts.
-          if (token !== mine) return
-          settle(provider, measured)
-          publish(provider, false)
+        if (!job.recheck) {
+          settle(job.provider, measured)
+          // Not a source that cannot express this title: a missing template is
+          // not something a busy line caused, and a second test cannot change it.
+          if (measured.verdict === 'dead' && measured.reason?.kind !== 'unsupported') {
+            queue.push({ provider: job.provider, budgetMs: longTimeoutMs, recheck: true })
+          }
+        } else if (providerRank(undefined, measured.verdict) <= providerRank(undefined, verdicts[job.provider.id])) {
+          settle(job.provider, measured)
         }
+        publish(false)
       }
 
-      await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker))
-
       /**
-       * Re-check the reds, alone, with the longer budget.
-       *
-       * The fan-out above is the only thing that could have starved them, so
-       * this pass removes that variable rather than adding a retry for its own
-       * sake — a provider genuinely without the title fails here too, and keeps
-       * its red dot.
-       *
-       * The better of the two results stands: streaming under either
-       * condition proves the source can serve this title, and the question the
-       * dot answers is whether it is worth the user's click. When both fail,
-       * the solo result's reason stands, because it had the source to itself
-       * and the longer budget — "timeout (25 s)" is the truer sentence.
+       * First tests in the user's order; second tests join the end as reds
+       * come in. A shared queue rather than chunks, because tests differ by an
+       * order of magnitude — a dead host fails in under a second while a
+       * working provider uses its whole budget — and a chunk waits for its
+       * slowest member.
        */
-      confirming = true
-      for (const provider of providers) {
-        if (token !== mine) break
-        if (verdicts[provider.id] !== 'dead') continue
+      const queue: Job[] = providers.map((provider) => ({ provider, budgetMs: timeoutMs, recheck: false }))
+      /** The probes in progress, so the loop can wait for whichever ends first. */
+      const tasks = new Set<Promise<void>>()
 
-        publish(provider, false)
-        const second = await probe(provider, subject, soloTimeoutMs)
-        if (token !== mine) break
-        if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
-          settle(provider, second)
+      publish(false)
+      while (queue.length > 0 || tasks.size > 0) {
+        // Keep the pool full. Once the run is cancelled nothing new starts, but
+        // what is already running is let finish: a probe cannot be interrupted.
+        while (token === mine && tasks.size < concurrency) {
+          const job = queue.shift()
+          if (!job) break
+          inFlight.set(job.provider.id, job)
+          const task: Promise<void> = perform(job).finally(() => tasks.delete(task))
+          tasks.add(task)
+          publish(false)
         }
-        publish(provider, false)
+        if (token !== mine) queue.length = 0
+        if (tasks.size === 0) break
+        await Promise.race(tasks)
       }
-      confirming = false
 
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons }
       if (token === mine) running = false
-      publish(null, true)
+      publish(true)
       return scan
     },
   }

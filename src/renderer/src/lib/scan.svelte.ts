@@ -20,7 +20,7 @@
  * just keeps the derivation in one process.
  */
 
-import type { ProbeVerdict, ProviderScanProgress, ScanReason, TitleRef } from '@shared/ipc'
+import type { ProbeVerdict, ProviderScanProgress, ScanInFlight, ScanReason, TitleRef } from '@shared/ipc'
 
 /** Whether two title references mean the same title. Mirrors `titleKey`'s inputs. */
 function sameTitle(a: TitleRef | null, b: TitleRef | null): boolean {
@@ -48,12 +48,10 @@ class ProviderScanState {
   running = $state(false)
   done = $state(0)
   total = $state(0)
-  /** The provider being measured right now, for the status line. */
-  current = $state<string | null>(null)
+  /** Every provider under test right now — several at once, see `ProviderScanProgress.testing`. */
+  testing = $state<ScanInFlight[]>([])
   /** Set when the last run was stopped by the user rather than finishing. */
   cancelled = $state(false)
-  /** The run is re-checking a provider that looked dead. */
-  confirming = $state(false)
 
   /**
    * Start listening once, for the life of the renderer.
@@ -71,11 +69,15 @@ class ProviderScanState {
       this.reasons = progress.reasons
       this.done = progress.done
       this.total = progress.total
-      this.current = progress.providerName
-      this.confirming = progress.confirming
+      this.testing = progress.testing
       this.cancelled = progress.cancelled
       this.running = !progress.finished
     })
+  }
+
+  /** The provider's test in progress, if it is under test right now. */
+  inFlight(providerId: string): ScanInFlight | undefined {
+    return this.testing.find((test) => test.providerId === providerId)
   }
 
   /** Whether the live run describes the title a surface is showing. */
@@ -100,8 +102,7 @@ class ProviderScanState {
     this.done = 0
     this.cancelled = false
     this.running = true
-    this.current = null
-    this.confirming = false
+    this.testing = []
 
     try {
       await window.wta.providers.scan(media, episode)
@@ -126,7 +127,7 @@ class ProviderScanState {
     this.reasons = {}
     this.done = 0
     this.total = 0
-    this.current = null
+    this.testing = []
     this.cancelled = false
   }
 }

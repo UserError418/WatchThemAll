@@ -45,7 +45,7 @@
  */
 
 import type { Provider } from '@shared/types'
-import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
+import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
@@ -201,19 +201,26 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       const testedAt: Record<string, number> = {}
       const total = providers.length
 
-      let confirming = false
-      const publish = (provider: Provider | null, finished: boolean): void => {
+      /** What is under test right now, by provider, in the order it started. */
+      const testing = new Map<string, ScanInFlight>()
+      const begin = (provider: Provider, recheck: boolean): void => {
+        testing.set(provider.id, { providerId: provider.id, providerName: provider.name, recheck })
+        publish(false)
+      }
+      const end = (provider: Provider): void => {
+        testing.delete(provider.id)
+        publish(false)
+      }
+      const publish = (finished: boolean): void => {
         options.onProgress({
           titleKey,
-          providerId: provider?.id ?? null,
-          providerName: provider?.name ?? null,
+          testing: [...testing.values()],
           done: Object.keys(verdicts).length,
           total,
           verdicts: { ...verdicts },
           timings: { ...timings },
           qualities: { ...qualities },
           reasons: { ...reasons },
-          confirming,
           finished,
           cancelled: finished && token !== mine,
         })
@@ -240,7 +247,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       }
 
       options.suspendPlayback()
-      publish(providers[0] ?? null, false)
+      publish(false)
 
       try {
         /**
@@ -255,31 +262,29 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
             next += 1
             if (!provider) return
 
-            publish(provider, false)
+            begin(provider, false)
             const measured = await measure(provider, PROBE_MS)
             // Checked after the await: a cancelled run must not write.
             if (cancelled()) return
             settle(provider, measured)
-            publish(provider, false)
+            end(provider)
           }
         }
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker))
 
         // Every red again, alone, with the longer budget. See the header.
-        confirming = true
         for (const provider of providers) {
           if (cancelled()) break
           if (verdicts[provider.id] !== 'dead' || reasons[provider.id]?.kind === 'unsupported') continue
 
-          publish(provider, false)
+          begin(provider, true)
           const second = await measure(provider, SOLO_PROBE_MS)
           if (cancelled()) break
           if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
             settle(provider, second)
           }
-          publish(provider, false)
+          end(provider)
         }
-        confirming = false
       } finally {
         // Each probe closes its own session; this is for one a crash or a
         // cancellation left behind, since every session is a decoding WebView.
@@ -289,7 +294,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       }
 
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons }
-      publish(null, true)
+      testing.clear()
+      publish(true)
       return scan
     },
   }

@@ -67,6 +67,7 @@
   import { library } from '../lib/library.svelte'
   import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
+  import { scanStatus } from '../lib/scanstatus'
 
   interface Props {
     /** Currently selected provider id, or null to let the app decide. */
@@ -209,15 +210,7 @@
    * feature's entire pitch is that it saves the user from waiting through
    * providers one at a time — so it has to be visibly doing that.
    */
-  const scanLabel = $derived.by(() => {
-    if (!scanning) return null
-    if (!scan.current) return 'Starting…'
-    // The re-check runs after every provider has a verdict, so the counter is
-    // already at its maximum — saying "12 of 12" again would read as stuck.
-    if (scan.confirming) return `Double-checking ${scan.current}`
-    const of = scan.total > 0 ? ` of ${scan.total}` : ''
-    return `Testing ${scan.current} (${scan.done + 1}${of})`
-  })
+  const scanLabel = $derived(scanning ? scanStatus(scan.testing, scan.done, scan.total) : null)
 
   /** How many sources the last scan found streaming, once it has finished. */
   const scanSummary = $derived.by(() => {
@@ -333,7 +326,7 @@
       {#each rows as provider (provider.id)}
         {@const resume = provider.id === sourceState.lastUsed}
         {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
-        {@const testing = scanning && scan.current === provider.name}
+        {@const test = scanning ? scan.inFlight(provider.id) : undefined}
         {@const time = measurement(provider.id)}
         <button
           class="item"
@@ -356,10 +349,10 @@
           <span class="name">{provider.name}</span>
           {#if resume}
             <span class="hint resume">resume{time}</span>
-          {:else if testing}
-            <!-- The one being measured right now, so the list shows progress
-                 moving down it rather than only a counter changing. -->
-            <span class="hint testing">testing…</span>
+          {:else if test}
+            <!-- Every source under test right now — several at once — so the
+                 list shows the scan working through it, not only a counter. -->
+            <span class="hint testing">{test.recheck ? 'testing again…' : 'testing…'}</span>
           {:else if dot.label}
             <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
           {/if}

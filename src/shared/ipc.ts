@@ -477,6 +477,20 @@ export interface TitleRef {
  */
 export type TitleOutcome = 'failed' | 'worked'
 
+/** One provider a running scan is measuring. */
+export interface ScanInFlight {
+  providerId: string
+  providerName: string
+  /**
+   * A second, longer test of a provider whose first came back red.
+   *
+   * A crowded test occasionally starves a working provider into looking
+   * broken, so a red is tried again before it is believed. The UI says so,
+   * rather than appearing to test a source it already has a verdict for.
+   */
+  recheck: boolean
+}
+
 /**
  * A scan in flight, pushed to the renderer as each provider resolves.
  *
@@ -487,9 +501,15 @@ export type TitleOutcome = 'failed' | 'worked'
  */
 export interface ProviderScanProgress {
   titleKey: string
-  /** What is being measured right now, for the status line. */
-  providerId: string | null
-  providerName: string | null
+  /**
+   * Every provider being measured right now, in the order they started.
+   *
+   * A list because a scan is parallel — three at a time on the desktop, two on
+   * the phone — and a single "current provider" made it look like one source
+   * after another: the list marked one row "testing" while several were.
+   */
+  testing: ScanInFlight[]
+  /** Providers with a verdict so far, out of `total`. A re-check does not count twice. */
   done: number
   total: number
   /** Verdicts settled so far. */
@@ -500,15 +520,6 @@ export interface ProviderScanProgress {
   qualities: Record<string, number>
   /** Why each settled provider that did not stream failed. See `ProviderScan.reasons`. */
   reasons: Record<string, ScanReason>
-  /**
-   * The scan is re-checking a provider that looked dead.
-   *
-   * A parallel pass is fast and occasionally starves a provider into looking
-   * broken, so anything that comes back dead is tried again on its own before
-   * the verdict is believed. The UI says so rather than appearing to stall at
-   * 100%.
-   */
-  confirming: boolean
   /** True once every provider has resolved or the user cancelled. */
   finished: boolean
   /** Set when the user stopped it, so the UI can say so rather than claim a result. */

@@ -179,7 +179,7 @@ describe('why a source failed', () => {
     expect(scan.reasons).toEqual({ guarded: { kind: 'blocked' } })
   })
 
-  it('re-checks every red alone with the longer budget, and the solo reason stands', async () => {
+  it('tests every red a second time with the longer budget, and the second reason stands', async () => {
     script.set('slow', [
       { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },
       { verdict: 'timeout', ms: null, reason: { kind: 'timeout', seconds: 25 } },
@@ -187,6 +187,13 @@ describe('why a source failed', () => {
     const scan = await scanOf([provider('slow')]).run()
     expect(budgets.get('slow')).toEqual([20_000, 25_000])
     expect(scan.reasons).toEqual({ slow: { kind: 'timeout', seconds: 25 } })
+  })
+
+  it('does not test a source twice when it cannot express the title', async () => {
+    script.set('movies-only', [{ verdict: 'no-template', ms: null }])
+    const scan = await scanOf([provider('movies-only')]).run()
+    expect(budgets.get('movies-only')).toEqual([20_000])
+    expect(scan.reasons).toEqual({ 'movies-only': { kind: 'unsupported' } })
   })
 
   it('drops the reason when the re-check streamed', async () => {
@@ -238,5 +245,94 @@ describe('testing one provider for the background tester', () => {
     await run()
     release()
     expect(await pending).toBeNull()
+  })
+})
+
+describe('three sources under test at every moment', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  /** A probe answer that waits until the test releases it. */
+  function held(verdict: StreamVerdict): { answer: { verdict: StreamVerdict; ms: number | null; hold: Promise<void> }; release: () => void } {
+    let release: () => void = () => {}
+    const hold = new Promise<void>((resolve) => (release = resolve))
+    return { answer: { verdict, ms: verdict === 'stream' ? 1_000 : null, hold }, release }
+  }
+
+  /** Let the scan's loop run until it waits on a probe again. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** Which providers have had a probe started, and how many each. */
+  const started = (): Record<string, number> =>
+    Object.fromEntries([...budgets.entries()].map(([id, list]) => [id, list.length]))
+
+  it('never runs more than three, and starts the next the moment one ends', async () => {
+    const probes = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map((id) => [id, held('stream')]))
+    for (const [id, probe] of Object.entries(probes)) script.set(id, [probe.answer])
+
+    const { run } = scanOf(['a', 'b', 'c', 'd', 'e'].map(provider))
+    const done = run()
+    await settle()
+    expect(started()).toEqual({ a: 1, b: 1, c: 1 })
+
+    probes.b?.release()
+    await settle()
+    expect(started()).toEqual({ a: 1, b: 1, c: 1, d: 1 })
+
+    for (const probe of Object.values(probes)) probe.release()
+    const scan = await done
+    expect(Object.keys(scan.verdicts)).toHaveLength(5)
+  })
+
+  it("runs a red's second test alongside the first tests still going, not after them", async () => {
+    const a = held('no-media')
+    const aAgain = held('stream')
+    const b = held('stream')
+    const c = held('stream')
+    const d = held('stream')
+    script.set('a', [a.answer, aAgain.answer])
+    script.set('b', [b.answer])
+    script.set('c', [c.answer])
+    script.set('d', [d.answer])
+
+    const { run, progress } = scanOf(['a', 'b', 'c', 'd'].map(provider))
+    const done = run()
+    await settle()
+
+    a.release() // red: its second test joins the queue behind d
+    await settle()
+    expect(started()).toEqual({ a: 1, b: 1, c: 1, d: 1 })
+
+    b.release() // a slot frees while c and d are still on their first test
+    await settle()
+    expect(started()).toEqual({ a: 2, b: 1, c: 1, d: 1 })
+    expect(budgets.get('a')).toEqual([20_000, 25_000])
+
+    const during = progress.at(-1)
+    expect(during?.testing).toEqual([
+      { providerId: 'c', providerName: 'c', recheck: false },
+      { providerId: 'd', providerName: 'd', recheck: false },
+      { providerId: 'a', providerName: 'a', recheck: true },
+    ])
+
+    for (const probe of [aAgain, c, d]) probe.release()
+    const scan = await done
+    expect(scan.verdicts).toEqual({ a: 'stream', b: 'stream', c: 'stream', d: 'stream' })
+    expect(progress.at(-1)?.testing).toEqual([])
+  })
+
+  it('lists every source under test, not only the latest to start', async () => {
+    const probes = ['a', 'b', 'c'].map(() => held('stream'))
+    ;['a', 'b', 'c'].forEach((id, i) => script.set(id, [probes[i]!.answer]))
+
+    const { run, progress } = scanOf(['a', 'b', 'c'].map(provider))
+    const done = run()
+    await settle()
+    expect(progress.at(-1)?.testing.map((t) => t.providerId)).toEqual(['a', 'b', 'c'])
+
+    for (const probe of probes) probe.release()
+    await done
   })
 })
