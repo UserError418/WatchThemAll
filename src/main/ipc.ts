@@ -40,7 +40,8 @@ import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { forYouPlan, forYouRow, type ForYouNetwork } from './foryou'
+import { forYouPlan, forYouRow } from './foryou'
+import { tmdbNetwork } from './foryou/network'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -166,16 +167,11 @@ export function registerIpc(deps: IpcDeps): void {
    * taste profile is derived from the store, and the store is here. The
    * renderer only asks for the plan and then for each planned row's pages.
    */
-  const forYouNet: ForYouNetwork = {
-    recommendations: tmdb.recommendations,
-    discover: tmdb.discover,
-    genres: tmdb.genres,
-  }
   ipcMain.handle(CH.tmdbForYouPlan, (_e, req: ForYouPlanRequest) =>
-    forYouPlan(store.read(), req.seed, forYouNet),
+    forYouPlan(store.read(), req.seed, tmdbNetwork),
   )
   ipcMain.handle(CH.tmdbForYouRow, (_e, req: ForYouRowRequest) =>
-    forYouRow(store.read(), req, forYouNet),
+    forYouRow(store.read(), req, tmdbNetwork),
   )
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))

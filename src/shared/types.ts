@@ -62,6 +62,15 @@ export interface MediaSummary {
   imdbId?: string | null
   /** Which backend produced this result. Drives dedupe when the two are merged. */
   source?: 'tmdb' | 'imdb'
+  /**
+   * TMDB `original_language`, an ISO 639-1 code (`ja`, `en`). Browse needs it
+   * to tell anime from other animation: TMDB files both under Animation, and
+   * the language is the one field that separates them.
+   *
+   * Optional because IMDB results and titles stored before it was carried have
+   * none.
+   */
+  originalLanguage?: string
 }
 
 /** Everything the detail view needs, fetched on demand. */

@@ -350,30 +350,75 @@ export interface DiscoverRequest {
  * Handed back to main verbatim to fetch a page, so main re-validates it rather
  * than trusting it — see `isForYouRow`.
  */
+/**
+ * The three lanes Browse keeps apart: live-action and western-animated series,
+ * the same for films, and anime (Japanese animation, films included). A lane
+ * row only ever shows its lane, so one kind of title cannot crowd out the
+ * others however much of the library it is. See `foryou/lanes.ts`.
+ */
+export type ForYouLane = 'series' | 'films' | 'anime'
+
+/** A title the plan names by id, for a row to recommend from. */
+export interface ForYouSeed {
+  tmdbId: number
+  type: MediaType
+}
+
 export type ForYouRow =
   | {
       kind: 'topPicks'
       key: string
       title: string
+      lane: ForYouLane
       /**
        * The favourites it pools, chosen at plan time — never ones that head a
        * "Because you" row, or Top picks would claim that row's titles first.
+       * Empty for a lane the user has not rated yet: the row then comes from
+       * their taste in genres alone.
        */
-      seeds: Array<{ tmdbId: number; type: MediaType }>
+      seeds: ForYouSeed[]
     }
   | {
       kind: 'because'
       key: string
       title: string
+      lane: ForYouLane
       /** The title the row is "because" of. */
-      seed: { tmdbId: number; type: MediaType }
+      seed: ForYouSeed
     }
   | {
       kind: 'genre'
       key: string
       title: string
+      lane: ForYouLane
       /** One genre concept, or two for a "both of these" shelf. See `taste.ts`. */
       concepts: number[]
+    }
+  | {
+      /** A micro-genre: one TMDB keyword several of the user's favourites share. */
+      kind: 'theme'
+      key: string
+      title: string
+      lane: ForYouLane
+      keyword: number
+    }
+  | {
+      /**
+       * A discovery row across all three lanes, taking them in turn: new
+       * releases, little-known titles rated highly, or the acclaimed ones, in
+       * the genres the user likes in each lane.
+       */
+      kind: 'mixed'
+      key: string
+      title: string
+      flavour: 'new' | 'gems' | 'acclaimed'
+    }
+  | {
+      /** More like what the user plans to watch: intent, not history. */
+      kind: 'watchlist'
+      key: string
+      title: string
+      seeds: ForYouSeed[]
     }
 
 export interface ForYouPlanRequest {

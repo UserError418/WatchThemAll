@@ -89,7 +89,8 @@ import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
-import { forYouPlan, forYouRow, type ForYouNetwork } from '@main/foryou'
+import { forYouPlan, forYouRow } from '@main/foryou'
+import { tmdbNetwork } from '@main/foryou/network'
 import { backfillScores } from '@main/scorebackfill'
 import { runSeasonSplit, tmdbIdentify } from '@main/seasonsplit'
 import {
@@ -1147,13 +1148,6 @@ export async function createBridge(): Promise<WtaApi> {
     })
   })()
 
-  /** The network the personalised Browse rows are built over. See `foryou.ts`. */
-  const forYouNet: ForYouNetwork = {
-    recommendations: tmdb.recommendations,
-    discover: tmdb.discover,
-    genres: tmdb.genres,
-  }
-
   return {
     store: {
       read: async () => store.read(),
@@ -1172,8 +1166,8 @@ export async function createBridge(): Promise<WtaApi> {
        * the same store document, so the two platforms cannot disagree about
        * what a user's Browse page is.
        */
-      forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, forYouNet),
-      forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, forYouNet),
+      forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, tmdbNetwork),
+      forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, tmdbNetwork),
 
       search: (query: string, page: number) => tmdb.search(query, page),
       detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),
