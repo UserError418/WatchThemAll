@@ -58,7 +58,9 @@ persists these verdicts):
 
 | Verdict | Meaning | Curation |
 |---|---|---|
-| `stream` | Media actually decoded | Keep. Record the measurement. |
+| `stream` | Video arrived — a segment, a whole file, or the decoder started | Keep. Record the measurement. |
+| `refused` | A playlist loaded, but its video segments were refused | Keep unless it fails every canary over several runs. |
+| `timeout` | Still loading when the budget ran out | Keep. Slow, not necessarily broken. |
 | `no-media` | Loaded, nothing played — **inconclusive** | Keep. Check by hand. |
 | `api-error` | The provider's backend returned 4xx/5xx | Keep unless it fails every canary over several runs. |
 | `empty` / `unreachable` | No document; the host is gone | Remove. |
@@ -74,23 +76,39 @@ for that title on that machine, and **Test all sources** measures every provider
 against it on demand. `scanAwareOrder()` in `src/main/providerscan.ts` sorts by
 those facts, in tiers:
 
-1. measured streaming by a test in the last six hours
+1. measured streaming by a test
 2. has played this title before
-3. answered a test, but no stream appeared
+3. a test was stopped by a bot check
 4. nothing known either way
 5. tried before and never produced a stream
-6. measured dead by a test in the last six hours
+6. a test saw it fail: an error status, refused video, a timeout, or nothing
 
-Within a tier, **favourites lead**, then **the user's own provider order** from
-the Providers panel decides. A measurement moves a provider between tiers; it
-never reorders providers the user has placed relative to each other.
+Within a tier, **Settings → Source order** decides: a chain of speed, quality
+and the user's list (favourites, then the Providers panel order), each breaking
+only the ties the one before it left. The default is the list alone.
+
+A test result lasts **thirty days**, per provider. Reds are tested again after
+three days, ambers after four, greens when they expire; on the desktop, the
+sources of every watchlist title are tested in the background, one a minute,
+so they are usually measured before anyone asks. A real play in the player
+overrules an older red or amber result — nobody clicks a red source, so
+without that a wrong red would never be corrected.
+
+Every red is re-tested alone, with a longer budget (25 seconds against the
+fan-out's 20), before it is believed. A starved player looks exactly like a
+broken one, and red is the verdict that costs the user a working source.
+
+The dot says *why*: `error 500`, `stream refused (403)`, `timeout (20 s)`,
+`blocked`, `no stream`. "Works" means video arrived, not merely a playlist: a
+provider can serve a clean playlist and refuse every segment in it, and one
+did, on two titles out of five.
 
 The dots in both source pickers are coloured by the same function the tiers come
 from, `providerRank` in `src/shared/scanrank.ts`, so a green row is always one
 Automatic reaches for before any row that is not green.
 
-A fresh test outranks history in both directions, because it is the more recent
-fact about a service that changes daily. Without one, real playback on the
+A test outranks history, except that a real play newer than a failing test
+wins. Without one, real playback on the
 user's own machine is what decides, which is what makes the anti-automation
 problem survivable: a provider no probe can measure gets measured by being used.
 
