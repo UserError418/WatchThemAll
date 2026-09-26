@@ -2,12 +2,12 @@
  * Hidden probe sessions: a provider loaded out of sight, in a WebView of its
  * own, with a network log that belongs to it alone.
  *
- * The TypeScript face of `ProbeViewPlugin.java`. It exists so that the scan
- * can measure providers two at a time without showing them, which today's
- * scan (`scan.ts`) cannot: one shared WebView means one shared capture buffer
- * with no frame attribution, and pressing play inside a cross-origin iframe
- * means a real touch on a surface the user can see. The Java headers explain
- * how a separate WebView removes both constraints; this file is the contract.
+ * The TypeScript face of `ProbeViewPlugin.java`, and what lets the scan
+ * (`scan.ts`) measure providers two at a time without showing them. The app's
+ * one WebView means one capture buffer with no frame attribution, and pressing
+ * play inside a cross-origin iframe from there needs a real touch on a surface
+ * the user can see; the Java headers explain how a separate WebView removes
+ * both constraints. This file is the contract.
  *
  * ## Shape
  *
@@ -75,8 +75,11 @@ export interface ProbeSession {
    * `missed` counts requests the log dropped before this poll read them,
    * which only happens when polls are far apart on a page streaming hard.
    * `open` is false once the session has closed or its renderer died.
+   * `playingAtMs` is when the page script first saw media playing in any
+   * frame, or null — decode evidence the request log can miss, because a
+   * service worker's requests never reach it.
    */
-  poll(): Promise<{ requests: ProbeRequest[]; missed: number; open: boolean }>
+  poll(): Promise<{ requests: ProbeRequest[]; missed: number; open: boolean; playingAtMs: number | null }>
   /** A real touch in the probe view, at CSS pixels within it, or at its centre. */
   tap(point?: { x: number; y: number }): Promise<void>
   /** Destroy the WebView. Safe to call more than once. */
@@ -113,7 +116,7 @@ interface ProbeViewNative {
   requests(options: {
     sessionId: string
     after: number
-  }): Promise<{ requests: ProbeRequest[]; cursor: number; missed: number; open: boolean }>
+  }): Promise<{ requests: ProbeRequest[]; cursor: number; missed: number; open: boolean; playingAtMs: number }>
   addListener(
     event: 'probeDocumentError',
     cb: (payload: ProbeDocumentError & { sessionId: string }) => void,
@@ -186,7 +189,12 @@ export async function openProbe(options: OpenProbeOptions): Promise<ProbeSession
     async poll() {
       const answer = await ProbeView.requests({ sessionId, after: cursor })
       cursor = answer.cursor
-      return { requests: answer.requests, missed: answer.missed, open: answer.open }
+      return {
+        requests: answer.requests,
+        missed: answer.missed,
+        open: answer.open,
+        playingAtMs: answer.playingAtMs > 0 ? answer.playingAtMs : null,
+      }
     },
 
     tap(point) {

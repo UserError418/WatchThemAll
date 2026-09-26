@@ -151,6 +151,20 @@ final class ProbeSession {
     private boolean destroyed;
 
     /**
+     * When the page script first saw media playing, in any frame; 0 until then.
+     *
+     * Evidence the network log cannot always give. 111Movies fetches every
+     * segment through a service worker, and a service worker's requests go to
+     * the app-wide `ServiceWorkerClient`, never to this view's
+     * `shouldInterceptRequest` — so its log showed no stream while the page
+     * script watched the video advance from 47.9 s to 52.7 s. A decoder
+     * starting is the same proof the desktop takes from `media-started-playing`.
+     * Written on the UI thread by the console hook, read by `requests` on a
+     * plugin worker, hence volatile.
+     */
+    private volatile long playingAtMs;
+
+    /**
      * Build the view, put it behind the app, and start loading.
      *
      * @param appWebView  the Capacitor WebView; the probe goes under it, inside its bounds
@@ -294,8 +308,16 @@ final class ProbeSession {
      *
      * Dispatched straight into the probe WebView rather than through the
      * window, so being under the app does not matter: the event never goes
-     * through hit-testing among siblings, only through the probe's own DOM —
-     * cross-origin frames included, as `ScanPlugin.tap` explains.
+     * through hit-testing among siblings, only through the probe's own DOM.
+     * That DOM includes whatever is inside a cross-origin iframe, and origin
+     * does not enter into it — this is not script reaching into a document,
+     * it is a touch landing on a pixel, which is why a native tap reaches a
+     * play button no script from outside can.
+     *
+     * Coordinates arrive in CSS pixels, the only unit a web caller has, and
+     * are converted here, where the view can be asked its density: passing
+     * one for the other (2.625 apart on the Pixel profile) put the old
+     * scan's touch a third of the way up the screen, in the app's own UI.
      */
     void tap(Double cssX, Double cssY) {
         if (destroyed) return;
@@ -317,6 +339,11 @@ final class ProbeSession {
 
     ProbeRequestLog.Slice requestsSince(long cursor) {
         return log.since(cursor);
+    }
+
+    /** See the field. 0 while nothing has played. */
+    long playingAtMs() {
+        return playingAtMs;
     }
 
     /**
@@ -440,7 +467,13 @@ final class ProbeSession {
         @Override
         public boolean onConsoleMessage(ConsoleMessage message) {
             String text = message.message();
-            if (text != null && text.startsWith("[wta-probe]")) Log.i(TAG, id + " " + text);
+            if (text == null || !text.startsWith("[wta-probe]")) return true;
+            Log.i(TAG, id + " " + text);
+            // The script logs "playing" once per frame, when media there first
+            // plays. The first one, in any frame, is the one that counts.
+            if (playingAtMs == 0 && text.startsWith("[wta-probe] playing")) {
+                playingAtMs = System.currentTimeMillis();
+            }
             return true;
         }
     }

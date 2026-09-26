@@ -90,13 +90,14 @@ interface CastNative {
 const Cast = registerPlugin<CastNative>('Cast')
 
 /**
- * The native media-capture buffer, shared with the provider scan.
+ * The native media-capture buffer, and the fetches the provider scan shares.
  *
  * `MediaCapture` on the Java side records every request that looks like it
  * could be a stream, from every frame including a cross-origin one, because
  * `shouldInterceptRequest` is the only hook a WebView offers. Casting reads it
- * to find a URL to hand the television; the scan reads it to answer a
- * different question — did *anything* stream at all.
+ * to find a URL to hand the television. The scan has its own log per probe
+ * session since 1.9.2 (`probeview.ts`) and uses only the fetches below —
+ * `peek`, `read` and `peekBytes` — to ask what a request turned out to be.
  *
  * Exported rather than re-registered in `scan.ts` so there is one definition of
  * the native interface. Two `registerPlugin` calls would work and would be two

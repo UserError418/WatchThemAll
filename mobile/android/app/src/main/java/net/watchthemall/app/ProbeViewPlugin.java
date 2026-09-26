@@ -52,13 +52,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * while a stream plays, and one bridge message per request would cost more
  * than the probe.
  *
- * ## Why this is not `ScanPlugin`
- *
- * `ScanPlugin` taps the app's own WebView and is what the visible scan
- * surface uses. This owns views of its own and their lifecycles. Keeping them
- * apart means the old path keeps working, untouched, until the scan moves
- * over.
- *
  * ## Threading
  *
  * Views are created, tapped and destroyed on the main thread; plugin calls
@@ -188,7 +181,8 @@ public class ProbeViewPlugin extends Plugin {
 
     /**
      * The session's requests after `after` (a cursor from a previous call; 0
-     * or absent for the start), oldest first.
+     * or absent for the start), oldest first, and when media first played in
+     * it (`playingAtMs`, 0 until then; see `ProbeSession.playingAtMs`).
      *
      * A closed or vanished session answers `open: false` with nothing new,
      * rather than rejecting, so a poll loop that races a `probeGone` ends on
@@ -213,6 +207,7 @@ public class ProbeViewPlugin extends Plugin {
             result.put("cursor", after);
             result.put("missed", 0);
             result.put("open", false);
+            result.put("playingAtMs", 0);
             call.resolve(result);
             return;
         }
@@ -237,6 +232,7 @@ public class ProbeViewPlugin extends Plugin {
         result.put("cursor", slice.cursor);
         result.put("missed", slice.missed);
         result.put("open", true);
+        result.put("playingAtMs", session.playingAtMs());
         call.resolve(result);
     }
 

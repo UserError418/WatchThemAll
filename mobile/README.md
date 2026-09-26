@@ -144,37 +144,54 @@ now settle on *leaving* a provider:
 - **nothing** — anything else. A provider that showed neither success nor failure
   stays where the user's own ordering put it.
 
-### Testing every source, with one capture buffer
+### Testing every source, out of sight, two at a time
 
-"Test all sources" loads each enabled provider in turn and reports whether it
-fetched a stream. The signal is the hook casting uses:
-`shouldInterceptRequest` on the app's `WebViewClient` fires for every
-subresource of every frame, cross-origin included, and lands in `MediaCapture`.
+"Test all sources" loads every enabled provider in a **probe session**
+(`bridge/probeview.ts`, `ProbeViewPlugin.java`): a WebView of its own, laid out
+*under* the app's WebView. The user sees the app and nothing else; the
+provider, attached and full-size as far as Chromium can tell, plays exactly as
+it would on screen. Until 1.9.2 the scan used one iframe the user could watch,
+one provider at a time, for two reasons the sessions remove:
 
-That buffer records a URL without recording which frame asked for it, because
-`shouldInterceptRequest` is not told. Three rules follow, and none is optional:
+- **Attribution.** The app's capture buffer (`MediaCapture`) records a URL but
+  not which frame asked, so two providers in flight shared one pile of
+  requests. A session's `shouldInterceptRequest` sees only its own provider,
+  so two run side by side with nothing to blank or settle between them.
+- **Pressing play.** A cross-origin iframe could only be clicked by a real
+  touch. A session installs a script into every frame at document start
+  (`bridge/probescript.ts`) that presses play and keeps every media element
+  muted; a native tap into the session is the fallback while nothing has
+  started — only then, because a tap on a playing video pauses it (MoviesAPI).
 
-- **One provider at a time.** Two in flight share one undifferentiated pile of
-  requests, and both get credited with whatever either fetched.
-- **Playback stops for the duration.** A player streaming in the background
-  fills the buffer several times a second, which turns every provider the scan
-  touches green. `PlayerSurface.blank()`/`restore()` suspends it, the same pair
-  casting uses when it needs the network to itself.
-- **Six seconds of settling between providers.** An HLS player keeps pulling
-  segments after its document is gone, long enough for a dead provider to be
-  credited with its predecessor's stream.
+**Two at a time, then every red again alone** (20 s, then 25 s — the desktop's
+budgets). Measured on the emulator: two sessions reached the same results as
+one, no audio player ever started, and memory returned to baseline when they
+closed; the app's own UI fell from 40–60 fps to 16–20 while two decoded, which
+is why it is not more. Playback still stops for the duration
+(`PlayerSurface.blank()`/`restore()`) — no longer for attribution, but so the
+probes are not starved of bandwidth and decoder by the user's own video.
 
-**A URL is not always enough to recognise a stream.** The buffer holds requests,
+**What counts as a stream is the phone's rule, unchanged**: a playlist, a
+segment or a confirmed whole file in the session's log. One addition: the page
+script reports when a video starts playing in any frame, and that counts too.
+111Movies fetches its segments through a service worker, whose requests reach
+the app-wide `ServiceWorkerClient` and never a session's log — the script saw
+its video advance anyway. **Every failure has a reason**, in the desktop's
+words (`bridge/scanjudge.ts`): the document's own error status, unreachable,
+*timeout (20 s)* for a page still busy at the deadline, *no stream* for one
+that went quiet. Timeouts sort with the reds.
+
+**A URL is not always enough to recognise a stream.** A session's log holds requests,
 never responses, so the desktop's strongest signal — the response's content
 type — is missing. Most providers name their media (`.m3u8`, `.mp4`, `.mkv`),
 and the scan matches those for free. Some stream through opaque proxy paths
 instead, such as `…/api?d=<token>` for every playlist and segment. For those
-the scan fetches the newest few captured requests with their original headers,
+the scan fetches the newest few of the session's requests with their original headers,
 a dozen at most per provider, and reads the content type and first line, which
 is how the cast feature already decides what it can hand a television.
 
 **Quality comes from the stream, never from the page.** Once a provider
-streams, the scan reads its oldest few captured playlists the same way — the
+streams, the scan reads its oldest few playlists the same way — the
 master comes first, and it is the only playlist that lists renditions with
 their sizes — and parses them with the desktop's own parser
 (`src/shared/streamquality.ts`). A source with no master serves one rendition,
@@ -197,13 +214,6 @@ playlists answer every re-request from the phone with 403 "ip … not in range",
 so VidSrc shows no quality on the phone while the desktop reads its ladder.
 Videasy (fMP4 init segment), VidFlix and 111Movies (first TS segment) read the
 same on both.
-
-**The probe surface is visible because it has to be.** Several providers resolve
-no stream until something clicks, and a cross-origin iframe can only be clicked
-by a real touch at real coordinates — `ScanPlugin.tap` dispatches a
-`MotionEvent` to the WebView, which hit-tests it against its own DOM regardless
-of origin. A touch needs somewhere to land, so an off-screen or zero-sized frame
-cannot be tapped and any provider wanting one would be reported dead.
 
 ### The chrome bar does not auto-hide
 

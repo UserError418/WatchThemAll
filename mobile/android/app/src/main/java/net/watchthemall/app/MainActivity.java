@@ -57,7 +57,6 @@ public class MainActivity extends BridgeActivity {
          * implemented" and the cause is three layers away.
          */
         registerPlugin(CastPlugin.class);
-        registerPlugin(ScanPlugin.class);
         registerPlugin(ProbeViewPlugin.class);
 
         super.onCreate(savedInstanceState);

@@ -1014,12 +1014,10 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   /**
-   * Trying every provider, one at a time, with playback stopped.
-   *
-   * Both constraints come from there being a single native capture buffer with
-   * no frame attribution — see `scan.ts`. `suspendPlayback` reuses the
-   * surface's `blank`/`restore`, which casting added for the same reason:
-   * something else needs the network to itself.
+   * Trying every provider in hidden sessions, two at a time, with playback
+   * stopped so the probes have the phone's bandwidth and decoder to
+   * themselves — see `scan.ts`. `suspendPlayback` reuses the surface's
+   * `blank`/`restore`, which casting added for the same need.
    */
   const scanRunner = createScanRunner({
     providers: enabledProviders,
