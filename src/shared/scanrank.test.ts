@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote } from './scanrank'
+import { formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote, tagText } from './scanrank'
 
 const rows = (...ids: string[]): Array<{ id: string }> => ids.map((id) => ({ id }))
 const ids = (items: Array<{ id: string }>): string[] => items.map((item) => item.id)
@@ -102,5 +102,15 @@ describe('ordinal', () => {
     expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal)).toEqual([
       '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st', '111th',
     ])
+  })
+})
+
+describe('tagText', () => {
+  it('puts the measurement after a label, and starts with it when there is none', () => {
+    expect(tagText('may work', ' · 3.8 s')).toBe('may work · 3.8 s')
+    // A working source: no label, so no separator in front of its numbers.
+    expect(tagText(null, ' · 3.4 s · 720p')).toBe('3.4 s · 720p')
+    expect(tagText(null, ' · on your phone')).toBe('on your phone')
+    expect(tagText(null, '')).toBe('')
   })
 })

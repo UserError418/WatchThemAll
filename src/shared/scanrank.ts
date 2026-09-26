@@ -113,10 +113,16 @@ export function providerDot(
   }
   switch (rank) {
     case 0:
+      /*
+       * No word. A working source's row already carries its start time and
+       * quality, and the green dot says the rest. "works" in front of them
+       * was the widest thing in the list and told nobody anything (the owner,
+       * 2026-09-26).
+       */
       return {
         tone: 'good',
         hint: 'Just tested — this source is streaming this title now',
-        label: 'works',
+        label: null,
       }
     case 1:
       return { tone: 'good', hint: 'Has played this title for you', label: null }
@@ -156,7 +162,7 @@ export function providerDot(
 /**
  * How both pickers credit a result measured on another of the user's devices.
  *
- * Appended to the row's label, as the timing is: " · works · 3.8 s · on your
+ * Appended to the row's label, as the timing is: "3.8 s · 720p · on your
  * computer". The result is honest either way — only good news crosses (see
  * `scanshare.ts`) — but a green this device never measured should say whose
  * it is, or the list claims a measurement that did not happen here.
@@ -165,6 +171,17 @@ export function sharedLabel(from: DeviceKind | undefined): string {
   if (from === 'desktop') return ' · on your computer'
   if (from === 'phone') return ' · on your phone'
   return ''
+}
+
+/**
+ * A row's tag: its label, then its measurement.
+ *
+ * The pickers build a measurement with its own leading separator
+ * (" · 3.8 s · 720p"), ready to follow a label. A working source has no
+ * label, so its tag has to start with the measurement itself.
+ */
+export function tagText(label: string | null, measurement: string): string {
+  return label ? label + measurement : measurement.replace(/^ · /, '')
 }
 
 /**

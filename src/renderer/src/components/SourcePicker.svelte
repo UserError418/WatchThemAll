@@ -67,7 +67,15 @@
    */
   import { flip } from 'svelte/animate'
   import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote, sharedLabel } from '@shared/scanrank'
+  import {
+    formatQuality,
+    formatStreamTime,
+    inScanOrder,
+    providerDot,
+    resumeNote,
+    sharedLabel,
+    tagText,
+  } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
   import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
@@ -363,8 +371,8 @@
             <!-- Every source under test right now — several at once — so the
                  list shows the scan working through it, not only a counter. -->
             <span class="hint testing">{test.recheck ? 'testing again…' : 'testing…'}</span>
-          {:else if dot.label}
-            <span class="hint" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
+          {:else if dot.label || time}
+            <span class="hint" class:bad={dot.tone === 'bad'}>{tagText(dot.label, time)}</span>
           {/if}
         </button>
       {/each}
@@ -468,7 +476,7 @@
     flex: 1;
   }
 
-  /* Never wraps: "works · 3.8 s" broken across two lines reads as two claims. */
+  /* Never wraps: "3.8 s · 720p" broken across two lines reads as two claims. */
   .hint {
     color: var(--text-tertiary);
     font-size: var(--text-xs);

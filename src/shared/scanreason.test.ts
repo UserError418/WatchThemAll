@@ -47,7 +47,7 @@ describe('the dot with a reason', () => {
     expect(providerDot(undefined, 'dead').label).toBe('no stream')
   })
 
-  it('ignores a reason on a working source', () => {
-    expect(providerDot(undefined, 'stream', { kind: 'error', status: 500 }).label).toBe('works')
+  it('ignores a reason on a working source, which says nothing but its colour', () => {
+    expect(providerDot(undefined, 'stream', { kind: 'error', status: 500 })).toMatchObject({ tone: 'good', label: null })
   })
 })

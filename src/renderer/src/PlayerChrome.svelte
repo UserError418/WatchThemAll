@@ -25,7 +25,15 @@
   CastDevice,
   CastStatus,
 } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote, sharedLabel } from '@shared/scanrank'
+  import {
+    formatQuality,
+    formatStreamTime,
+    inScanOrder,
+    providerDot,
+    resumeNote,
+    sharedLabel,
+    tagText,
+  } from '@shared/scanrank'
   import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
   import type { Episode, StreamDelivery } from '@shared/types'
@@ -1189,8 +1197,8 @@
       <span class="tag">cast on another title</span>
     {:else if provider.id === context?.providerId}
       <span class="tag">playing</span>
-    {:else if dot.label}
-      <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}{measurement(provider.id)}</span>
+    {:else if dot.label || measurement(provider.id)}
+      <span class="tag" class:bad={dot.tone === 'bad'}>{tagText(dot.label, measurement(provider.id))}</span>
     {/if}
   </button>
 {/snippet}
@@ -1583,8 +1591,8 @@
               <span class="tag resume" title={resumeText?.hint}>{resumeText?.label}{time}</span>
             {:else if test}
               <span class="tag">{test.recheck ? 'testing again…' : 'testing…'}</span>
-            {:else if dot.label}
-              <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}{time}</span>
+            {:else if dot.label || time}
+              <span class="tag" class:bad={dot.tone === 'bad'}>{tagText(dot.label, time)}</span>
             {/if}
           </button>
         {/each}
