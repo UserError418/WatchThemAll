@@ -54,7 +54,11 @@ export interface ImportSummary {
   releases: number
   /** New title ratings created from MAL scores. */
   ratings: number
-  /** Converted thumbs (`coarse` ratings) replaced by the exact MAL score. */
+  /**
+   * Converted thumbs (`coarse` ratings) replaced by the exact MAL score.
+   * Counted per rating, so a series whose five season thumbs were all
+   * sharpened counts five.
+   */
   refined: number
   /** Selected, but TMDB had no match. Reported rather than silently dropped. */
   unmatched: string[]
@@ -231,8 +235,8 @@ export async function applyMalImport(
 
   for (const title of scored.values()) {
     const outcome = applyScore(ratings, title)
-    if (outcome === 'created') summary.ratings += 1
-    if (outcome === 'refined') summary.refined += 1
+    if (outcome.created) summary.ratings += 1
+    summary.refined += outcome.refined
   }
 
   return {
@@ -274,7 +278,24 @@ function titleScore(scores: readonly number[]): RatingValue | null {
 }
 
 /**
- * Turn one title's MAL score into a rating, or refine a converted one with it.
+ * How far a MAL score may sit from a converted thumb (an 8 or a 4) and still be
+ * the same opinion, only stated more precisely.
+ *
+ * Three reaches every score a thumb plausibly rounded: a like (8) covers 5–10
+ * and a dislike (4) covers 1–7. Beyond that the two contradict each other — a
+ * like against a MAL 3 — which means the user changed their mind at some
+ * point, and the thumb in the app is the newer statement.
+ *
+ * This replaced a same-side-of-6 test (`legacyRatingOf`), which assumed every
+ * user drew the like/dislike line where the app does. On the library this was
+ * built for, all 22 thumbs that test rejected were a MAL 6 or 7 thumbed down
+ * (a stricter line than the app's, not a change of mind), and none was a
+ * contradiction.
+ */
+export const REFINE_REACH = 3
+
+/**
+ * Turn one title's MAL score into a rating, or refine converted ones with it.
  * Mutates `ratings` in place; the caller owns that copy.
  *
  * **A title with no rating** gets one, at the title scope — a MyAnimeList
@@ -283,31 +304,34 @@ function titleScore(scores: readonly number[]): RatingValue | null {
  * "the user already has an opinion here" and blocks a new one, as it always
  * has.
  *
- * **A title rating that is `coarse`** — an 8 or a 4 converted from a thumb —
- * is replaced by the exact MAL score, but only when the two agree on the side
- * of the line (`legacyRatingOf`). Agreement means the thumb was a rounding of
- * the same opinion, and the MAL score says how far it went. Disagreement means
- * the user changed their mind since the export — the thumb in the app is the
- * newer statement — so it is left alone.
+ * **Every `coarse` rating on the title** — an 8 or a 4 converted from a thumb,
+ * whole title and each season alike — is replaced by the exact MAL score when
+ * the two are within `REFINE_REACH`. Seasons are included because that is
+ * where most converted thumbs live: splitting a series into seasons (1.5.8)
+ * copied its thumb onto every season, so a like on a five-season anime is five
+ * season 8s and often no title rating at all. Leaving those alone left 201 of
+ * one library's thumbs unrefined. Every season gets the one title score
+ * because MAL's per-season entries cannot be matched to TMDB's seasons
+ * reliably (`lastSeason` above has the reason). The user can rate a season
+ * differently afterwards, and that rating is no longer coarse, so a later
+ * import leaves it alone.
  *
- * **Everything else is left alone:** a rating chosen on the 1–10 scale is
- * deliberate and newer than any export, and a season rating is at a scope the
- * import cannot see. An import is bulk and old; letting it silently replace a
- * deliberate rating is the kind of data loss nobody notices until the
- * recommendations stop making sense.
+ * **A rating chosen on the 1–10 scale is never touched.** It is deliberate and
+ * newer than any export. An import is bulk and old, and letting it silently
+ * replace a deliberate rating is the kind of data loss nobody notices until
+ * the recommendations stop making sense.
  */
 function applyScore(
   ratings: Synced<TitleRating>[],
   title: ScoredTitle,
-): 'created' | 'refined' | 'kept' | 'unscored' {
+): { created: boolean; refined: number } {
   const value = titleScore(title.scores)
-  if (value === null) return 'unscored'
+  if (value === null) return { created: false, refined: 0 }
 
   const { match, type } = title
-  const at = ratings.findIndex((r) => r.tmdbId === match.tmdbId && r.season === null)
+  const onTitle = (r: TitleRating): boolean => r.tmdbId === match.tmdbId && r.type === type
 
-  if (at < 0) {
-    if (ratings.some((r) => r.tmdbId === match.tmdbId)) return 'kept'
+  if (!ratings.some(onTitle)) {
     ratings.push(
       stamp({
         key: `${type}:${match.imdbId || match.tmdbId}`,
@@ -321,20 +345,23 @@ function applyScore(
         at: Date.now(),
       } satisfies TitleRating),
     )
-    return 'created'
+    return { created: true, refined: 0 }
   }
 
-  const existing = ratings[at]!
-  if (!existing.coarse || legacyRatingOf(existing.value) !== legacyRatingOf(value)) return 'kept'
-
-  // The same record, under the same key, with the exact value in place of the
-  // conversion. Stamped like every other write here, so it wins the merge.
-  ratings[at] = stamp({
-    ...existing,
-    value,
-    coarse: false,
-    rating: legacyRatingOf(value),
-    at: Date.now(),
+  let refined = 0
+  ratings.forEach((existing, i) => {
+    if (!onTitle(existing) || !existing.coarse) return
+    if (Math.abs(existing.value - value) > REFINE_REACH) return
+    // The same record, under the same key, with the exact value in place of
+    // the conversion. Stamped like every other write here, so it wins the merge.
+    ratings[i] = stamp({
+      ...existing,
+      value,
+      coarse: false,
+      rating: legacyRatingOf(value),
+      at: Date.now(),
+    })
+    refined += 1
   })
-  return 'refined'
+  return { created: false, refined }
 }
