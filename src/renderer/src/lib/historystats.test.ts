@@ -19,10 +19,12 @@ import {
   byHour,
   groupByDay,
   heatmap,
+  longestStreak,
   peakHour,
   playedMs,
   streak,
   summarise,
+  tileDetail,
   topTitles,
 } from './historystats'
 
@@ -372,5 +374,68 @@ describe('topTitles', () => {
 
   it('handles an empty history', () => {
     expect(topTitles([])).toEqual([])
+  })
+})
+
+describe('what the tiles say under their figures', () => {
+  it('lays the last seven days out oldest first, today last', () => {
+    const detail = tileDetail([entry(NOON, { playedMs: 30 * MINUTE }), entry(NOON - 2 * DAY)], NOON)
+    expect(detail.week.map((d) => dayKey(d.at))).toEqual([
+      '2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13',
+    ])
+    expect(detail.week[6]).toMatchObject({ isToday: true, ms: 30 * MINUTE, plays: 1 })
+    expect(detail.week[4]).toMatchObject({ isToday: false, plays: 1 })
+  })
+
+  it('counts the seven days before separately, and nothing older', () => {
+    const detail = tileDetail(
+      [
+        entry(NOON - 8 * DAY, { playedMs: 20 * MINUTE }),
+        entry(NOON - 13 * DAY, { playedMs: 10 * MINUTE }),
+        entry(NOON - 20 * DAY, { playedMs: 99 * MINUTE }),
+      ],
+      NOON,
+    )
+    expect(detail.previousWeekMs).toBe(30 * MINUTE)
+    expect(detail.previousWeekPlays).toBe(2)
+  })
+
+  it('averages only episodes that were timed, and names the latest film', () => {
+    const detail = tileDetail(
+      [
+        entry(NOON, { playedMs: 40 * MINUTE }),
+        entry(NOON - DAY, { playedMs: 20 * MINUTE }),
+        entry(NOON - DAY), // untimed: not a zero-minute episode
+        entry(NOON - 3 * DAY, { type: 'movie', title: 'Dune' }),
+        entry(NOON - 5 * DAY, { type: 'movie', title: 'Heat' }),
+      ],
+      NOON,
+    )
+    expect(detail.episodeMeanMs).toBe(30 * MINUTE)
+    expect(detail.latestFilm).toBe('Dune')
+    expect(detail.since).toBe(NOON - 5 * DAY)
+  })
+
+  it('says nothing rather than zero for an empty history', () => {
+    const detail = tileDetail([], NOON)
+    expect(detail).toMatchObject({ since: null, episodeMeanMs: null, latestFilm: null, longestStreak: 0 })
+  })
+})
+
+describe('the longest streak', () => {
+  it('finds the best run, not the current one', () => {
+    const days = [0, 1, 2, 10, 11, 12, 13, 14, 20].map((d) => entry(NOON - d * DAY))
+    expect(longestStreak(days)).toBe(5)
+  })
+
+  it('counts several plays on one day once', () => {
+    expect(longestStreak([entry(NOON), entry(NOON + MINUTE), entry(NOON - DAY)])).toBe(2)
+  })
+
+  it('does not break across a clock change', () => {
+    // Europe moves its clocks on 25 October 2026; a 23- or 25-hour day must
+    // not end a run.
+    const around = [24, 25, 26, 27].map((d) => entry(new Date(2026, 9, d, 21, 0).getTime()))
+    expect(longestStreak(around)).toBe(4)
   })
 })

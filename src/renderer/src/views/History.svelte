@@ -40,8 +40,11 @@
     playedMs,
     shortDate,
     summarise,
+    tileDetail,
     topTitles,
   } from '../lib/historystats'
+  import PageHeader from '../components/PageHeader.svelte'
+  import FilterField from '../components/FilterField.svelte'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -80,6 +83,7 @@
   })
 
   const summary = $derived(summarise(library.history, now))
+  const detail = $derived(tileDetail(library.history, now))
   /** Whether any play in the whole history carries a measured duration. */
   const timed = $derived(summary.measured > 0)
   const grid = $derived(heatmap(library.history, now, 26))
@@ -156,6 +160,30 @@
     return ms > 0 ? `${shortDate(at)} — ${what}, ${duration(ms)}` : `${shortDate(at)} — ${what}`
   }
 
+  /** The week tile's bars, against the busiest of the seven days. */
+  const weekPeak = $derived(Math.max(1, ...detail.week.map((d) => (timed ? d.ms : d.plays))))
+
+  function barHeight(day: { ms: number; plays: number }): number {
+    const value = timed ? day.ms : day.plays
+    // A floor, so a day with one short play is visibly not an empty day.
+    return value === 0 ? 0 : Math.max(8, Math.round((value / weekPeak) * 100))
+  }
+
+  /** "2h 5m more than the week before" — the comparison that makes the figure mean something. */
+  const weekVersus = $derived.by(() => {
+    const thisWeek = timed ? summary.weekMs : summary.weekPlays
+    const lastWeek = timed ? detail.previousWeekMs : detail.previousWeekPlays
+    if (lastWeek === 0) return thisWeek === 0 ? 'Nothing this week or the one before' : 'Nothing the week before'
+    const gap = Math.abs(thisWeek - lastWeek)
+    const amount = timed ? duration(gap) : `${gap} ${gap === 1 ? 'play' : 'plays'}`
+    if (gap === 0 || (timed && gap < 60_000)) return 'Level with the week before'
+    return `${amount} ${thisWeek > lastWeek ? 'more' : 'less'} than the week before`
+  })
+
+  function weekdayInitial(at: number): string {
+    return new Date(at).toLocaleDateString(undefined, { weekday: 'narrow' })
+  }
+
   function clearAll(): void {
     library.clearHistory()
     confirmingClear = false
@@ -166,25 +194,17 @@
 </script>
 
 <div class="view">
-  <header class="head">
-    <h1>History</h1>
+  <PageHeader title="History">
     {#if library.history.length > 0}
-      <div class="tools">
-        <input
-          bind:value={query}
-          type="search"
-          placeholder="Filter by title…"
-          aria-label="Filter history by title"
-        />
-        {#if confirmingClear}
+      <FilterField bind:value={query} label="Filter history by title" />
+      {#if confirmingClear}
           <button class="danger" onclick={clearAll}>Delete everything</button>
           <button class="ghost" onclick={() => (confirmingClear = false)}>Keep it</button>
         {:else}
           <button class="ghost" onclick={() => (confirmingClear = true)}>Clear all</button>
-        {/if}
-      </div>
+      {/if}
     {/if}
-  </header>
+  </PageHeader>
 
   {#if library.history.length === 0}
     <p class="state">
@@ -199,40 +219,78 @@
       that is about the user rather than about the catalogue. Counts are useful;
       "eleven hours this month" is the one that lands.
     -->
-    <section class="stats" aria-label="Totals">
-      <!--
-        Counts rather than times when nothing has been measured yet.
+    <div class="stats-frame">
+      <section class="stats" aria-label="Totals">
+        <!--
+          Counts rather than times when nothing has been measured yet.
 
-        A library that predates 1.5.3 has a full history and no durations in
-        it, so the headline figure would be an em dash — which reads as broken
-        where "5 plays recorded" reads as true. The note below says why, once,
-        and disappears the moment the first play is timed.
-      -->
-      <div class="stat wide">
-        <span class="figure">{timed ? duration(summary.totalMs) : summary.plays}</span>
-        <span class="label">{timed ? 'watched, all time' : 'plays recorded'}</span>
-      </div>
-      <div class="stat">
-        <span class="figure">{timed ? duration(summary.weekMs) : summary.weekPlays}</span>
-        <span class="label">last 7 days</span>
-      </div>
-      <div class="stat">
-        <span class="figure">{summary.episodes}</span>
-        <span class="label">{summary.episodes === 1 ? 'episode' : 'episodes'}</span>
-      </div>
-      <div class="stat">
-        <span class="figure">{summary.films}</span>
-        <span class="label">{summary.films === 1 ? 'film' : 'films'}</span>
-      </div>
-      <div class="stat">
-        <span class="figure">{summary.titles}</span>
-        <span class="label">{summary.titles === 1 ? 'title' : 'titles'}</span>
-      </div>
-      <div class="stat" class:lit={summary.streakDays > 1}>
-        <span class="figure">{summary.streakDays}</span>
-        <span class="label">day streak</span>
-      </div>
-    </section>
+          A library that predates 1.5.3 has a full history and no durations in
+          it, so the headline figure would be an em dash — which reads as broken
+          where "5 plays recorded" reads as true. The note below says why, once,
+          and disappears the moment the first play is timed.
+        -->
+        <div class="stat headline">
+          <span class="label">{timed ? 'Watched, all time' : 'Plays recorded'}</span>
+          <span class="figure">{timed ? duration(summary.totalMs) : summary.plays}</span>
+          <span class="sub">
+            {#if detail.since}Since {shortDate(detail.since)} ·{/if}
+            {summary.plays} {summary.plays === 1 ? 'play' : 'plays'}
+          </span>
+        </div>
+
+        <!-- The week as seven bars beside its total: the shape says what the sum cannot. -->
+        <div class="stat weekly">
+          <div class="weekly-text">
+            <span class="label">Last 7 days</span>
+            <span class="figure">{timed ? duration(summary.weekMs) : summary.weekPlays}</span>
+            <span class="sub">{weekVersus}</span>
+          </div>
+          <div class="weekly-bars" aria-hidden="true">
+            {#each detail.week as day (day.key)}
+              <span
+                class="weekly-day"
+                class:today={day.isToday}
+                title={cellTitle(day.at, day.ms, day.plays)}
+              >
+                <span class="weekly-track"><span class="weekly-bar" style:height="{barHeight(day)}%"></span></span>
+                <span class="weekly-initial">{weekdayInitial(day.at)}</span>
+              </span>
+            {/each}
+          </div>
+        </div>
+
+        <div class="stat">
+          <span class="label">{summary.episodes === 1 ? 'Episode' : 'Episodes'}</span>
+          <span class="figure">{summary.episodes}</span>
+          <span class="sub">
+            {detail.episodeMeanMs ? `About ${duration(detail.episodeMeanMs)} each` : 'Series, all seasons'}
+          </span>
+        </div>
+        <div class="stat">
+          <span class="label">{summary.films === 1 ? 'Film' : 'Films'}</span>
+          <span class="figure">{summary.films}</span>
+          <span class="sub" title={detail.latestFilm ?? undefined}>
+            {detail.latestFilm ? `Latest: ${detail.latestFilm}` : 'None yet'}
+          </span>
+        </div>
+        <div class="stat">
+          <span class="label">{summary.titles === 1 ? 'Title' : 'Titles'}</span>
+          <span class="figure">{summary.titles}</span>
+          <span class="sub" title={tops[0]?.title}>{tops[0] ? `Most: ${tops[0].title}` : ''}</span>
+        </div>
+        <div class="stat" class:lit={summary.streakDays > 1}>
+          <span class="label">Day streak</span>
+          <span class="figure">{summary.streakDays}</span>
+          <span class="sub">
+            {detail.longestStreak > summary.streakDays
+              ? `Best: ${detail.longestStreak} days`
+              : summary.streakDays > 1
+                ? 'Your best yet'
+                : 'Watch something today'}
+          </span>
+        </div>
+      </section>
+    </div>
 
     {#if !timed}
       <p class="note">
@@ -531,43 +589,6 @@
     leaves the property genuinely unset, so the phone's `:root` value inherits.
   */
 
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  h1 {
-    font-family: var(--font-display);
-    font-size: var(--text-xl);
-    font-weight: var(--weight-bold);
-    margin: 0;
-  }
-
-  .tools {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  input[type='search'] {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-full);
-    color: var(--text-primary);
-    padding: var(--space-2) var(--space-4);
-    font: inherit;
-    font-size: var(--text-sm);
-    min-width: 200px;
-  }
-
-  input[type='search']:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-  }
-
   .ghost,
   .danger {
     background: none;
@@ -611,27 +632,73 @@
 
   /* ── Totals ───────────────────────────────────────────────────────────── */
 
+  /*
+    The frame is a size container so the tiles can pick their columns from the
+    room they actually have. With a plain \`auto-fit\` the two double-width
+    tiles left a single tile orphaned on a second row at most desktop widths.
+    Eight columns fit one row, four fit two tidy rows, and below that the
+    phone's own track size decides.
+  */
+  .stats-frame {
+    container-type: inline-size;
+  }
+
   .stats {
     display: grid;
-    /* Six tiles that reflow rather than a fixed row: the widest figure is
-       "1h 25m" and the narrowest is "3", and a fixed grid gives both the same
-       room. */
-    grid-template-columns: repeat(auto-fit, minmax(var(--stat-min, 120px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(var(--stat-min, 150px), 1fr));
+    grid-auto-flow: dense;
     gap: var(--space-3);
+  }
+
+  @container (min-width: 620px) {
+    .stats {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  @container (min-width: 1320px) {
+    .stats {
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+    }
   }
 
   .stat {
     background: var(--bg-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    padding: var(--space-4);
+    padding: var(--space-4) var(--space-4) var(--space-3);
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    min-width: 0;
+    min-height: 128px;
   }
 
-  .stat.wide {
+  /*
+    Not `.hero`: the phone sheet sizes the Browse billboard through that class
+    globally, and a tile named after it came out 460px tall on the phone.
+  */
+  .stat.headline {
     grid-column: span 2;
+  }
+
+  /*
+    The whole row until the frame has four columns. On a phone two of three
+    columns is about 230px, and the bars' minimum left the total and its label
+    so little room that they ran into the bars.
+  */
+  .stat.weekly {
+    grid-column: 1 / -1;
+  }
+
+  /* After the rule above, which it overrides at the same specificity. */
+  @container (min-width: 620px) {
+    .stat.weekly {
+      grid-column: span 2;
+    }
+  }
+
+  .stat.headline {
     background: linear-gradient(140deg, var(--accent-muted), var(--bg-raised) 70%);
     border-color: var(--accent-subtle);
   }
@@ -640,22 +707,95 @@
     color: var(--accent);
   }
 
-  .figure {
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    font-weight: var(--weight-bold);
-    line-height: var(--leading-tight);
-  }
-
-  .stat.wide .figure {
-    font-size: var(--text-2xl);
-  }
-
   .label {
-    font-size: var(--text-xs);
+    font-size: var(--text-2xs);
     color: var(--text-tertiary);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: var(--tracking-caps);
+  }
+
+  .figure {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-bold);
+    line-height: var(--leading-tight);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat.headline .figure {
+    font-size: var(--text-3xl);
+  }
+
+  /* Pinned to the bottom, so a row of tiles reads as one line of context. */
+  .sub {
+    margin-top: auto;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stat.weekly {
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--space-4);
+  }
+
+  .weekly-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+    flex: 1;
+  }
+
+  /* A fixed height: the bars are percentages, and a percentage of an
+     auto-height box resolves to nothing. */
+  .weekly-bars {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    height: 92px;
+    align-self: flex-end;
+    flex: 0 1 180px;
+    min-width: 112px;
+  }
+
+  .weekly-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .weekly-track {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    align-items: flex-end;
+    border-radius: var(--radius-xs);
+    background: var(--bg-elevated);
+    overflow: hidden;
+  }
+
+  .weekly-bar {
+    width: 100%;
+    background: color-mix(in srgb, var(--accent) 70%, transparent);
+    border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  }
+
+  .weekly-day.today .weekly-bar {
+    background: var(--accent);
+  }
+
+  .weekly-initial {
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+  }
+
+  .weekly-day.today .weekly-initial {
+    color: var(--accent);
   }
 
   /* ── Calendar ─────────────────────────────────────────────────────────── */

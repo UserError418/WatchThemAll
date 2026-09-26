@@ -134,6 +134,109 @@ export function streak(history: HistoryEntry[], now = Date.now()): number {
   return length
 }
 
+/* ── What the tiles say under their figures ───────────────────────────── */
+
+export interface WeekDay {
+  key: string
+  /** Midnight, local, for labelling. */
+  at: number
+  ms: number
+  plays: number
+  isToday: boolean
+}
+
+export interface TileDetail {
+  /** The last seven days, oldest first, today last. */
+  week: WeekDay[]
+  /** Time played in the seven days before those. */
+  previousWeekMs: number
+  /** Plays in the seven days before those. */
+  previousWeekPlays: number
+  /** The longest run of consecutive days with a play, ever. */
+  longestStreak: number
+  /** When the first play in the history happened, or null for none. */
+  since: number | null
+  /** Mean measured time of one episode play, or null when none is measured. */
+  episodeMeanMs: number | null
+  /** The film played most recently, by name, or null when there is none. */
+  latestFilm: string | null
+}
+
+/**
+ * The second line of every History tile.
+ *
+ * A tile holding one number in a box five times its size is the complaint
+ * this answers: "15h 21m, last 7 days" says nothing a glance at the timeline
+ * would not, while the same figure over seven bars, beside the week before,
+ * says whether this week was a lot. Each extra fact is the one that makes the
+ * figure above it mean something.
+ */
+export function tileDetail(history: readonly HistoryEntry[], now = Date.now()): TileDetail {
+  const today = startOfDay(now)
+  const week: WeekDay[] = []
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const at = startOfDay(today - offset * DAY_MS + DAY_MS / 2)
+    week.push({ key: dayKey(at), at, ms: 0, plays: 0, isToday: offset === 0 })
+  }
+  const byKey = new Map(week.map((day) => [day.key, day]))
+  const weekStart = week[0]!.at
+  const previousStart = startOfDay(weekStart - 7 * DAY_MS + DAY_MS / 2)
+
+  let previousWeekMs = 0
+  let previousWeekPlays = 0
+  let since: number | null = null
+  let episodeMs = 0
+  let episodesMeasured = 0
+  let latestFilm: { title: string; at: number } | null = null
+
+  for (const entry of history) {
+    const ms = playedMs(entry)
+    const day = byKey.get(dayKey(entry.watchedAt))
+    if (day) {
+      day.ms += ms
+      day.plays += 1
+    } else if (entry.watchedAt >= previousStart && entry.watchedAt < weekStart) {
+      previousWeekMs += ms
+      previousWeekPlays += 1
+    }
+    if (since === null || entry.watchedAt < since) since = entry.watchedAt
+    if (entry.type === 'movie') {
+      if (latestFilm === null || entry.watchedAt > latestFilm.at) {
+        latestFilm = { title: entry.title, at: entry.watchedAt }
+      }
+    } else if (ms > 0) {
+      episodeMs += ms
+      episodesMeasured += 1
+    }
+  }
+
+  return {
+    week,
+    previousWeekMs,
+    previousWeekPlays,
+    longestStreak: longestStreak(history),
+    since,
+    episodeMeanMs: episodesMeasured > 0 ? episodeMs / episodesMeasured : null,
+    latestFilm: latestFilm?.title ?? null,
+  }
+}
+
+/** The longest run of consecutive local days with at least one play. */
+export function longestStreak(history: readonly HistoryEntry[]): number {
+  const days = [...new Set(history.map((entry) => startOfDay(entry.watchedAt)))].sort((a, b) => a - b)
+  let best = 0
+  let run = 0
+  let previous: number | null = null
+  for (const day of days) {
+    // Compared through `dayKey` rather than by subtracting 24 hours, which
+    // is 23 or 25 across a clock change and would break the run there.
+    run = previous !== null && dayKey(previous + DAY_MS + DAY_MS / 2) === dayKey(day) ? run + 1 : 1
+    best = Math.max(best, run)
+    previous = day
+  }
+  return best
+}
+
 /* ── The heatmap ────────────────────────────────────────────────────────── */
 
 export interface HeatDay {
