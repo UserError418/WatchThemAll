@@ -11,6 +11,7 @@
    */
   import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import PreviewSoundButton from './PreviewSoundButton.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
   import RatingStrip from './RatingStrip.svelte'
@@ -452,21 +453,20 @@
   let showHeroTrailer = $state(false)
   const audioId = previewId('detail')
   /**
+   * Whether this hero plays out loud.
+   *
+   * There is no local switch. The sound button in the actions row is the nav's
+   * own component bound to the same global setting — an earlier local switch
+   * that looked different and meant almost the same thing was the confusing
+   * half of a pair, so the detail view carries the identical control instead.
+   */
+  const heroMuted = $derived(!library.settings.previewAudio || !previewAudio.holds(audioId))
+
+  /**
    * The overlay is modal, so it takes the sound outright while it is open and
    * gives it back on close — nothing underneath it can be interacted with, and
    * a browse billboard still audible behind a detail view is just noise.
    */
-  /**
-   * Whether this hero plays out loud.
-   *
-   * There is no local switch any more — the one in the nav governs every
-   * preview surface, and a second control that looked different and meant the
-   * same thing was the confusing half of the pair.
-   */
-  const heroMuted = $derived(!library.settings.previewAudio || !previewAudio.holds(audioId))
-
-
-
   $effect(() => {
     // Re-runs whenever a different title's detail lands, which is exactly when
     // the previous title's trailer must stop.
@@ -558,71 +558,76 @@
             <p class="genres">{detail.genres.join(' · ')}</p>
           {/if}
 
-          <div class="actions">
-            <button class="primary" onclick={resume} disabled={!detail}>
-              ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
-            </button>
-            <!--
-              `episode` is the one the Play button would start, so a scan
-              measures what the user is about to watch. Coverage is
-              episode-level — a provider carrying season one and not season four
-              is the ordinary case — and a TV request with no episode renders no
-              URL at all, which would mark every source dead.
-            -->
-            <SourcePicker
-              selected={chosenProvider}
-              media={{ type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }}
-              episode={subject.type === 'movie'
-                ? null
-                : { season: resumeAt.season, episode: resumeAt.episode }}
-              notOut={notOutYet(detail?.releaseDate, Date.now())}
-              onselect={chooseProvider}
-            />
-            <button
-              class="secondary"
-              onclick={() =>
-                inWatchlist
-                  ? library.removeFromWatchlist(subject.tmdbId)
-                  : library.addToWatchlist(detail ?? subject)}
-            >
-              {inWatchlist ? '✓ In Watchlist' : '+ Watchlist'}
-            </button>
-            {#if (detail?.type ?? subject.type) === 'tv'}
+          <div class="action-bar">
+            <div class="actions">
+              <button class="primary" onclick={resume} disabled={!detail}>
+                ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
+              </button>
+              <!--
+                `episode` is the one the Play button would start, so a scan
+                measures what the user is about to watch. Coverage is
+                episode-level — a provider carrying season one and not season four
+                is the ordinary case — and a TV request with no episode renders no
+                URL at all, which would mark every source dead.
+              -->
+              <SourcePicker
+                selected={chosenProvider}
+                media={{ type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }}
+                episode={subject.type === 'movie'
+                  ? null
+                  : { season: resumeAt.season, episode: resumeAt.episode }}
+                notOut={notOutYet(detail?.releaseDate, Date.now())}
+                onselect={chooseProvider}
+              />
               <button
                 class="secondary"
                 onclick={() =>
-                  tracked ? library.removeTracker(subject.tmdbId) : library.addTracker(detail ?? subject)}
-                title="Get notified when new episodes air"
+                  inWatchlist
+                    ? library.removeFromWatchlist(subject.tmdbId)
+                    : library.addToWatchlist(detail ?? subject)}
               >
-                {#if tracked}✓ Tracking Releases{:else}<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a5 5 0 0 0-5 5v3.6L5.6 15h12.8L17 11.6V8a5 5 0 0 0-5-5z"/><path d="M10 18a2 2 0 0 0 4 0"/></svg> Track Releases{/if}
+                {inWatchlist ? '✓ In Watchlist' : '+ Watchlist'}
               </button>
-            {/if}
+              {#if (detail?.type ?? subject.type) === 'tv'}
+                <button
+                  class="secondary"
+                  onclick={() =>
+                    tracked ? library.removeTracker(subject.tmdbId) : library.addTracker(detail ?? subject)}
+                  title="Get notified when new episodes air"
+                >
+                  {#if tracked}✓ Tracking Releases{:else}<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a5 5 0 0 0-5 5v3.6L5.6 15h12.8L17 11.6V8a5 5 0 0 0-5-5z"/><path d="M10 18a2 2 0 0 0 4 0"/></svg> Track Releases{/if}
+                </button>
+              {/if}
 
-            <!--
-              Seen it, and what you thought.
+              <!--
+                Seen it, and what you thought.
 
-              Together rather than apart, because they are one thought: the
-              rating is only meaningful about something already watched, and
-              putting the two side by side is what makes rating something the
-              user does in passing rather than a chore on another screen.
-            -->
-            <button
-              class="secondary"
-              class:on={seen}
-              onclick={() => toggleSeen()}
-              title={seen ? 'In your watched list' : watchedScopeLabel}
-            >
-              {seen ? '✓ Watched' : `+ ${watchedScopeLabel}`}
-            </button>
+                Together rather than apart, because they are one thought: the
+                rating is only meaningful about something already watched, and
+                putting the two side by side is what makes rating something the
+                user does in passing rather than a chore on another screen.
+              -->
+              <button
+                class="secondary"
+                class:on={seen}
+                onclick={() => toggleSeen()}
+                title={seen ? 'In your watched list' : watchedScopeLabel}
+              >
+                {seen ? '✓ Watched' : `+ ${watchedScopeLabel}`}
+              </button>
 
-            {#if seen}
-              <!-- Scoped to match the button beside it: an opinion about season
-                   three is a different thing from an opinion about the show. -->
-              <RatingStrip
-                media={detail ?? subject}
-                season={subject.type === 'movie' ? null : selectedSeason}
-              />
-            {/if}
+              {#if seen}
+                <!-- Scoped to match the button beside it: an opinion about season
+                     three is a different thing from an opinion about the show. -->
+                <RatingStrip
+                  media={detail ?? subject}
+                  season={subject.type === 'movie' ? null : selectedSeason}
+                />
+              {/if}
+            </div>
+
+            <!-- The nav's switch, reachable while the overlay covers the nav. -->
+            <span class="sound"><PreviewSoundButton /></span>
           </div>
 
           {#if playError}
@@ -830,7 +835,6 @@
     background-position: center 20%;
   }
 
-  /* Top-right, opposite the close button: the bottom is the content's now. */
   /**
    * Weighted to the bottom, because that is where the text now is.
    *
@@ -854,13 +858,21 @@
   }
 
   .hero-content {
+    /* Named so the sound button can reach past it to line up with the close button. */
+    --hero-pad-x: var(--space-6);
     position: relative;
     display: flex;
     align-items: flex-end;
     gap: var(--space-5);
     /* Generous top padding is what pushes the content down onto the gradient
        while leaving the preview above it uncovered. */
-    padding: var(--space-8) var(--space-6) var(--space-5);
+    padding: var(--space-8) var(--hero-pad-x) var(--space-5);
+  }
+
+  /* Takes the row's width, so the sound button has a right-hand end to sit at. */
+  .hero-text {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .poster {
@@ -897,14 +909,48 @@
     color: var(--text-secondary);
   }
 
-  .actions {
+  /*
+    The buttons, and the sound switch at the far end, outside the wrap.
+
+    Outside because the rating strip usually wraps onto a second line, and a
+    switch that was the row's last item went down with it. Beside the row it
+    stays level with the first line — Play, Source, Watchlist — however many
+    lines the row takes.
+  */
+  .action-bar {
+    /* One line of buttons; the switch's slot is the same height so the circle centres on it. */
+    --action-height: 38px;
     display: flex;
-    flex-wrap: wrap;
+    align-items: flex-start;
     gap: var(--space-2);
     margin-top: var(--space-4);
   }
 
+  .actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /*
+    Right-justified in the column the close button stands in.
+
+    The close button sits `--space-3` from the panel's edge while this row
+    ends at the hero's padding, so the negative margin moves the sound button
+    out to the same right edge — two round buttons, one above the other.
+  */
+  .sound {
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: var(--action-height);
+    margin-right: calc(var(--space-3) - var(--hero-pad-x));
+  }
+
   .actions button {
+    min-height: var(--action-height);
     padding: var(--space-2) var(--space-4);
     border-radius: var(--radius-md);
     font-size: var(--text-sm);
@@ -1112,7 +1158,12 @@
         while the title underneath stayed left-aligned.
       */
       align-items: flex-start;
-      padding: var(--space-6) var(--space-4) var(--space-4);
+      --hero-pad-x: var(--space-4);
+      padding: var(--space-6) var(--hero-pad-x) var(--space-4);
+    }
+    /* A column now, so the text block must still span it for the sound button. */
+    .hero-text {
+      width: 100%;
     }
     .poster {
       width: 100px;
