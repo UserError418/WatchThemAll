@@ -351,6 +351,13 @@
   --card-width: clamp(300px, 23vw, 420px);
   --card-ratio: 16 / 9;
   /**
+   * The artwork that fills that shape: `backdrop` or `poster`.
+   *
+   * Read by `lib/cardart.ts`, and changed only together with `--card-ratio` —
+   * the phone sheet sets both, for its portrait rows.
+   */
+  --card-art: backdrop;
+  /**
    * The card's rendered height, as a length.
    *
    * `--card-ratio` is only usable by `aspect-ratio`. Feeding it to `calc` does
@@ -397,6 +404,9 @@
 
   --poster-width: 168px;
   --poster-ratio: 2 / 3;
+
+  /** The Top 10 row's poster width; its rank numeral is sized from the same length. */
+  --top10-width: 150px;
 
   /**
    * The Watchlist's own poster width, larger than `--poster-width`.

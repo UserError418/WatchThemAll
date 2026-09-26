@@ -122,12 +122,13 @@
     display: block;
     /* Slight negative margin so the poster overlaps the numeral's right edge,
        which is what stops the pair reading as two separate objects. */
-    margin-right: -22px;
+    margin-right: calc(var(--top10-width) * -0.15);
     color: var(--bg-base);
-    font-size: 150px;
+    /* As tall as the poster is wide — the proportion is the design, so it scales with it. */
+    font-size: var(--top10-width);
     font-weight: 900;
     line-height: 0.78;
-    letter-spacing: -12px;
+    letter-spacing: calc(var(--top10-width) * -0.08);
     -webkit-text-stroke: 3px var(--text-tertiary);
     user-select: none;
   }
@@ -141,7 +142,7 @@
   .art {
     display: block;
     position: relative;
-    width: 150px;
+    width: var(--top10-width);
     aspect-ratio: var(--poster-ratio);
     border-radius: var(--radius-md);
     overflow: hidden;

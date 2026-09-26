@@ -40,14 +40,27 @@
   /* ── Cards ───────────────────────────────────────────────────────────── */
 
   /*
-    One card and a hint of the next.
+    Posters, three and a bit across — the shape of Netflix's phone shelves.
 
-    The desktop sizing targets four-and-a-half cards per row, which is a
-    decision aid on a wide screen and unreadable thumbnails on a narrow one.
-    Showing a sliver of the following card is what tells the user the row
-    scrolls, and it replaces the hover affordance that does not exist here.
+    This was one landscape card and a hint of the next (`min(78vw, 340px)`),
+    which put a single title per row on screen. The owner compared the tab
+    side by side with Netflix's on a phone (2026-09-26) and asked for its
+    density: portrait covers a third of the screen wide, so a glance takes in
+    three titles per row instead of one. The 0.3 of a fourth is what says the
+    row scrolls, as the sliver of the second card did before.
+
+    The width spends the screen after the left inset and three of the track's
+    gaps (`RowShell`'s `--space-2`). The art follows the shape: `--card-art`
+    makes the cards draw posters rather than crop backdrops (`lib/cardart.ts`),
+    and `--card-height` is restated because the desktop derives it as 9/16.
   */
-  --card-width: min(78vw, 340px);
+  --card-art: poster;
+  --card-ratio: 2 / 3;
+  --card-width: calc((100vw - var(--page-inset) - 3 * var(--space-2)) / 3.3);
+  --card-height: calc(var(--card-width) * 3 / 2);
+
+  /* The Top 10's posters match the rows around it, instead of standing half again as large. */
+  --top10-width: var(--card-width);
 
   /*
     No hover growth, because there is no hover.
@@ -63,6 +76,17 @@
 
   /* Three posters across a 390px screen, with the page inset accounted for. */
   --poster-width: 104px;
+
+  /*
+    Two Watchlist cards across, not one.
+
+    The desktop's 190px floor is more than half of a phone's 348px column, so
+    the grid fell to a single poster the full width of the screen — one title
+    per screenful, the density complaint the owner made about Browse. Two, not
+    Browse's three: these cards carry a title, a position line and, on tap, a
+    panel of controls, which a third of the screen cannot hold.
+  */
+  --wl-card: 150px;
 
   /* ── Rhythm ──────────────────────────────────────────────────────────── */
 
@@ -384,10 +408,30 @@ body {
   fade tightens the page. Here the text fills the hero — measured: content
   ended at 420px and the next row's heading started at 372px, printing "Top 10
   Series This Week" straight across the Play button.
+
+  Scoped to the billboard's own element. As a bare `.hero` it also sized the
+  detail sheet's header, which is a `<header class="hero">`, and a History tile
+  once named `.hero` came out 460px tall.
 */
-:root .hero {
+:root section.hero {
   height: min(58vh, 460px) !important;
   margin-bottom: 0 !important;
+}
+
+/*
+  The detail sheet's header is as tall as what is in it.
+
+  On the desktop it is a 16:9 box with a floor and the text sits on the lower
+  part of the preview. At 412px the text — poster, title, facts, three lines of
+  buttons and the rating strip — is taller than any such box: measured, 491px
+  of content in a 460px header, with the top of the poster pushed out of the
+  sheet. Letting the content set the height keeps all of it on screen, and the
+  preview behind it simply covers a taller area.
+*/
+:root .scrim > .panel .hero {
+  aspect-ratio: auto !important;
+  height: auto !important;
+  max-height: none !important;
 }
 
 /*
@@ -397,7 +441,7 @@ body {
   made the hero need to be tall in the first place. Two lines is enough to say
   what the thing is; the detail sheet is one tap away for the rest.
 */
-:root .hero .detail {
+:root section.hero .detail {
   display: -webkit-box !important;
   -webkit-line-clamp: 2 !important;
   -webkit-box-orient: vertical;

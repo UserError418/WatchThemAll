@@ -2,6 +2,9 @@
   /**
    * A landscape title card, and the expanded preview it grows into.
    *
+   * On the phone it is a poster instead, and never grows — see `lib/cardart.ts`
+   * and the card tokens in `mobile.css`.
+   *
    * This is the Netflix browse-row gesture: hover a card, it lifts and widens
    * in place, the artwork gives way to a muted trailer, and a row of circular
    * actions appears beneath it with the metadata.
@@ -25,6 +28,7 @@
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import { canHover } from '../lib/pointer'
+  import { cardArt } from '../lib/cardart'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import Score from './Score.svelte'
 
@@ -61,12 +65,24 @@
   let trailerRequest: Promise<string | null> | null = null
 
   /**
-   * Landscape art, falling back to the poster.
+   * The poster, when the stylesheet shapes cards as posters — the phone's rows.
+   *
+   * See `lib/cardart.ts`. A title without a poster keeps its backdrop, cropped,
+   * and its printed name, rather than a blank tile.
+   */
+  const showsPoster = $derived(cardArt() === 'poster' && Boolean(media.posterPath))
+
+  /**
+   * Otherwise landscape art, falling back to the poster.
    *
    * Browse rows come from TMDB and nearly always have a backdrop. The fallback
    * matters for IMDB-sourced results, which carry poster art only.
    */
-  const art = $derived(backdropUrl(media.backdropPath, 'w780') ?? posterUrl(media.posterPath))
+  const art = $derived(
+    showsPoster
+      ? posterUrl(media.posterPath)
+      : (backdropUrl(media.backdropPath, 'w780') ?? posterUrl(media.posterPath)),
+  )
   const hasBackdrop = $derived(Boolean(media.backdropPath))
   const saved = $derived(library.isInWatchlist(media.tmdbId))
   const tracked = $derived(library.isTracked(media.tmdbId))
@@ -210,9 +226,9 @@
             alt=""
             loading="lazy"
             decoding="async"
-            class:contain={!hasBackdrop}
-            width="254"
-            height="143"
+            class:contain={!showsPoster && !hasBackdrop}
+            width={showsPoster ? 154 : 254}
+            height={showsPoster ? 231 : 143}
           />
         {:else}
           <div class="placeholder" aria-hidden="true">{media.title.slice(0, 1)}</div>
@@ -226,9 +242,15 @@
           />
         {/if}
 
-        <!-- Always-on gradient so the title stays legible over any artwork. -->
-        <div class="scrim" aria-hidden="true"></div>
-        <span class="name">{media.title}</span>
+        <!--
+          Always-on gradient so the title stays legible over any artwork.
+          Not on a poster: the poster prints its own title, and a second one
+          across the bottom of a 120px tile covers a third of the art.
+        -->
+        {#if !showsPoster}
+          <div class="scrim" aria-hidden="true"></div>
+          <span class="name">{media.title}</span>
+        {/if}
 
         {#if progress > 0}
           <div class="progress" aria-hidden="true">
