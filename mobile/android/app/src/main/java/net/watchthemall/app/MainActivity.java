@@ -58,6 +58,7 @@ public class MainActivity extends BridgeActivity {
          */
         registerPlugin(CastPlugin.class);
         registerPlugin(ScanPlugin.class);
+        registerPlugin(ProbeViewPlugin.class);
 
         super.onCreate(savedInstanceState);
 

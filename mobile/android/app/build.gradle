@@ -71,6 +71,14 @@ dependencies {
      * `CastPlugin` uses for discovery and route selection.
      */
     implementation "com.google.android.gms:play-services-cast-framework:$castFrameworkVersion"
+    /*
+     * `ProbeSession` installs a script into every frame of a probe WebView
+     * (`addDocumentStartJavaScript`) and mutes it (`setAudioMuted`). Capacitor
+     * already ships this library, but as its own `implementation` dependency,
+     * so it is not on this module's compile classpath; the version is the one
+     * Capacitor's `variables.gradle` pins, so there is still only one copy.
+     */
+    implementation "androidx.webkit:webkit:$androidxWebkitVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
