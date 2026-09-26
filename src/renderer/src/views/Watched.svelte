@@ -703,9 +703,16 @@
     cursor: pointer;
   }
 
-  /* The pill shows focus; the browser's own ring inside it made a second outline. */
+  /*
+    The pill shows focus, so the select inside it must not show its own: two
+    rings, one inside the other. The app's ring is a box-shadow, not an
+    outline (`:focus-visible` in global.css), so both go. Android's WebView
+    counts a tapped select as focus-visible, so on the phone the second ring
+    appeared after every pick, not only under the keyboard.
+  */
   .sort select:focus {
     outline: none;
+    box-shadow: none;
   }
 
   .sort:has(select:focus-visible) {
