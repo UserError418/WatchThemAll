@@ -319,6 +319,15 @@ export interface RankableMatch {
   title: string
   /** TMDB vote count. Absent on results from sources that do not report it. */
   voteCount?: number
+  /** TMDB genre ids. Absent, the result counts as not animated. */
+  genreIds?: readonly number[]
+}
+
+/** TMDB's Animation genre, the same id for films and series. */
+const ANIMATION = 16
+
+function isAnimated(result: RankableMatch): boolean {
+  return result.genreIds?.includes(ANIMATION) ?? false
 }
 
 /** Case, punctuation and spacing removed, so two spellings of one title agree. */
@@ -334,7 +343,17 @@ function normaliseTitle(title: string): string {
  * Academia itself, so a 311-title import files the wrong show and every
  * recommendation built on it inherits the error.
  *
- * Two rules, in order, and the order is the whole design:
+ * **Only animation is considered when there is any**, because every entry on
+ * a MyAnimeList is anime. Without this, rule 1 below took whatever carried
+ * the romanised title: on a real 311-entry export 6 picks were not
+ * animation, and all 6 were wrong. There were three 0-vote stub entries
+ * ("Tate no Yuusha no Nariagari" instead of The Rising of the Shield Hero),
+ * a live-action film ("Grand Blue"), and an American crime drama ("Golden
+ * Boy", beside the 1995 anime of the same name). The real anime sat in the
+ * same results every time. With no animated result at all, everything is
+ * considered as before.
+ *
+ * Then two rules, in order, and the order is the whole design:
  *
  * 1. **An exact title match wins outright.** "Sword Art Online Alternative:
  *    Gun Gale Online" is a real distinct series far less known than plain Sword
@@ -364,11 +383,14 @@ export function pickBestMatch<T extends RankableMatch>(
 ): T | null {
   if (results.length === 0) return null
 
-  const exact = results.filter((r) => isExactMatch(term, r))
+  const animated = results.filter(isAnimated)
+  const candidates = animated.length > 0 ? animated : results
+
+  const exact = candidates.filter((r) => isExactMatch(term, r))
   if (exact.length > 0) return exact.find((r) => r.type === type) ?? exact[0]!
 
-  const sameType = results.filter((r) => r.type === type)
-  const pool = sameType.length > 0 ? sameType : results
+  const sameType = candidates.filter((r) => r.type === type)
+  const pool = sameType.length > 0 ? sameType : candidates
 
   return pool.reduce((best, r) => ((r.voteCount ?? 0) > (best.voteCount ?? 0) ? r : best))
 }
@@ -382,13 +404,13 @@ function isExactMatch(term: string, result: RankableMatch): boolean {
  * the result it meant. The whole resolver apart from the network, shared by
  * the desktop and the phone so the two cannot resolve a list differently.
  *
- * Stops at the first term whose pick is the requested type or an exact title.
- * A wrong-typed pick that is only the best of a bad lot is held back while
- * the shorter terms are tried. The full title often finds *only* a film cut
+ * Stops at the first term whose pick is animated and either the requested
+ * type or an exact title. Any other pick is only the best of a bad lot, and
+ * is held back while the shorter terms are tried. The full title often finds *only* a film cut
  * from the series: "Shingeki no Kyojin Season 3" returns a recap film and
  * nothing else, while "Shingeki no Kyojin" finds the series. Stopping at the
  * first term that found anything filed that film, and two more like it, as
- * the anime on one real library. A wrong-typed pick still wins when no term
+ * the anime on one real library. A held-back pick still wins when no term
  * finds anything better (see `pickBestMatch`).
  */
 export async function findBestMatch<T extends RankableMatch>(
@@ -400,7 +422,7 @@ export async function findBestMatch<T extends RankableMatch>(
   for (const term of searchVariants(title)) {
     const best = pickBestMatch(term, type, await search(term))
     if (!best) continue
-    if (best.type === type || isExactMatch(term, best)) return best
+    if (isAnimated(best) && (best.type === type || isExactMatch(term, best))) return best
     fallback ??= best
   }
   return fallback

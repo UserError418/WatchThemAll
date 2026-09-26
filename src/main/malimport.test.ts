@@ -347,6 +347,35 @@ describe('pickBestMatch', () => {
 
     expect(best).not.toBeNull()
   })
+  /** Measured on a real export: an American crime drama shares the anime's exact title. */
+  it('considers only animated results when there are any', () => {
+    const best = pickBestMatch('Golden Boy', 'tv', [
+      { type: 'tv', title: 'Golden Boy', voteCount: 34, genreIds: [80, 18] },
+      { type: 'tv', title: 'Golden Boy', voteCount: 538, genreIds: [16, 35] },
+    ])
+
+    expect(best?.voteCount).toBe(538)
+  })
+
+  /** A 0-vote stub filed under the romanised title used to win rule 1 outright. */
+  it('lets an animated series beat an exact title that is not animated', () => {
+    const best = pickBestMatch('Tate no Yuusha no Nariagari', 'tv', [
+      { type: 'movie', title: 'Tate no Yuusha no Nariagari', voteCount: 0 },
+      { type: 'tv', title: 'The Rising of the Shield Hero', voteCount: 1593, genreIds: [16] },
+    ])
+
+    expect(best?.title).toBe('The Rising of the Shield Hero')
+  })
+
+  it('considers everything when nothing is animated', () => {
+    const best = pickBestMatch('Innocence', 'movie', [
+      { type: 'tv', title: 'Innocence', voteCount: 5 },
+      { type: 'movie', title: 'Innocence', voteCount: 110 },
+    ])
+
+    expect(best).toMatchObject({ type: 'movie', title: 'Innocence' })
+  })
+
   it('prefers the requested type among several exact titles', () => {
     // "Mob Psycho 100" is both the series and a film, and TMDB may list either first.
     const best = pickBestMatch('Mob Psycho 100', 'tv', [
@@ -360,6 +389,7 @@ describe('pickBestMatch', () => {
 
 describe('findBestMatch', () => {
   type Result = RankableMatch & { id: number }
+  const ANIME = [16]
   /** A TMDB search that answers from a table, recording what it was asked. */
   function searchFrom(table: Record<string, Result[]>) {
     const asked: string[] = []
@@ -378,11 +408,11 @@ describe('findBestMatch', () => {
   it('passes over a wrong-typed pick when a shorter term finds the right type', async () => {
     const { search } = searchFrom({
       'Shingeki no Kyojin Season 3': [
-        { id: 492999, type: 'movie', title: 'Attack on Titan: The Roar of Awakening', voteCount: 300 },
+        { id: 492999, type: 'movie', title: 'Attack on Titan: The Roar of Awakening', voteCount: 300, genreIds: ANIME },
       ],
       'Shingeki no Kyojin': [
         { id: 295830, type: 'movie', title: 'Attack on Titan', voteCount: 500 },
-        { id: 1429, type: 'tv', title: 'Attack on Titan', voteCount: 7000 },
+        { id: 1429, type: 'tv', title: 'Attack on Titan', voteCount: 7000, genreIds: ANIME },
       ],
     })
 
@@ -393,7 +423,7 @@ describe('findBestMatch', () => {
 
   it('still settles for the wrong type when no term finds the right one', async () => {
     const { search } = searchFrom({
-      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'Some Special: The Movie', voteCount: 10 }],
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'Some Special: The Movie', voteCount: 10, genreIds: ANIME }],
     })
 
     const best = await findBestMatch('Some Special Season 2', 'tv', search)
@@ -403,8 +433,8 @@ describe('findBestMatch', () => {
 
   it('takes the first wrong-typed pick as the fallback, not a later one', async () => {
     const { search } = searchFrom({
-      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'First Film', voteCount: 10 }],
-      'Some Special': [{ id: 8, type: 'movie', title: 'Second Film', voteCount: 900 }],
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'First Film', voteCount: 10, genreIds: ANIME }],
+      'Some Special': [{ id: 8, type: 'movie', title: 'Second Film', voteCount: 900, genreIds: ANIME }],
     })
 
     expect((await findBestMatch('Some Special Season 2', 'tv', search))?.id).toBe(7)
@@ -413,8 +443,8 @@ describe('findBestMatch', () => {
   /** An exact title still wins outright, whatever its type (`pickBestMatch` rule 1). */
   it('stops at an exact title even when it is the other type', async () => {
     const { search, asked } = searchFrom({
-      'Kimi no Na wa Season 2': [{ id: 372058, type: 'movie', title: 'Kimi no Na wa Season 2', voteCount: 9000 }],
-      'Kimi no Na wa': [{ id: 1, type: 'tv', title: 'Something Else', voteCount: 10 }],
+      'Kimi no Na wa Season 2': [{ id: 372058, type: 'movie', title: 'Kimi no Na wa Season 2', voteCount: 9000, genreIds: ANIME }],
+      'Kimi no Na wa': [{ id: 1, type: 'tv', title: 'Something Else', voteCount: 10, genreIds: ANIME }],
     })
 
     expect((await findBestMatch('Kimi no Na wa Season 2', 'tv', search))?.id).toBe(372058)
@@ -423,11 +453,24 @@ describe('findBestMatch', () => {
 
   it('stops searching at the first right-typed pick', async () => {
     const { search, asked } = searchFrom({
-      'Mob Psycho 100 II': [{ id: 67075, type: 'tv', title: 'Mob Psycho 100', voteCount: 2000 }],
+      'Mob Psycho 100 II': [{ id: 67075, type: 'tv', title: 'Mob Psycho 100', voteCount: 2000, genreIds: ANIME }],
     })
 
     expect((await findBestMatch('Mob Psycho 100 II', 'tv', search))?.id).toBe(67075)
     expect(asked).toHaveLength(1)
+  })
+
+  /**
+   * A term that finds only a live-action namesake is no better than one that
+   * finds the wrong type: the anime may still turn up under a shorter term.
+   */
+  it('passes over a pick that is not animated when a shorter term finds one', async () => {
+    const { search } = searchFrom({
+      'Grand Blue Season 2': [{ id: 677602, type: 'tv', title: 'Grand Blue Live', voteCount: 24 }],
+      'Grand Blue': [{ id: 79166, type: 'tv', title: 'Grand Blue Dreaming', voteCount: 200, genreIds: ANIME }],
+    })
+
+    expect((await findBestMatch('Grand Blue Season 2', 'tv', search))?.id).toBe(79166)
   })
 
   it('returns null when no term finds anything', async () => {
