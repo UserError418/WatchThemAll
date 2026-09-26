@@ -1,3 +1,26 @@
+<script module lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
+
+  /**
+   * Videos YouTube has refused to play this session.
+   *
+   * TMDB lists trailers that have since been removed, made private, or barred
+   * from embedding; YouTube then draws a grey "Video unavailable" page where
+   * the preview would be — over the card's artwork, which was fine as it was.
+   * The player says so with an `onError` message (measured: code 150, right
+   * after `onReady`), and from then on the video is not embedded again: the
+   * frame is removed, and a later preview of the same video on any surface
+   * never loads it. In memory only — a video can come back, and a restart is
+   * a fair time to ask again.
+   */
+  const unavailable = new SvelteSet<string>()
+
+  /** Whether YouTube has already refused `videoKey` this session. */
+  export function trailerUnavailable(videoKey: string): boolean {
+    return unavailable.has(videoKey)
+  }
+</script>
+
 <script lang="ts">
   /**
    * A YouTube trailer, shown as soon as it exists.
@@ -172,13 +195,9 @@
 
     const handshake = (): void => {
       post({ event: 'listening', id: 1, channel: 'widget' })
-      post({
-        event: 'command',
-        func: 'addEventListener',
-        args: ['onStateChange'],
-        id: 1,
-        channel: 'widget',
-      })
+      for (const name of ['onStateChange', 'onError']) {
+        post({ event: 'command', func: 'addEventListener', args: [name], id: 1, channel: 'widget' })
+      }
     }
 
     const retry = setInterval(handshake, 400)
@@ -230,12 +249,20 @@
       // `infoDelivery`, whose `info` object carries `playerState` only when it
       // changed and `currentTime` on every tick. Accepting both means a missed
       // subscription still leaves the sound and captions controllable.
+      //
+      // `onError` also carries a bare number — an error code, not a state — so
+      // the event's name decides which it is.
       const message = payload as {
+        event?: string
         info?: number | { playerState?: number; currentTime?: number }
+      }
+      if (message.event === 'onError') {
+        unavailable.add(key)
+        return
       }
       const info = message.info
       if (typeof info === 'number') {
-        onPlayerState(info)
+        if (message.event === 'onStateChange') onPlayerState(info)
         return
       }
       if (typeof info !== 'object' || info === null) return
@@ -257,14 +284,16 @@
   })
 </script>
 
-<div class="embed-cover-frame">
-  <iframe
-    bind:this={frame}
-    class="embed-cover"
-    {src}
-    {title}
-    allow="autoplay; encrypted-media"
-    referrerpolicy="strict-origin"
-    tabindex="-1"
-  ></iframe>
-</div>
+{#if !unavailable.has(videoKey)}
+  <div class="embed-cover-frame">
+    <iframe
+      bind:this={frame}
+      class="embed-cover"
+      {src}
+      {title}
+      allow="autoplay; encrypted-media"
+      referrerpolicy="strict-origin"
+      tabindex="-1"
+    ></iframe>
+  </div>
+{/if}

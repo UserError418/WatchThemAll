@@ -30,7 +30,7 @@
   import { canHover } from '../lib/pointer'
   import { cardArt } from '../lib/cardart'
   import { titleFacts, whenVisible } from '../lib/titlefacts.svelte'
-  import TrailerEmbed from './TrailerEmbed.svelte'
+  import TrailerEmbed, { trailerUnavailable } from './TrailerEmbed.svelte'
   import Score from './Score.svelte'
 
   interface Props {
@@ -238,7 +238,7 @@
 <div
   class="card"
   class:expanded
-  class:playing={showTrailer && trailerKey}
+  class:playing={showTrailer && trailerKey && !trailerUnavailable(trailerKey)}
   data-anchor={anchor}
   onmouseenter={onEnter}
   onmouseleave={onLeave}
