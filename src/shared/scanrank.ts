@@ -24,7 +24,8 @@
  */
 
 import type { ProbeVerdict, TitleOutcome } from './ipc'
-import type { SourceSortKey } from './types'
+import type { ScanReason, SourceSortKey } from './types'
+import { describeReason } from './scanreason'
 
 /**
  * Where one provider sits in the fallback order, lowest first.
@@ -99,8 +100,18 @@ const UNKNOWN: ProviderDot = {
 export function providerDot(
   outcome: TitleOutcome | undefined,
   verdict: ProbeVerdict | undefined,
+  reason?: ScanReason,
 ): ProviderDot {
-  switch (providerRank(outcome, verdict)) {
+  const rank = providerRank(outcome, verdict)
+  /*
+   * A test that knows why a source failed says so, in the same colour the rank
+   * gives it. Only for the two tiers a test decides: the history tiers (1, 4)
+   * describe plays, which carry no reason.
+   */
+  if (reason && (rank === 2 || rank === 5)) {
+    return { tone: rank === 2 ? 'warn' : 'bad', ...describeReason(reason) }
+  }
+  switch (rank) {
     case 0:
       return {
         tone: 'good',

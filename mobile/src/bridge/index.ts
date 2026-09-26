@@ -42,8 +42,8 @@ import type {
   PlayerState,
   PlayerSuggestion,
   RowRequest,
-  TailoredRequest,
-  TailoredRow,
+  ForYouPlanRequest,
+  ForYouRowRequest,
   ProviderScan,
   ProviderScanProgress,
   TitleProviderState,
@@ -65,6 +65,7 @@ import { buildPlayUrl } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
+  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -89,16 +90,16 @@ import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
 import { notifyFound, syncScheduledReleases } from './notifications'
 import { exportStore, importIntoStore } from '@main/sync'
-import { buildTailoredRow } from '@main/tailored'
+import { forYouPlan, forYouRow } from '@main/foryou'
+import { tmdbNetwork } from '@main/foryou/network'
 import { backfillScores } from '@main/scorebackfill'
 import { runSeasonSplit, tmdbIdentify } from '@main/seasonsplit'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
   STATUS_LABELS,
+  findBestMatch,
   parseMalExport,
-  pickBestMatch,
-  searchVariants,
 } from '@main/malimport'
 import type { MalEntry } from '@main/malimport'
 import { applyMalImport } from '@main/malapply'
@@ -988,7 +989,7 @@ export async function createBridge(): Promise<WtaApi> {
     return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       sourceOrder: settings.sourceOrder,
     })
   }
@@ -1007,7 +1008,7 @@ export async function createBridge(): Promise<WtaApi> {
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       order: orderedForRequest(media).map((provider) => provider.id),
     }
   }
@@ -1173,17 +1174,13 @@ export async function createBridge(): Promise<WtaApi> {
         tmdb.row(req) as Promise<Paged<MediaSummary>>,
 
       /**
-       * The tailored row, assembled here rather than in the renderer.
-       *
-       * Same reasoning as on desktop: it is derived from the store, and having
-       * the surface that draws it assemble the genre ids means the next surface
-       * wanting the same thing reimplements the taste model.
+       * The personalised rows, planned and filled here rather than in the
+       * renderer — the same two calls the desktop's IPC handlers make, over
+       * the same store document, so the two platforms cannot disagree about
+       * what a user's Browse page is.
        */
-      tailored: (req: TailoredRequest): Promise<TailoredRow> =>
-        buildTailoredRow(store.read(), req.page, {
-          recommendations: tmdb.recommendations,
-          discoverByGenres: tmdb.discoverByGenres,
-        }),
+      forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, tmdbNetwork),
+      forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, tmdbNetwork),
 
       search: (query: string, page: number) => tmdb.search(query, page),
       detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),
@@ -1200,6 +1197,9 @@ export async function createBridge(): Promise<WtaApi> {
       outcomes: async (media: TitleRef): Promise<TitleProviderState> => providerStateFor(media),
       scan: (media, episode) => runProviderScan(media, episode),
       cancelScan: async () => scanRunner.cancel(),
+      // No background tester here: a probe needs the visible surface, and a
+      // phone testing sources on its own would spend battery and data unasked.
+      backgroundStatus: async () => null,
     },
 
     releases: {
@@ -1325,27 +1325,24 @@ export async function createBridge(): Promise<WtaApi> {
          *
          * The variant/ranking logic is imported rather than reimplemented —
          * it is what took the match rate from 9/15 to 60/60 and it has nothing
-         * platform-specific in it.
+         * platform-specific in it. `findBestMatch` is the same function the
+         * desktop resolves with.
          */
         const resolveTitle = async (
           title: string,
           type: MediaType,
         ): Promise<ResolvedTitle | null> => {
-          for (const variant of searchVariants(title)) {
-            const results = await tmdb.search(variant, 1)
-            const best = pickBestMatch(variant, type, results.items)
-            if (best) {
-              return {
-                tmdbId: best.tmdbId,
-                imdbId: best.imdbId ?? null,
-                title: best.title,
-                posterPath: best.posterPath ?? null,
-                genreIds: best.genreIds ?? [],
-                rating: best.rating ?? 0,
-              }
-            }
+          const best = await findBestMatch(title, type, async (term) => (await tmdb.search(term, 1)).items)
+          if (!best) return null
+          return {
+            tmdbId: best.tmdbId,
+            type: best.type,
+            imdbId: best.imdbId ?? null,
+            title: best.title,
+            posterPath: best.posterPath ?? null,
+            genreIds: best.genreIds ?? [],
+            rating: best.rating ?? 0,
           }
-          return null
         }
 
         const { store: next, summary } = await applyMalImport(
@@ -1471,6 +1468,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
+      watchlistTest: () => () => {},
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),
     },

@@ -30,8 +30,8 @@
  * cheap to pin in a test and nearly impossible to see in a grid.
  */
 
-import type { HistoryEntry, WatchlistEntry } from '@shared/types'
-import { playedMs } from './historystats'
+import type { HistoryEntry, WatchlistEntry } from './types'
+import { playedMs } from './playtime'
 
 /**
  * Past this fraction, a title is "nearly finished" rather than "in progress".

@@ -20,10 +20,12 @@ import type {
   GenreRowRequest,
   PlayRequest,
   RowRequest,
-  TailoredRequest,
+  ForYouPlanRequest,
+  ForYouRowRequest,
   ProviderScan,
   TitleProviderState,
   TitleRef,
+  WatchlistTestStatus,
 } from '@shared/ipc'
 import type { MediaSummary, MediaType, StoreShape } from '@shared/types'
 import type { Store } from './store'
@@ -33,13 +35,14 @@ import { buildPlayUrl } from './providers'
 import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
-import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
+import { lastPlayedAt, lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
 import type { ScanService } from './scanservice'
-import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
+import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
-import { buildTailoredRow } from './tailored'
+import { forYouPlan, forYouRow } from './foryou'
+import { tmdbNetwork } from './foryou/network'
 import { exportStore, importIntoStore } from './sync'
 import type { Provider } from '@shared/types'
 import { NO_CLIENT_REASON } from '@shared/sync/credentials'
@@ -105,6 +108,8 @@ export interface IpcDeps {
   switchPlayerProvider: (providerId: string) => boolean
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
+  /** The user, or the countdown, took the offer to switch. False if there was none. */
+  acceptSuggestion: () => boolean
   /** Reload the embed currently playing, in place. */
   reloadPlayer: () => void
   /**
@@ -140,6 +145,8 @@ export interface IpcDeps {
    * exist.
    */
   scan: ScanService
+  /** The watchlist tester's state, for Settings. */
+  backgroundStatus: () => WatchlistTestStatus
 }
 
 /**
@@ -162,18 +169,17 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(CH.tmdbRow, (_e, req: RowRequest | GenreRowRequest | DiscoverRequest) => tmdb.row(req))
   /**
-   * The tailored Browse row.
+   * The personalised Browse rows.
    *
-   * Main decides the contents, not the renderer: the taste profile is derived
-   * from the store, and the store is here. Having the renderer assemble genre
-   * ids to send back would put the recommendation in the surface that draws it,
-   * where the next surface wanting the same thing has to reimplement it.
+   * Main decides what they are and what goes in them, not the renderer: the
+   * taste profile is derived from the store, and the store is here. The
+   * renderer only asks for the plan and then for each planned row's pages.
    */
-  ipcMain.handle(CH.tmdbTailored, (_e, req: TailoredRequest) =>
-    buildTailoredRow(store.read(), req.page, {
-      recommendations: tmdb.recommendations,
-      discoverByGenres: tmdb.discoverByGenres,
-    }),
+  ipcMain.handle(CH.tmdbForYouPlan, (_e, req: ForYouPlanRequest) =>
+    forYouPlan(store.read(), req.seed, tmdbNetwork),
+  )
+  ipcMain.handle(CH.tmdbForYouRow, (_e, req: ForYouRowRequest) =>
+    forYouRow(store.read(), req, tmdbNetwork),
   )
 
   ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))
@@ -199,7 +205,7 @@ export function registerIpc(deps: IpcDeps): void {
     return {
       outcomes: outcomesForTitle(streamOutcomes, key),
       lastUsed: lastWorkingForTitle(streamOutcomes, key),
-      scan: freshScan(providerScans, key),
+      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
       // From the same store read a moment later, by the function Automatic
       // itself calls — so the rows and the fallback chain cannot disagree.
       order: deps.orderProviders(media).map((provider) => provider.id),
@@ -250,6 +256,7 @@ export function registerIpc(deps: IpcDeps): void {
   )
 
   ipcMain.handle(CH.providersScanCancel, () => deps.scan.cancel())
+  ipcMain.handle(CH.providersBackgroundStatus, () => deps.backgroundStatus())
   ipcMain.handle(CH.dataDir, () => store.dir)
 
   /**
@@ -401,6 +408,7 @@ export function registerIpc(deps: IpcDeps): void {
     deps.switchPlayerProvider(providerId),
   )
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
+  ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())
 
   ipcMain.handle(CH.dataExport, async () => {
@@ -459,30 +467,21 @@ export function registerIpc(deps: IpcDeps): void {
       decisions,
       /**
        * The resolver. Injected so the assembly logic is testable without a
-       * network.
-       *
-       * Tries `searchVariants` in order and takes the first term that finds
-       * anything, then `pickBestMatch` to decide which of that term's results
-       * was meant. Both exist because MAL's titles and TMDB's disagree
-       * systematically rather than randomly — each carries the measurement
-       * that justifies it.
+       * network. `findBestMatch` is the whole of it apart from the search
+       * itself, shared with the phone.
        */
       async (title, type) => {
-        for (const term of searchVariants(title)) {
-          const found = await tmdb.search(term, 1)
-          const best = pickBestMatch(term, type, found.items)
-          if (best) {
-            return {
-              tmdbId: best.tmdbId,
-              imdbId: best.imdbId ?? null,
-              title: best.title,
-              posterPath: best.posterPath,
-              genreIds: best.genreIds,
-              rating: best.rating,
-            }
-          }
+        const best = await findBestMatch(title, type, async (term) => (await tmdb.search(term, 1)).items)
+        if (!best) return null
+        return {
+          tmdbId: best.tmdbId,
+          type: best.type,
+          imdbId: best.imdbId ?? null,
+          title: best.title,
+          posterPath: best.posterPath,
+          genreIds: best.genreIds,
+          rating: best.rating,
         }
-        return null
       },
       (done, total) => win?.webContents.send(EV.malProgress, { done, total }),
     )

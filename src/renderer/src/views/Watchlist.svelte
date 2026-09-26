@@ -19,7 +19,7 @@
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { bandWatchlist } from '../lib/watchlistrank'
+  import { bandWatchlist } from '@shared/watchlistrank'
   import { fly } from 'svelte/transition'
   import { stagger } from '../lib/motion'
   import WatchlistCard from '../components/WatchlistCard.svelte'
@@ -34,7 +34,7 @@
   let filter = $state<Filter>('all')
 
   const entries = $derived(
-    filter === 'all' ? library.watchlist : library.watchlist.filter((w) => w.type === filter),
+    filter === 'all' ? library.listedWatchlist : library.listedWatchlist.filter((w) => w.type === filter),
   )
 
   const groups = $derived(
@@ -58,8 +58,8 @@
   <header class="head">
     <div class="lead">
       <h2>Watchlist</h2>
-      {#if library.watchlist.length > 0}
-        <span class="count">{library.watchlist.length}</span>
+      {#if library.listedWatchlist.length > 0}
+        <span class="count">{library.listedWatchlist.length}</span>
       {/if}
     </div>
     <div class="filters">
@@ -69,7 +69,7 @@
     </div>
   </header>
 
-  {#if library.watchlist.length === 0}
+  {#if library.listedWatchlist.length === 0}
     <p class="state">
       Nothing here yet. Add something from Browse or Search and it will show up with a resume
       position.

@@ -498,6 +498,8 @@ describe('season-scoped watched and ratings', () => {
         tmdbId: 1396,
         type: 'tv',
         season: null,
+        value: 8,
+        coarse: false,
         rating: 'like',
         genreIds: [],
         at: 1,
@@ -506,12 +508,55 @@ describe('season-scoped watched and ratings', () => {
       },
     ]
     remote.ratings = [
-      { ...local.ratings[0]!, key: 'tv:tt0903747:s3', season: 3, rating: 'dislike', updatedAt: 2 },
+      {
+        ...local.ratings[0]!,
+        key: 'tv:tt0903747:s3',
+        season: 3,
+        value: 3,
+        rating: 'dislike',
+        updatedAt: 2,
+      },
     ]
 
     const merged = mergeDocuments(local, remote)
     expect(merged.ratings).toHaveLength(2)
-    expect(merged.ratings.find((r) => r.season === null)?.rating).toBe('like')
-    expect(merged.ratings.find((r) => r.season === 3)?.rating).toBe('dislike')
+    expect(merged.ratings.find((r) => r.season === null)?.value).toBe(8)
+    expect(merged.ratings.find((r) => r.season === 3)?.value).toBe(3)
+  })
+})
+
+/**
+ * The 1–10 scale, where a rating carries its verdict twice: as `value`, and as
+ * the like/dislike string builds up to 1.7.3 read.
+ *
+ * The two only stay consistent if a merge takes a rating whole. A field-level
+ * merge could pair one device's 9 with the other's "dislike", and every build
+ * would then read a different opinion out of the same record.
+ */
+describe('ratings on the 1–10 scale', () => {
+  const rating = (over: Partial<StoreDocument['ratings'][number]>) => ({
+    key: 'tv:tt0903747',
+    tmdbId: 1396,
+    type: 'tv' as const,
+    season: null,
+    value: 9 as const,
+    coarse: false,
+    rating: 'like' as const,
+    genreIds: [],
+    at: 1,
+    updatedAt: 1,
+    deletedAt: null,
+    ...over,
+  })
+
+  it('takes the newer rating whole, never a value from one side and a string from the other', () => {
+    const local = emptyDoc('a')
+    const remote = emptyDoc('b')
+    local.ratings = [rating({ value: 9, coarse: false, rating: 'like', updatedAt: 5 })]
+    remote.ratings = [rating({ value: 4, coarse: true, rating: 'dislike', updatedAt: 6 })]
+
+    for (const merged of [mergeDocuments(local, remote), mergeDocuments(remote, local)]) {
+      expect(merged.ratings).toEqual([remote.ratings[0]])
+    }
   })
 })

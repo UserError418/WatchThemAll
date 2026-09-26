@@ -55,58 +55,169 @@ import type { Provider, SourceSortKey } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 
-/**
- * How long a scan is worth showing.
- *
- * These providers change behaviour by the hour — a backend moves, a domain gets
- * a challenge page, a catalogue gap is filled. A measurement from last week
- * describes a service that no longer exists, and showing it as current is worse
- * than showing nothing, because the user cannot tell the difference.
- *
- * Six hours is chosen to cover the case the feature is actually for: scan a
- * series, then watch several episodes of it over an evening. It is deliberately
- * shorter than a day, so a scan never survives into a session where the user
- * would reasonably assume it had been re-measured.
- */
-export const SCAN_TTL_MS = 6 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
- * How many titles' scans to keep.
+ * How long a test result is shown and used at all: thirty days.
  *
- * Bounded for the same reason the outcome log is: this is written every time
- * the user scans and read on every ranking. Oldest are dropped first. Sixty is
- * far more than the handful of shows anyone has in flight, and small enough
- * that the whole set stays cheap to scan linearly.
+ * It was six hours, on the belief that these providers change by the hour.
+ * the owner's experience over months of use is that they do not, and he set thirty
+ * days on 2026-09-26. What keeps a month-old result honest is not expiry but
+ * re-testing, below — and a real play, which overrides an older red or amber
+ * (see `freshScan`).
  */
-export const MAX_SCANS = 60
+export const RESULT_TTL_MS = 30 * DAY_MS
 
-/** A scan that is recent enough to be worth believing, or null. */
+/**
+ * When the background tester tests a provider again, by what it found last.
+ *
+ * Reds soonest, because a wrong red is the expensive mistake and nothing else
+ * corrects it: a source painted red is one nobody clicks. Ambers a day later,
+ * greens only when they expire — spread out, in the owner's words, "to spread the
+ * load". Agreed 2026-09-26.
+ */
+export const RETEST_AFTER_MS: Record<ProbeVerdict, number> = {
+  dead: 3 * DAY_MS,
+  unsure: 4 * DAY_MS,
+  stream: RESULT_TTL_MS,
+}
+
+/**
+ * How many titles' results to keep.
+ *
+ * Bounded for the same reason the outcome log is: this is written on every test
+ * and read on every ranking. Least recently updated go first. Two hundred
+ * covers a long watchlist plus a month of titles scanned by hand, and stays
+ * cheap to search linearly.
+ */
+export const MAX_SCANS = 200
+
+/** When one provider in a row was tested, or null if it never was. */
+export function testedAtOf(scan: ProviderScan, providerId: string): number | null {
+  if (!(providerId in scan.verdicts)) return null
+  // Rows stored before per-provider times existed were all tested at `at`.
+  return scan.testedAt?.[providerId] ?? scan.at
+}
+
+/**
+ * A copy of `scan` holding only the providers `keep` accepts, or null if none
+ * are left. `at` follows the newest provider kept.
+ */
+function keepProviders(
+  scan: ProviderScan,
+  keep: (providerId: string, testedAt: number) => boolean,
+): ProviderScan | null {
+  const out: ProviderScan = { titleKey: scan.titleKey, at: 0, verdicts: {}, testedAt: {} }
+  for (const [id, verdict] of Object.entries(scan.verdicts)) {
+    const testedAt = testedAtOf(scan, id) ?? scan.at
+    if (!keep(id, testedAt)) continue
+    out.verdicts[id] = verdict
+    out.testedAt![id] = testedAt
+    out.at = Math.max(out.at, testedAt)
+    copyDetails(scan, out, id)
+  }
+  return Object.keys(out.verdicts).length > 0 ? out : null
+}
+
+/** Move one provider's timing, quality and reason from `from` to `to`, or clear them there. */
+function copyDetails(from: ProviderScan, to: ProviderScan, id: string): void {
+  const timing = from.timings?.[id]
+  const quality = from.qualities?.[id]
+  const reason = from.reasons?.[id]
+  if (timing !== undefined) (to.timings ??= {})[id] = timing
+  else if (to.timings) delete to.timings[id]
+  if (quality !== undefined) (to.qualities ??= {})[id] = quality
+  else if (to.qualities) delete to.qualities[id]
+  if (reason !== undefined) (to.reasons ??= {})[id] = reason
+  else if (to.reasons) delete to.reasons[id]
+}
+
+/**
+ * What is still worth believing about one title, or null if nothing is.
+ *
+ * Two things take a result out:
+ *
+ * - **Age.** Older than `RESULT_TTL_MS`.
+ * - **A real play since.** `playedAt` is when each provider last actually
+ *   streamed this title in the player. A red or amber test result older than
+ *   that is overtaken by the stronger evidence — the source demonstrably
+ *   played — and leaving it in would keep a working source at the bottom of
+ *   the list, because a red outranks play history in `providerRank`. Plays only
+ *   ever upgrade: the player records `failed` on ambiguous symptoms (a source
+ *   that is merely slow), so a failure there is not allowed to overrule a test.
+ */
 export function freshScan(
   scans: readonly ProviderScan[],
   titleKey: string,
   now: number = Date.now(),
+  playedAt: Readonly<Record<string, number>> = {},
 ): ProviderScan | null {
   const found = scans.find((scan) => scan.titleKey === titleKey)
   if (!found) return null
-  return now - found.at <= SCAN_TTL_MS ? found : null
+  return keepProviders(found, (id, testedAt) => {
+    if (now - testedAt > RESULT_TTL_MS) return false
+    const played = playedAt[id]
+    return found.verdicts[id] === 'stream' || played === undefined || played <= testedAt
+  })
 }
 
 /**
- * Store a completed scan, replacing any earlier one for the same title.
+ * Store test results for one title, merged into what is already known.
  *
- * Replacing rather than merging is deliberate. A scan is a single measurement
- * of every provider at one moment, and merging two of them would produce a row
- * that was never true all at once — a provider marked working from this morning
- * sitting beside one marked dead from just now, with nothing to tell the user
- * which half is current.
+ * Merged per provider, not replaced. This used to replace the whole row,
+ * because a row was one scan measured at one moment and merging two would have
+ * produced a row that was never true all at once. The background tester tests
+ * one provider at a time, days apart, so rows are now mixed by design — and
+ * every provider carries its own `testedAt`, which is what makes the mix
+ * honest rather than misleading.
+ *
+ * `result` may hold every provider (a scan by hand) or just one (the tester).
+ * Each provider it holds replaces that provider's earlier result entirely,
+ * timing, quality and reason included; the others are left alone.
  */
 export function recordScan(
   scans: readonly ProviderScan[],
-  scan: ProviderScan,
+  result: ProviderScan,
 ): ProviderScan[] {
-  const others = scans.filter((entry) => entry.titleKey !== scan.titleKey)
-  const next = [...others, scan]
+  const previous = scans.find((entry) => entry.titleKey === result.titleKey)
+  const merged: ProviderScan = previous
+    ? {
+        ...previous,
+        verdicts: { ...previous.verdicts },
+        testedAt: Object.fromEntries(
+          Object.keys(previous.verdicts).map((id) => [id, testedAtOf(previous, id) ?? previous.at]),
+        ),
+        timings: { ...previous.timings },
+        qualities: { ...previous.qualities },
+        reasons: { ...previous.reasons },
+      }
+    : { titleKey: result.titleKey, at: 0, verdicts: {}, testedAt: {} }
+
+  for (const [id, verdict] of Object.entries(result.verdicts)) {
+    const testedAt = testedAtOf(result, id) ?? result.at
+    merged.verdicts[id] = verdict
+    merged.testedAt![id] = testedAt
+    copyDetails(result, merged, id)
+  }
+  merged.at = Math.max(0, ...Object.values(merged.testedAt!))
+
+  // Most recently updated last, so the cap below drops the stalest title.
+  const next = [...scans.filter((entry) => entry.titleKey !== result.titleKey), merged]
   return next.length > MAX_SCANS ? next.slice(next.length - MAX_SCANS) : next
+}
+
+/**
+ * Whether the background tester should test this provider for this title now.
+ *
+ * Never tested is always due. Otherwise by `RETEST_AFTER_MS`, measured from the
+ * provider's own test time — not the row's, or re-testing one red would reset
+ * the clock on its neighbours.
+ */
+export function isRetestDue(scan: ProviderScan | undefined, providerId: string, now: number): boolean {
+  if (!scan) return true
+  const testedAt = testedAtOf(scan, providerId)
+  if (testedAt === null) return true
+  return now - testedAt >= RETEST_AFTER_MS[scan.verdicts[providerId]!]
 }
 
 /**
@@ -138,12 +249,15 @@ export function scanEpisode(
   return { season: 1, episode: 1 }
 }
 
-/** Drop scans that have aged out. Called when the store is loaded. */
+/**
+ * Drop results that have aged out, and rows left empty by that. Called when a
+ * result is stored.
+ */
 export function pruneScans(
   scans: readonly ProviderScan[],
   now: number = Date.now(),
 ): ProviderScan[] {
-  return scans.filter((scan) => now - scan.at <= SCAN_TTL_MS)
+  return scans.flatMap((scan) => keepProviders(scan, (_id, testedAt) => now - testedAt <= RESULT_TTL_MS) ?? [])
 }
 
 /**

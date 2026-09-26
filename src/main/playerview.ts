@@ -36,7 +36,7 @@
  * page by the preload instead, where they are part of it.
  */
 
-import { WebContentsView, BrowserWindow, ipcMain, type Session } from 'electron'
+import { WebContentsView, BrowserWindow, ipcMain, webFrameMain, type Session } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, PlayerSuggestion } from '@shared/ipc'
@@ -50,7 +50,9 @@ import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
 import type { PlayCandidate } from './providers'
 import { shouldSeek } from './resume'
 import { createPointerZoneWatcher } from './pointerzone'
-import { isProviderFailure } from './switchoffer'
+import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type OfferKind } from './switchoffer'
+import { mediaKind, totalBytesOf } from './mediarequest'
+import { isSameOrigin } from './sameorigin'
 
 /** Where the video sits, in the app window's content coordinates. */
 export interface PlayerBounds {
@@ -73,6 +75,11 @@ export interface InlinePlayer {
   switchTo: (providerId: string) => boolean
   /** "Keep waiting": stop offering to leave the provider currently loading. */
   keepWaiting: () => void
+  /**
+   * Take the offer on screen: mark the current source tried and move on.
+   * Returns false when there is no offer to take.
+   */
+  acceptSuggestion: () => boolean
   /** Move the video. Called by the renderer whenever its slot moves or resizes. */
   setBounds: (bounds: PlayerBounds) => void
   /**
@@ -292,6 +299,13 @@ export interface InlinePlayerOptions {
    * lets a probe or a test see the same decision without a window.
    */
   onSuggest?: (suggestion: PlayerSuggestion | null) => void
+  /**
+   * Whether "Test all sources" currently rates this provider as working for
+   * the title being played. An offer to leave such a source never counts down
+   * by itself — see `mayAutoSwitch`. Asked at the moment of the offer, so a
+   * test that finishes while the player is open counts.
+   */
+  testedWorking?: (providerId: string) => boolean
 }
 
 /**
@@ -401,6 +415,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     exhausted: [],
     switchTo: () => false,
     keepWaiting: () => {},
+    acceptSuggestion: () => false,
     // Replaced below, once the view exists to press into.
     pressPlay: async () => {},
     setBounds: () => {},
@@ -502,6 +517,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       overlay.webContents.send(EV.playerContext, context)
     }
   }
+
+  /** The offer on screen, if any, so accepting it knows what it offered. */
+  let pendingSuggestion: PlayerSuggestion | null = null
+
   /**
    * Raise or withdraw the "that source failed, try another" offer.
    *
@@ -512,6 +531,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * the offer lives there and the picture keeps its size.
    */
   const announceSuggestion = (suggestion: PlayerSuggestion | null): void => {
+    pendingSuggestion = suggestion
     options.onSuggest?.(suggestion)
     if (overlay !== null && !overlay.webContents.isDestroyed()) {
       overlay.webContents.send(EV.playerSuggestion, suggestion)
@@ -858,7 +878,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
      * ranking should see both.
      */
     failureRecorded = false
-    suggest(`${name} stopped part-way through`)
+    suggest(`${name} stopped part-way through`, 'stall')
   }
 
   /* ── Skip intro ───────────────────────────────────────────────────────── */
@@ -1074,14 +1094,28 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * had nothing to colour and the ranking had nothing to learn from.
    */
   let failureRecorded = false
-  let stallTimer: ReturnType<typeof setTimeout> | null = null
   let silenceTimer: ReturnType<typeof setTimeout> | null = null
 
+  /**
+   * What this load has shown of its stream, reset by `beginLoad`. Read when
+   * the silence timer fires, to tell a source waiting for its play button from
+   * one that never found anything — see `streamResolved`.
+   */
+  let evidence: LoadEvidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
+  /** The first failure the provider's own backend reported this load, for the offer's wording. */
+  let backendFailure: string | null = null
+  /** When the page last finished a request, of any kind. See `judgeSilence`. */
+  let lastActivityAt = Date.now()
+  /**
+   * The silence check found the page idle with nothing wrong — most likely a
+   * poster waiting to be clicked. The next request it finishes starts the
+   * grace period over, so a click that leads nowhere is still caught.
+   */
+  let idleSinceCheck = false
+  /** Requests sent and not yet answered, by id. See `PageActivity.pendingRequests`. */
+  const inFlight = new Set<number>()
+
   const clearPendingVerdicts = (): void => {
-    if (stallTimer) {
-      clearTimeout(stallTimer)
-      stallTimer = null
-    }
     if (silenceTimer) {
       clearTimeout(silenceTimer)
       silenceTimer = null
@@ -1100,21 +1134,6 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    */
   const SILENCE_GRACE_MS = 25_000
 
-  /**
-   * A failed provider API call asks **immediately**.
-   *
-   * The grace period here was inherited from when this timer *switched* the
-   * provider, where waiting was the only protection against throwing away a
-   * source that was merely slow. Offering costs nothing by comparison: the
-   * video keeps loading behind the prompt, and "Keep waiting" puts the user
-   * exactly where they would have been. So the moment the provider's own
-   * backend says it cannot serve this, say so.
-   *
-   * A short debounce remains, and only that: these pages fire several
-   * sub-requests at once and a burst of three failures should raise one prompt,
-   * not three.
-   */
-  const API_ERROR_DEBOUNCE_MS = 250
 
   /** The next provider we have not tried, or undefined if there is none. */
   const nextUntried = (): PlayCandidate | undefined => {
@@ -1123,14 +1142,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   /**
-   * Ask, rather than act.
+   * Offer to change source — the only way this player changes source by itself.
    *
-   * Used for every *ambiguous* symptom — a provider API returning 500, or a
-   * page that has simply not played anything yet. Both look identical to a
-   * provider that is slow, and only the user can see which one they are
-   * looking at. Unambiguous failures still call `advance` directly.
+   * Every automatic switch goes through here and its countdown, which the user
+   * can refuse; `mayAutoSwitch` decides whether the countdown runs at all.
+   * Failures that used to switch outright (`advance`) come through here too:
+   * one of those was a *sub-frame* failing, which moved the owner off videos that
+   * were playing without asking, and without the bar ever appearing.
    */
-  const suggest = (reason: string): void => {
+  const suggest = (reason: string, kind: OfferKind): void => {
     if (!alive() || playing) return
 
     const current = currentCandidate()
@@ -1163,7 +1183,44 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       providerName: current.provider.name,
       nextProviderId: next.provider.id,
       nextProviderName: next.provider.name,
+      autoSwitch: mayAutoSwitch(kind, options.testedWorking?.(current.provider.id) ?? false),
     })
+  }
+
+  /**
+   * Nothing has played by the end of the grace period: decide what that means.
+   *
+   * The rule is `judgeSilence`; this is the wiring and the wording.
+   */
+  const checkSilence = (): void => {
+    silenceTimer = null
+    const name = currentCandidate()?.provider.name ?? 'This source'
+    evidence.videoElement = lastPosition !== null
+    const activity = { idleForMs: Date.now() - lastActivityAt, pendingRequests: inFlight.size }
+    switch (judgeSilence(evidence, backendFailure !== null, activity)) {
+      case 'resolved':
+        console.log(`[player] ${name} has its stream ready and is not playing; not offering to switch`)
+        return
+      case 'waiting':
+        idleSinceCheck = true
+        console.log(
+          `[player] ${name} is idle with nothing wrong (${Math.round(activity.idleForMs / 1000)} s); ` +
+            'waiting for the user rather than offering to switch',
+        )
+        return
+      case 'failing':
+        suggest(
+          evidence.refusedStatus !== null
+            ? `${name} refused its own video (${evidence.refusedStatus})`
+            : (backendFailure ?? `${name} has not started playing`),
+          'silence',
+        )
+        return
+      case 'loading':
+        console.log(`[player] ${name} is still loading (${activity.pendingRequests} requests unanswered)`)
+        suggest(`${name} is still loading after ${Math.round(SILENCE_GRACE_MS / 1000)} s`, 'silence')
+        return
+    }
   }
 
   /**
@@ -1185,11 +1242,14 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     waitingOut = -1
     announceSuggestion(null)
 
-    silenceTimer = setTimeout(() => {
-      silenceTimer = null
-      const current = currentCandidate()
-      suggest(`${current?.provider.name ?? 'This source'} has not started playing`)
-    }, SILENCE_GRACE_MS)
+    evidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
+    backendFailure = null
+    lastActivityAt = Date.now()
+    idleSinceCheck = false
+    // Whatever the previous page left open is aborted by the navigation.
+    inFlight.clear()
+
+    silenceTimer = setTimeout(checkSilence, SILENCE_GRACE_MS)
 
     stallWatch = beginStallWatch(Date.now())
     /**
@@ -1289,7 +1349,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     console.error(`[player] ${navigatedUrl} returned ${reason}`)
     // The server answered and said no. That is a verdict, not a delay, so it
     // offers straight away rather than switching or waiting.
-    suggest(reason)
+    suggest(reason, 'failure')
   })
 
   /**
@@ -1317,7 +1377,19 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * It *offers* rather than switches. A failed backend call is strong evidence
    * and nothing more: some of these pages retry the same endpoint and recover.
    */
+  contents.session.webRequest.onSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    // A socket is open by design for as long as the page lives, and a video
+    // holds its range request open while paused; neither is a load waiting on
+    // an answer. See `PageActivity.pendingRequests`.
+    if (details.resourceType === 'webSocket' || details.resourceType === 'media') return
+    inFlight.add(details.id)
+  })
+  contents.session.webRequest.onErrorOccurred({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    inFlight.delete(details.id)
+  })
+
   contents.session.webRequest.onCompleted({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+    inFlight.delete(details.id)
     const candidate = currentCandidate()
 
     let providerOrigin: string | null = null
@@ -1329,6 +1401,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       }
     }
 
+    noteStreamEvidence(details)
+    noteActivity()
+
     // The rule, and its reasoning, are in `switchoffer.ts` — extracted so the
     // cases that matter can be tested rather than waited for.
     if (
@@ -1339,33 +1414,50 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         url: details.url,
         providerOrigin,
         playing,
-        offerPending: stallTimer !== null,
       })
     ) {
       return
     }
 
-    const reason = `${candidate.provider.name} API returned ${details.statusCode}`
     console.warn(`[player] ${details.url} → ${details.statusCode}`)
-
-    /**
-     * Remember which provider this verdict is about.
-     *
-     * The obvious guard — cancel the timer on navigation — does not work:
-     * `did-start-navigation` fires for sub-frames, and these providers load
-     * their player in an iframe, so the page reliably cancelled the timer
-     * before it could fire. Comparing the provider instead is immune to how
-     * many frames the page navigates.
-     */
-    const decidedFor = player.candidateIndex
-
-    stallTimer = setTimeout(() => {
-      stallTimer = null
-      // Already moved on, by fallback or by the user picking a source.
-      if (player.candidateIndex !== decidedFor) return
-      suggest(reason)
-    }, API_ERROR_DEBOUNCE_MS)
+    // Named in the offer if nothing plays; not an offer of its own. See
+    // `isProviderFailure` for why an immediate offer was wrong.
+    backendFailure ??= `${candidate.provider.name} API returned ${details.statusCode}`
   })
+
+  /**
+   * The page finished a request. If it had gone idle, it is doing something
+   * again — usually because the user clicked its poster — so give it a fresh
+   * grace period and judge it afresh at the end of that.
+   */
+  const noteActivity = (): void => {
+    lastActivityAt = Date.now()
+    if (!idleSinceCheck || playing || silenceTimer) return
+    idleSinceCheck = false
+    silenceTimer = setTimeout(checkSilence, SILENCE_GRACE_MS)
+  }
+
+  /**
+   * Keep `evidence` current from one completed response.
+   *
+   * The same classification the tests use (`mediaKind`), so the player and
+   * "Test all sources" agree on what counts as a stream having arrived.
+   */
+  const noteStreamEvidence = (details: Electron.OnCompletedListenerDetails): void => {
+    const header = (name: string): string => {
+      const entry = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === name)
+      return String(entry?.[1]?.[0] ?? '')
+    }
+    const totalBytes = totalBytesOf(details.statusCode, header('content-range'), header('content-length'))
+    const kind = mediaKind(details.url, details.resourceType, header('content-type'), totalBytes)
+    if (kind === null) return
+    if (details.statusCode < 400) {
+      if (kind === 'playlist') evidence.playlistOk = true
+      else evidence.videoOk = true
+    } else if (kind !== 'playlist' && details.statusCode !== 429) {
+      evidence.refusedStatus ??= details.statusCode
+    }
+  }
 
   /**
    * Still automatic, unlike the two ambiguous signals above.
@@ -1414,16 +1506,44 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       return
     }
 
-    // Twice on the same source. Unambiguous, so this one acts rather than asks.
-    if (!advance(`${name} crashed`)) giveUp(`${name} crashed`)
+    // Twice on the same source: a pattern rather than an accident. Still an
+    // offer, so the user sees the switch coming and can refuse it.
+    suggest(`${name} crashed`, 'failure')
   })
 
-  contents.on('did-fail-load', (_event, errorCode, errorDescription, failedUrl) => {
-    // -3 ERR_ABORTED and the two navigation codes fire during normal redirects.
-    if (errorCode === -3 || errorCode === -105 || errorCode === -106) return
-    console.error(`[player] ${failedUrl} failed: ${errorCode} ${errorDescription}`)
-    if (!advance(errorDescription)) giveUp(errorDescription)
-  })
+  /**
+   * A load that failed outright — but only the ones that are the source.
+   *
+   * `did-fail-load` fires for *every* frame, and these pages are full of ad
+   * and tracking iframes, some of which the ad blocker cancels on purpose. This
+   * handler used to treat any of them as the provider failing and switched on
+   * the spot — no countdown, no check that anything was playing. Reproduced on
+   * 2026-09-26: one failing iframe added to a playing VidRock moved the player
+   * to ScreenScape instantly. That is the "switched without the bar" the owner
+   * reported.
+   *
+   * So only two frames count: our own shell (the main frame), and the
+   * provider's document, which is the shell's direct child at the provider's
+   * origin. And a failure there offers, like everything else.
+   */
+  contents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, failedUrl, isMainFrame, frameProcessId, frameRoutingId) => {
+      // -3 ERR_ABORTED and the two navigation codes fire during normal redirects.
+      if (errorCode === -3 || errorCode === -105 || errorCode === -106) return
+      if (!isMainFrame && !isProviderDocument(failedUrl, frameProcessId, frameRoutingId)) return
+      console.error(`[player] ${failedUrl} failed: ${errorCode} ${errorDescription}`)
+      suggest(errorDescription, 'failure')
+    },
+  )
+
+  /** Whether a frame is the provider's own document: the shell's child, at the provider's origin. */
+  const isProviderDocument = (url: string, processId: number, routingId: number): boolean => {
+    const candidate = currentCandidate()
+    if (!candidate || !isSameOrigin(url, candidate.url)) return false
+    const frame = webFrameMain.fromId(processId, routingId)
+    return frame !== undefined && frame !== null && frame.parent === contents.mainFrame
+  }
 
   /** The user picking a source explicitly, from the in-player switcher. */
   const switchTo = (providerId: string): boolean => {
@@ -1453,6 +1573,23 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * about VidFast. It survives the current page reloading itself, which these
    * players do while resolving a stream, because the index does not change.
    */
+  /**
+   * "Switch now", or the countdown running out.
+   *
+   * Through `advance`, not `switchTo`, because accepting an offer is a verdict
+   * on the source being left: it joins `exhausted`, so the next offer cannot
+   * point back at it. Taking the offer used to go through `switchTo` like a
+   * pick from the menu, which marked nothing — reproduced on 2026-09-26 as
+   * VidLux → CinemaOS at 11 s → VidLux again at 41 s, round and round.
+   */
+  player.acceptSuggestion = (): boolean => {
+    if (!pendingSuggestion) return false
+    const { reason } = pendingSuggestion
+    announceSuggestion(null)
+    if (!advance(reason)) giveUp(reason)
+    return true
+  }
+
   player.keepWaiting = (): void => {
     waitingOut = player.candidateIndex
     clearPendingVerdicts()

@@ -171,6 +171,9 @@
           <li><strong>{done.watchlist}</strong> added to your Watchlist</li>
           <li><strong>{done.releases}</strong> now tracked for new episodes</li>
           <li><strong>{done.ratings}</strong> rated from your MAL scores</li>
+          {#if done.refined > 0}
+            <li><strong>{done.refined}</strong> 👍/👎 sharpened to your exact MAL score</li>
+          {/if}
         </ul>
 
         {#if done.unmatched.length > 0}
@@ -263,12 +266,7 @@
 
         <label class="scores">
           <input type="checkbox" bind:checked={applyScores} />
-          <span>
-            Use my MAL scores as likes and dislikes
-            <em>8 and above is a like, 5 and below a dislike; the middle is left unrated. Ratings
-              you have already set by hand are never overwritten.</em
-            >
-          </span>
+          <span>Use my MAL scores as ratings</span>
         </label>
       </div>
 
@@ -440,19 +438,10 @@
 
   .scores {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: var(--space-3);
     margin-top: var(--space-5);
     font-size: var(--text-sm);
-  }
-
-  .scores em {
-    display: block;
-    margin-top: 2px;
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    font-style: normal;
-    line-height: 1.5;
   }
 
   footer {

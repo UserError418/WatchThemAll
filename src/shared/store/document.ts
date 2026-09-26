@@ -52,6 +52,15 @@ export type { PreferenceKey, Synced }
  * Version 1 — the rewrite's typed document.
  * Version 2 — record metadata and preference stamps.
  * Version 3 — per-episode watched stamps, so un-marking survives a merge.
+ *
+ * Changes *inside* a record since then — the season scope on watched entries
+ * and ratings (which some comments call "version 5", a number this constant
+ * never reached) and the 1–10 rating scale — did not bump it, and must not be
+ * gated on it. `migrate` recognises them per record, by the fields present.
+ * The reason is the sync: a merge takes the higher of two versions while
+ * keeping records from both sides, so a document stamped with the newest
+ * version can still hold records a phone on an older build wrote an hour ago.
+ * A migration that checked the version first would skip exactly those.
  */
 export const SCHEMA_VERSION = 3
 

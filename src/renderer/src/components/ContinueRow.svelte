@@ -40,7 +40,7 @@
       lastWatched[event.tmdbId] ??= event.watchedAt
     }
 
-    return library.watchlist
+    return library.listedWatchlist
       .filter((entry) => entry.watchedEpisodes.length > 0 || lastWatched[entry.tmdbId] != null)
       .sort((a, b) => (lastWatched[b.tmdbId] ?? 0) - (lastWatched[a.tmdbId] ?? 0))
       .slice(0, 20)

@@ -10,9 +10,20 @@
  * to exercise.
  */
 
-import type { MediaType, StoreShape, TitleRating, WatchedEntry, WatchlistEntry, ReleaseTracker } from '@shared/types'
+import type {
+  MediaType,
+  RatingValue,
+  ReleaseTracker,
+  StoreShape,
+  Synced,
+  TitleRating,
+  WatchedEntry,
+  WatchlistEntry,
+} from '@shared/types'
 import type { ImportTarget, MalEntry, MalStatus } from './malimport'
 import { mediaTypeFor, ratingFromScore } from './malimport'
+import { isListed } from '@shared/listed'
+import { isRatingValue, legacyRatingOf } from '@shared/rating'
 import { stamp } from '@shared/store/core'
 
 /** What the user chose in the preview dialog. */
@@ -21,13 +32,19 @@ export interface ImportDecisions {
   targets: Record<MalStatus, ImportTarget>
   /** MAL ids the user unticked. Everything not listed is imported. */
   excludedMalIds: number[]
-  /** Whether to seed like/dislike from MAL scores. */
+  /** Whether to turn MAL scores into ratings. */
   applyScores: boolean
 }
 
 /** Enough of a TMDB match to build an entry. Null when nothing matched. */
 export interface ResolvedTitle {
   tmdbId: number
+  /**
+   * What TMDB files the match as, which is not always what MAL said: a MAL
+   * "TV" entry can resolve to a film. A TMDB id means nothing without its own
+   * type, so the entries built from a match use this one.
+   */
+  type: MediaType
   imdbId: string | null
   title: string
   posterPath: string | null
@@ -42,7 +59,14 @@ export interface ImportSummary {
   watchlist: number
   watched: number
   releases: number
+  /** New title ratings created from MAL scores. */
   ratings: number
+  /**
+   * Converted thumbs (`coarse` ratings) replaced by the exact MAL score.
+   * Counted per rating, so a series whose five season thumbs were all
+   * sharpened counts five.
+   */
+  refined: number
   /** Selected, but TMDB had no match. Reported rather than silently dropped. */
   unmatched: string[]
   skipped: number
@@ -75,6 +99,7 @@ export async function applyMalImport(
     watched: 0,
     releases: 0,
     ratings: 0,
+    refined: 0,
     unmatched: [],
     skipped: entries.length - selected.length,
   }
@@ -84,10 +109,16 @@ export async function applyMalImport(
   const trackers = [...store.trackers]
   const ratings = [...store.ratings]
 
-  const haveWatchlist = new Set(watchlist.map((w) => w.tmdbId))
-  const haveWatched = new Set(watched.map((w) => w.tmdbId))
+  // By type and id: TMDB numbers films and series separately, so a film can
+  // share an anime's id.
+  const titleKey = (t: { type: MediaType; tmdbId: number }): string => `${t.type}:${t.tmdbId}`
+  const haveWatchlist = new Set(watchlist.map(titleKey))
+  const haveWatched = new Set(watched.map(titleKey))
   const haveTracker = new Set(trackers.map((t) => t.tmdbId))
-  const haveRating = new Set(ratings.map((r) => r.tmdbId))
+  const haveMalIds = new Set(watched.map((w) => w.malId))
+
+  /** Every MAL score that resolved to a title, collected before any is applied. */
+  const scored = new Map<string, ScoredTitle>()
 
   let done = 0
   for (const entry of selected) {
@@ -113,10 +144,15 @@ export async function applyMalImport(
      * record that the user saw this, and the title alone carries that. A
      * watchlist entry or a release tracker without an id cannot be played or
      * checked, so it would be a row that does nothing forever.
+     *
+     * Once per MAL entry. With no id to dedupe on, every re-import used to
+     * add the same card again. A deleted one counts too, the same as a
+     * deleted match does.
      */
     if (!match) {
       summary.unmatched.push(entry.title)
-      if (target !== 'watched') continue
+      if (target !== 'watched' || haveMalIds.has(entry.malId)) continue
+      haveMalIds.add(entry.malId)
 
       watched.push(stamp({
         id: newId(),
@@ -137,13 +173,15 @@ export async function applyMalImport(
       summary.watched += 1
       continue
     }
+    // Held as a const: `match` is a `let`, and a callback loses its narrowing.
+    const resolvedKey = titleKey(match)
 
-    if (target === 'watched' && !haveWatched.has(match.tmdbId)) {
-      haveWatched.add(match.tmdbId)
+    if (target === 'watched' && !haveWatched.has(titleKey(match))) {
+      haveWatched.add(titleKey(match))
       watched.push(stamp({
         id: newId(),
         tmdbId: match.tmdbId,
-        type,
+        type: match.type,
         season: null,
         title: match.title,
         posterPath: match.posterPath,
@@ -157,12 +195,25 @@ export async function applyMalImport(
       summary.watched += 1
     }
 
-    if (target === 'watchlist' && !haveWatchlist.has(match.tmdbId)) {
-      haveWatchlist.add(match.tmdbId)
+    /**
+     * MAL says they are watching a title they have only ticked episodes of
+     * here: list the entry they already have, keeping its ticks, rather than
+     * skip it as present or add a second one. See `WatchlistEntry.listed`.
+     */
+    const unlisted = watchlist.findIndex((w) => titleKey(w) === resolvedKey && !isListed(w))
+    if (target === 'watchlist' && unlisted >= 0) {
+      const listedAgain = { ...watchlist[unlisted]!, addedAt: Date.now() }
+      delete listedAgain.listed
+      watchlist[unlisted] = stamp(listedAgain)
+      summary.watchlist += 1
+    }
+
+    if (target === 'watchlist' && !haveWatchlist.has(titleKey(match))) {
+      haveWatchlist.add(titleKey(match))
       watchlist.push(stamp({
         id: newId(),
         tmdbId: match.tmdbId,
-        type,
+        type: match.type,
         title: match.title,
         posterPath: match.posterPath,
         rating: match.rating ?? 0,
@@ -176,8 +227,8 @@ export async function applyMalImport(
          * relative. Guessing a season number from the title would be worse
          * than being consistently wrong in a way the user can correct.
          */
-        lastSeason: type === 'tv' ? 1 : null,
-        lastEpisode: type === 'tv' ? Math.max(1, entry.watchedEpisodes) : null,
+        lastSeason: match.type === 'tv' ? 1 : null,
+        lastEpisode: match.type === 'tv' ? Math.max(1, entry.watchedEpisodes) : null,
         watchedEpisodes: [],
         episodeMarks: {},
         genreIds: match.genreIds,
@@ -188,7 +239,7 @@ export async function applyMalImport(
       summary.watchlist += 1
     }
 
-    if (target === 'releases' && type === 'tv' && !haveTracker.has(match.tmdbId)) {
+    if (target === 'releases' && match.type === 'tv' && !haveTracker.has(match.tmdbId)) {
       haveTracker.add(match.tmdbId)
       trackers.push(stamp({
         id: newId(),
@@ -206,30 +257,17 @@ export async function applyMalImport(
       summary.releases += 1
     }
 
-    /**
-     * Scores become ratings, but never overwrite one the user already set.
-     *
-     * An import is bulk and old; a rating made in the app is deliberate and
-     * recent. Letting the first silently replace the second is the kind of data
-     * loss nobody notices until the recommendations stop making sense.
-     */
-    if (decisions.applyScores && !haveRating.has(match.tmdbId)) {
-      const rating = ratingFromScore(entry.score)
-      if (rating) {
-        haveRating.add(match.tmdbId)
-        ratings.push(stamp({
-          key: `${type}:${match.imdbId || match.tmdbId}`,
-          tmdbId: match.tmdbId,
-          type,
-          // A MyAnimeList score is about the entry as a whole.
-          season: null,
-          rating,
-          genreIds: match.genreIds,
-          at: Date.now(),
-        } satisfies TitleRating))
-        summary.ratings += 1
-      }
+    if (decisions.applyScores) {
+      const title = scored.get(titleKey(match)) ?? { match, scores: [] }
+      title.scores.push(entry.score)
+      scored.set(titleKey(match), title)
     }
+  }
+
+  for (const title of scored.values()) {
+    const outcome = applyScore(ratings, title)
+    if (outcome.created) summary.ratings += 1
+    summary.refined += outcome.refined
   }
 
   return {
@@ -239,3 +277,122 @@ export async function applyMalImport(
 }
 
 export type { WatchedEntry }
+
+/** One TMDB title and every MAL score that resolved to it. */
+interface ScoredTitle {
+  match: ResolvedTitle
+  scores: number[]
+}
+
+/**
+ * The one score a title gets from the MAL entries that resolved to it.
+ *
+ * Several usually do: MAL files "2nd Season" as an entry of its own while TMDB
+ * files it as a season of one show (see `lastSeason` above), so a three-season
+ * anime is three scores for one TMDB title. They are averaged, ignoring MAL's
+ * 0 for "not scored", and rounded to the nearest whole value — a half rounds
+ * up, which with integer inputs only ever happens between two neighbours.
+ *
+ * Averaged rather than first-wins, which is what this replaced. First-wins made
+ * the title's rating depend on the order of entries in the export file: the
+ * same library imported twice could come out a 9 or a 6 depending on which
+ * season MAL happened to list first. A mean has no order.
+ *
+ * Null when none of the entries carries a score.
+ */
+function titleScore(scores: readonly number[]): RatingValue | null {
+  const values = scores.map(ratingFromScore).filter((v): v is RatingValue => v !== null)
+  if (values.length === 0) return null
+  const mean = Math.round(values.reduce<number>((sum, v) => sum + v, 0) / values.length)
+  return isRatingValue(mean) ? mean : null
+}
+
+/**
+ * How far a MAL score may sit from a converted thumb (an 8 or a 4) and still be
+ * the same opinion, only stated more precisely.
+ *
+ * Three reaches every score a thumb plausibly rounded: a like (8) covers 5–10
+ * and a dislike (4) covers 1–7. Beyond that the two contradict each other — a
+ * like against a MAL 3 — which means the user changed their mind at some
+ * point, and the thumb in the app is the newer statement.
+ *
+ * This replaced a same-side-of-6 test (`legacyRatingOf`), which assumed every
+ * user drew the like/dislike line where the app does. On the library this was
+ * built for, all 22 thumbs that test rejected were a MAL 6 or 7 thumbed down
+ * (a stricter line than the app's, not a change of mind), and none was a
+ * contradiction.
+ */
+export const REFINE_REACH = 3
+
+/**
+ * Turn one title's MAL score into a rating, or refine converted ones with it.
+ * Mutates `ratings` in place; the caller owns that copy.
+ *
+ * **A title with no rating** gets one, at the title scope — a MyAnimeList
+ * score is about the entry as a whole, and MAL cannot tell seasons apart.
+ * Any existing rating on the title, season ratings included, still counts as
+ * "the user already has an opinion here" and blocks a new one, as it always
+ * has.
+ *
+ * **Every `coarse` rating on the title** — an 8 or a 4 converted from a thumb,
+ * whole title and each season alike — is replaced by the exact MAL score when
+ * the two are within `REFINE_REACH`. Seasons are included because that is
+ * where most converted thumbs live: splitting a series into seasons (1.5.8)
+ * copied its thumb onto every season, so a like on a five-season anime is five
+ * season 8s and often no title rating at all. Leaving those alone left 201 of
+ * one library's thumbs unrefined. Every season gets the one title score
+ * because MAL's per-season entries cannot be matched to TMDB's seasons
+ * reliably (`lastSeason` above has the reason). The user can rate a season
+ * differently afterwards, and that rating is no longer coarse, so a later
+ * import leaves it alone.
+ *
+ * **A rating chosen on the 1–10 scale is never touched.** It is deliberate and
+ * newer than any export. An import is bulk and old, and letting it silently
+ * replace a deliberate rating is the kind of data loss nobody notices until
+ * the recommendations stop making sense.
+ */
+function applyScore(
+  ratings: Synced<TitleRating>[],
+  title: ScoredTitle,
+): { created: boolean; refined: number } {
+  const value = titleScore(title.scores)
+  if (value === null) return { created: false, refined: 0 }
+
+  const { match } = title
+  const { type } = match
+  const onTitle = (r: TitleRating): boolean => r.tmdbId === match.tmdbId && r.type === type
+
+  if (!ratings.some(onTitle)) {
+    ratings.push(
+      stamp({
+        key: `${type}:${match.imdbId || match.tmdbId}`,
+        tmdbId: match.tmdbId,
+        type,
+        season: null,
+        value,
+        coarse: false,
+        rating: legacyRatingOf(value),
+        genreIds: match.genreIds,
+        at: Date.now(),
+      } satisfies TitleRating),
+    )
+    return { created: true, refined: 0 }
+  }
+
+  let refined = 0
+  ratings.forEach((existing, i) => {
+    if (!onTitle(existing) || !existing.coarse) return
+    if (Math.abs(existing.value - value) > REFINE_REACH) return
+    // The same record, under the same key, with the exact value in place of
+    // the conversion. Stamped like every other write here, so it wins the merge.
+    ratings[i] = stamp({
+      ...existing,
+      value,
+      coarse: false,
+      rating: legacyRatingOf(value),
+      at: Date.now(),
+    })
+    refined += 1
+  })
+  return { created: false, refined }
+}

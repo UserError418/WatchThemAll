@@ -14,23 +14,42 @@
  * claiming to be one series with N seasons. They each get their own group,
  * keyed by record id instead.
  *
- * ## Why the summary is a tally and never an average
+ * ## Why the summary is a mean now, and was a tally before
  *
- * A collapsed row shows `18 liked, 2 disliked`, not a score. There is no
- * average of a like and a dislike, and inventing one — a percentage, a star
- * count — would be the same class of lie as drawing TMDB's "nobody has rated
- * this" zero as a score of 0.0. The tally states what is actually known.
+ * Until the 1–10 scale a collapsed row showed `18 liked, 2 disliked`, and this
+ * header said it must never be an average: there is no average of a like and
+ * a dislike, and inventing one would be the same class of lie as drawing
+ * TMDB's "nobody has rated this" zero as a score of 0.0.
+ *
+ * That reason was about the values, not about averaging, and the values have
+ * changed. Seasons now carry numbers the user chose, and the mean of those is
+ * a plain fact about them — so a series row shows it, to one decimal, over the
+ * seasons actually rated. What survives of the old rule is its point: an
+ * unrated season is left out of the mean rather than counted as anything, and
+ * a title with nothing rated has no mean at all rather than a zero.
+ *
+ * The band counts (liked · mixed · disliked · unrated) are kept alongside it,
+ * because the filters, the header and the meter are built on bands.
  */
 
-import type { MediaType, Rating, WatchedEntry } from '@shared/types'
+import type { MediaType, RatingValue, WatchedEntry } from '@shared/types'
+import { isRatingValue, ratingBand, type RatingBand } from '@shared/rating'
 
 export interface SeasonRow {
   entry: WatchedEntry
-  /** The opinion held at this entry's own scope. Null when there is none. */
-  rating: Rating | null
+  /** The rating held at this entry's own scope. Null when there is none. */
+  rating: RatingValue | null
 }
 
-export interface TitleGroup {
+/** How many seasons fall in each band, and how many have no rating yet. */
+export interface BandCounts {
+  liked: number
+  mixed: number
+  disliked: number
+  unrated: number
+}
+
+export interface TitleGroup extends BandCounts {
   /** Stable `{#each}` key. Not the tmdbId — see the module header. */
   key: string
   tmdbId: number
@@ -43,9 +62,11 @@ export interface TitleGroup {
   imported: boolean
   /** Newest season first, matching the order the library already renders in. */
   seasons: SeasonRow[]
-  likes: number
-  dislikes: number
-  unrated: number
+  /**
+   * The mean of the rated seasons' values, unrounded. Null when none is
+   * rated — never 0, which would read as a verdict.
+   */
+  mean: number | null
   /** The most recent time any of these seasons was filed. */
   addedAt: number
   /** A single row with nothing to expand: a film, or one season. */
@@ -70,17 +91,19 @@ export const WATCHED_SORTS: Array<{ id: WatchedSort; label: string }> = [
 /**
  * Fold entries into one group per title.
  *
- * Takes entries that have *already* been filtered, so a group's tally counts
- * what is on screen rather than what exists — under the "Unrated" filter a row
- * should say how many of its seasons still need an opinion, not how many it
- * has in total.
+ * Takes entries that have *already* been filtered, so a group's counts and
+ * mean describe what is on screen rather than what exists — under the
+ * "Unrated" filter a row should say how many of its seasons still need a
+ * rating, not how many it has in total.
  */
 export function groupWatched(
   entries: readonly WatchedEntry[],
-  ratingOf: (entry: WatchedEntry) => Rating | null,
+  ratingOf: (entry: WatchedEntry) => RatingValue | null,
   sort: WatchedSort = 'recent',
 ): TitleGroup[] {
   const groups = new Map<string, TitleGroup>()
+  /** Running totals for the means, kept off the group so it stays plain data. */
+  const sums = new Map<string, number>()
 
   for (const entry of entries) {
     const key = entry.tmdbId ? `t${entry.tmdbId}` : `e${entry.id}`
@@ -97,9 +120,11 @@ export function groupWatched(
         score: 0,
         imported: false,
         seasons: [],
-        likes: 0,
-        dislikes: 0,
+        liked: 0,
+        mixed: 0,
+        disliked: 0,
         unrated: 0,
+        mean: null,
         addedAt: 0,
         flat: true,
       }
@@ -107,9 +132,12 @@ export function groupWatched(
     }
 
     group.seasons.push({ entry, rating })
-    if (rating === 'like') group.likes += 1
-    else if (rating === 'dislike') group.dislikes += 1
-    else group.unrated += 1
+    if (rating === null) {
+      group.unrated += 1
+    } else {
+      group[ratingBand(rating)] += 1
+      sums.set(key, (sums.get(key) ?? 0) + rating)
+    }
 
     group.addedAt = Math.max(group.addedAt, entry.addedAt)
     // Artwork and score can be missing on one season and present on another —
@@ -124,6 +152,8 @@ export function groupWatched(
     // and sort last, where they read as the odd one out that they are.
     group.seasons.sort((a, b) => (b.entry.season ?? -1) - (a.entry.season ?? -1))
     group.flat = group.seasons.length === 1
+    const rated = group.seasons.length - group.unrated
+    group.mean = rated > 0 ? (sums.get(group.key) ?? 0) / rated : null
   }
 
   return [...groups.values()].sort(comparator(sort))
@@ -145,36 +175,51 @@ function comparator(sort: WatchedSort): (a: TitleGroup, b: TitleGroup) => number
   }
 }
 
-/** `18 liked · 2 disliked · 1 unrated`, omitting whatever is zero. */
-export function tallyLabel(group: Pick<TitleGroup, 'likes' | 'dislikes' | 'unrated'>): string {
+/** A mean as the row prints it: one decimal, so a 7.5 and an 8 look different. */
+export function formatMean(mean: number): string {
+  return mean.toFixed(1)
+}
+
+/**
+ * `avg 7.8 · 2 unrated`, for a collapsed series row, omitting what is absent.
+ *
+ * The mean covers only the seasons that are rated, which is why the unrated
+ * count sits beside it rather than being folded in.
+ */
+export function summaryLabel(group: Pick<TitleGroup, 'mean' | 'unrated'>): string {
   const parts: string[] = []
-  if (group.likes) parts.push(`${group.likes} liked`)
-  if (group.dislikes) parts.push(`${group.dislikes} disliked`)
+  if (group.mean !== null) parts.push(`avg ${formatMean(group.mean)}`)
   if (group.unrated) parts.push(`${group.unrated} unrated`)
   return parts.join(' · ')
 }
 
+/** The band of one season's rating, or null for an unrated one. */
+export function bandOf(rating: RatingValue | null): RatingBand | null {
+  return rating === null ? null : ratingBand(rating)
+}
+
 /**
- * Which way the row's edge is tinted: what the user mostly thought of it.
+ * Which way the row's edge is tinted: the band its mean falls in.
  *
- * Returns null on a genuine tie as well as on nothing-rated, because a series
- * split evenly is not "liked" and painting it either colour would assert
- * something the tally right next to it contradicts.
+ * The mean is rounded to the nearest value first — the band it would be if it
+ * were a rating — so a 7.6 tints as liked and a 7.4 as mixed, agreeing with
+ * the one-decimal number printed beside it.
+ *
+ * This replaced a majority vote of likes against dislikes, which returned null
+ * on a tie because a series split evenly is not "liked". A mean says that on
+ * its own: seasons of 9 and 3 average 6, and 6 is mixed. Null only when
+ * nothing is rated.
  */
-export function leaning(
-  group: Pick<TitleGroup, 'likes' | 'dislikes'>,
-): 'like' | 'dislike' | null {
-  if (group.likes === group.dislikes) return null
-  return group.likes > group.dislikes ? 'like' : 'dislike'
+export function leaning(group: Pick<TitleGroup, 'mean'>): RatingBand | null {
+  if (group.mean === null) return null
+  const nearest = Math.round(group.mean)
+  return isRatingValue(nearest) ? ratingBand(nearest) : null
 }
 
 /** Totals for the header, counted from what is on screen. */
-export interface WatchedTotals {
+export interface WatchedTotals extends BandCounts {
   titles: number
   seasons: number
-  likes: number
-  dislikes: number
-  unrated: number
 }
 
 export function summarise(groups: readonly TitleGroup[]): WatchedTotals {
@@ -182,11 +227,12 @@ export function summarise(groups: readonly TitleGroup[]): WatchedTotals {
     (acc, g) => ({
       titles: acc.titles + 1,
       seasons: acc.seasons + g.seasons.length,
-      likes: acc.likes + g.likes,
-      dislikes: acc.dislikes + g.dislikes,
+      liked: acc.liked + g.liked,
+      mixed: acc.mixed + g.mixed,
+      disliked: acc.disliked + g.disliked,
       unrated: acc.unrated + g.unrated,
     }),
-    { titles: 0, seasons: 0, likes: 0, dislikes: 0, unrated: 0 },
+    { titles: 0, seasons: 0, liked: 0, mixed: 0, disliked: 0, unrated: 0 },
   )
 }
 
@@ -219,7 +265,7 @@ export interface RibbonSegment {
   key: string
   /** "Season 3", or "Whole series" for a 1.5.8 survivor with no season. */
   label: string
-  rating: Rating | null
+  rating: RatingValue | null
 }
 
 /**
@@ -232,8 +278,8 @@ export interface RibbonSegment {
 export const RIBBON_LIMIT = 24
 
 /**
- * A title's seasons as a left-to-right strip, tinted by what was thought of
- * each one.
+ * A title's seasons as a left-to-right strip, each tinted by the band of its
+ * rating (`bandOf`).
  *
  * Runs **oldest first**, which is the opposite of the expanded list. That is
  * deliberate: a list is read top-down as "what is here", newest first like

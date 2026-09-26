@@ -178,7 +178,8 @@ export interface Collection<K extends CollectionKey> {
    *
    * Anything previously present and now absent is tombstoned rather than
    * dropped, which is what makes this safe to use for a list the user reorders
-   * or prunes wholesale.
+   * or prunes wholesale. A record sent back unchanged keeps its `updatedAt`;
+   * only one that differs is stamped.
    */
   replaceAll(records: InputOf<K>[]): void
 }
@@ -345,7 +346,25 @@ export class StoreCore {
           const id = identify(key, existing as unknown as InputOf<K>)
           const replacement = wanted.get(id)
           if (replacement) {
-            next.push(stamped(replacement, now))
+            /**
+             * Only what actually changed gets a new stamp.
+             *
+             * The renderer sends the *whole* collection back after every
+             * change, so stamping every record it contains dated all of them
+             * "now" on each keystroke's worth of edit. That quietly disabled
+             * last-write-wins for the collection: after rating one title on
+             * the desktop, every rating there claimed to be newer than every
+             * rating on the phone, and the next sync replaced edits the phone
+             * had genuinely made later with the desktop's older copies. It is
+             * the same failure `migrate` once had with `addedAt`, arrived at
+             * from the other side.
+             *
+             * A live record whose content matches keeps the record already
+             * stored, stamp included. A tombstone being sent back is an
+             * un-delete, which is a change, and is stamped like one.
+             */
+            const unchanged = existing.deletedAt === null && sameContent(existing, replacement)
+            next.push(unchanged ? existing : stamped(replacement, now))
             wanted.delete(id)
           } else if (existing.deletedAt !== null) {
             next.push(existing)
@@ -433,7 +452,7 @@ export class StoreCore {
    * expensive in a way an ordinary toggle is not.
    */
   async replaceDocument(next: StoreDocument): Promise<void> {
-    this.doc = next
+    this.doc = keepTombstones(this.doc, next)
     this.invalidate()
     this.notify()
     await this.flush()
@@ -488,6 +507,70 @@ export class StoreCore {
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = setTimeout(() => void this.flush(), FLUSH_DELAY_MS)
   }
+}
+
+/**
+ * `next`, plus every deletion in `current` that `next` does not mention.
+ *
+ * Both importers — the MyAnimeList one and the export-file one, on desktop and
+ * phone — build their replacement from `read()`, which hides tombstones, and
+ * hand it to `replaceDocument`. Replacing the document with that wiped every
+ * deletion this device had not yet synced, and the next sync then revived the
+ * deleted records from the other device's copy: the exact hazard `raw()`
+ * warns about, reached through the one method that takes a whole document.
+ *
+ * Fixed here rather than at the four call sites because this is the boundary
+ * all of them cross, and the next importer would build its document the same
+ * way. A sync merge already holds every local tombstone, so for it this adds
+ * nothing. A record that `next` holds under the same identity — live or not —
+ * is left as `next` has it, so an import that re-adds a deleted title wins.
+ */
+function keepTombstones(current: StoreDocument, next: StoreDocument): StoreDocument {
+  const kept = { ...next }
+  for (const key of COLLECTION_KEYS) {
+    const incoming = (next[key] ?? []) as Synced<unknown>[]
+    const present = new Set(incoming.map((r) => identify(key, r as never)))
+    const deletions = (current[key] as Synced<unknown>[]).filter(
+      (r) => r.deletedAt !== null && !present.has(identify(key, r as never)),
+    )
+    if (deletions.length > 0) {
+      ;(kept as Record<string, unknown>)[key] = [...incoming, ...deletions]
+    }
+  }
+  return kept
+}
+
+/** The sync metadata, which says when a record changed rather than what it is. */
+const METADATA_FIELDS = new Set(['updatedAt', 'deletedAt'])
+
+/**
+ * Whether two versions of a record say the same thing, metadata aside.
+ *
+ * Structural rather than `JSON.stringify` equality, because key order is not
+ * meaningful and does differ: the renderer builds records by spreading, so an
+ * edited-then-reverted record can come back with its keys in another order
+ * while saying exactly the same thing. A key holding `undefined` counts as
+ * absent, which is also how it would be written to disk.
+ */
+function sameContent(a: object, b: object): boolean {
+  const content = (record: object): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(record).filter(([field]) => !METADATA_FIELDS.has(field)))
+  return deepEqual(content(a), content(b))
+}
+
+/** Equality over JSON-shaped values: primitives, arrays and plain objects. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((item, i) => deepEqual(item, b[i]))
+  }
+  const left = Object.entries(a).filter(([, value]) => value !== undefined)
+  const right = Object.entries(b).filter(([, value]) => value !== undefined)
+  if (left.length !== right.length) return false
+  const other = b as Record<string, unknown>
+  return left.every(([field, value]) => field in other && deepEqual(value, other[field]))
 }
 
 /** The document with every tombstone filtered out of every collection. */

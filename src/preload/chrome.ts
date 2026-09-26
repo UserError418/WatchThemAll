@@ -116,6 +116,10 @@ const api: WtaChromeApi = {
   dismissSuggestion: (): Promise<void> =>
     ipcRenderer.invoke(CH.playDismissSuggestion) as Promise<void>,
 
+  /** Take the offer: move on, and count the source being left as tried. */
+  acceptSuggestion: (): Promise<boolean> =>
+    ipcRenderer.invoke(CH.playAcceptSuggestion) as Promise<boolean>,
+
   /**
    * The standing "this source failed, try another" offer, or null.
    *

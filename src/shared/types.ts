@@ -62,6 +62,15 @@ export interface MediaSummary {
   imdbId?: string | null
   /** Which backend produced this result. Drives dedupe when the two are merged. */
   source?: 'tmdb' | 'imdb'
+  /**
+   * TMDB `original_language`, an ISO 639-1 code (`ja`, `en`). Browse needs it
+   * to tell anime from other animation: TMDB files both under Animation, and
+   * the language is the one field that separates them.
+   *
+   * Optional because IMDB results and titles stored before it was carried have
+   * none.
+   */
+  originalLanguage?: string
 }
 
 /** Everything the detail view needs, fetched on demand. */
@@ -278,6 +287,28 @@ export interface WatchlistEntry {
   rating: number
   addedAt: number
   providerId: string | null
+  /**
+   * False for an entry the user never put on their watchlist, kept only for
+   * what it records: episode ticks, a chosen source. Absent means listed,
+   * which is what every entry written before this existed is. Read it through
+   * `isListed`.
+   *
+   * It exists because those records have nowhere else to live — episode state
+   * is stored on the entry — and creating a listed one for them put every
+   * ticked or rated title on the watchlist. the owner, 2026-09-26: only pressing
+   * play should do that. Pressing play, "+ Watchlist" or a MyAnimeList import
+   * lists the entry; removing it from the watchlist deletes it, ticks and all,
+   * as before.
+   *
+   * What reads unlisted entries on purpose: anything after the title's own
+   * records (ticks, positions, the chosen source, the TMDB score backfill) and
+   * the taste profile's viewing signals, for which a title the user ticked
+   * through is a title they watched — and the titles it must not recommend.
+   * What must not: the Watchlist tab and its count, Continue, the hero, the
+   * command palette, background source tests, the ReelVault export, the taste
+   * profile's "on the watchlist" bonus and the "More like your watchlist" row.
+   */
+  listed?: boolean
 }
 
 /** A series the user wants release notifications for. */
@@ -389,14 +420,32 @@ export interface WatchedEntry {
 }
 
 /**
- * What the user thought of a title.
+ * What the user thought of a title, on their own scale of 1 to 10.
  *
- * Two values rather than a score. A five-star scale invites deliberation over a
- * judgement the user makes in half a second, and the recommendation only needs
- * the sign: more like this, or less. Stored per title rather than per episode —
- * nobody has an opinion about episode 14 in isolation.
+ * Until 1.7.3 this was a like or a dislike, on the argument that the
+ * recommendation only needed the sign. It no longer does: the taste model
+ * centres each rating on the user's own mean, so how far a verdict sits from
+ * their usual is the signal, and two values cannot say that. Still stored per
+ * title or season rather than per episode — nobody has an opinion about
+ * episode 14 in isolation.
+ *
+ * A literal union rather than `number`, on purpose. TMDB's score is *also*
+ * called `rating` in this codebase (`MediaSummary.rating`, a float 0–10), and
+ * the two are exactly the same shape on the page. With a plain number, handing
+ * TMDB's 7.4 to something that expects the user's verdict would type-check and
+ * quietly turn the crowd's opinion into the user's. A union makes that an
+ * error until someone converts on purpose, through `isRatingValue`.
  */
-export type Rating = 'like' | 'dislike'
+export type RatingValue = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
+
+/**
+ * The two-valued opinion that builds up to 1.7.3 store and read.
+ *
+ * Kept as its own name rather than deleted so every place that still speaks it
+ * is visible: the migration, which reads it, and `TitleRating.rating`, which is
+ * written for older builds and read by nothing new.
+ */
+export type LegacyRating = 'like' | 'dislike'
 
 export interface TitleRating {
   /**
@@ -415,7 +464,31 @@ export interface TitleRating {
   type: MediaType
   /** The season this applies to, or null for the whole title. */
   season: number | null
-  rating: Rating
+  /** The user's verdict. Never TMDB's score — see `RatingValue`. */
+  value: RatingValue
+  /**
+   * True when `value` was up-converted from a like or a dislike rather than
+   * chosen on the 1–10 scale.
+   *
+   * Such a value says which side of the line the user came down on, not how
+   * far: every legacy like is an 8 and every dislike a 4, so a model reading
+   * magnitude has to know that these eights are not eights anyone chose.
+   * Rating the title again in the new UI writes `false`.
+   */
+  coarse: boolean
+  /**
+   * The same verdict in the two-valued form, derived from `value` by
+   * `legacyRatingOf` every time the record is written or migrated.
+   *
+   * Written for one reader only: a build from before the 1–10 scale — a phone
+   * still on 1.7.3, syncing through Drive — which knows nothing of `value`.
+   * Without it that build reads `rating` as `undefined`, which its taste model
+   * counts as a dislike, so every opinion the user holds would turn against
+   * them the first time the phone synced. Nothing new reads it except the
+   * migration, which uses it to recover a `value` for a record an old build
+   * wrote.
+   */
+  rating: LegacyRating
   /** TMDB genre ids at the time of rating, so the profile needs no lookups. */
   genreIds: number[]
   at: number
@@ -505,7 +578,7 @@ export interface StoreShape {
    * neither `COLLECTIONS` nor `PREFERENCE_KEYS` survives a merge untouched
    * rather than being dropped.
    *
-   * Pruned on load: see `SCAN_TTL_MS`.
+   * Pruned per provider as results are stored: see `RESULT_TTL_MS`.
    */
   providerScans: ProviderScan[]
   settings: Settings
@@ -601,14 +674,58 @@ export type ProbeVerdict =
   /** No template, no route to the host, or a page that made no real requests. */
   | 'dead'
 
-/** One completed scan: every enabled provider, measured at one moment. */
+/**
+ * Why a provider did not stream, in terms the user can act on.
+ *
+ * The verdict alone said "may work" or "no stream" whatever had happened, and
+ * that vagueness cost trust: a source whose backend answered 500 on every
+ * title and one that was still loading when the test gave up looked the same.
+ * Each reason maps to one verdict, decided in `scanreason.ts`, so the label
+ * and the dot colour cannot disagree.
+ */
+export type ScanReason =
+  /** The provider's page or its own backend answered with this status, and nothing streamed. */
+  | { kind: 'error'; status: number }
+  /** A playlist loaded, but the video segments it lists were refused with this status. */
+  | { kind: 'refused'; status: number }
+  /** Still loading when the test's budget ran out — slow, not necessarily broken. */
+  | { kind: 'timeout'; seconds: number }
+  /** A bot check or challenge page. The real player carries cookies the test does not. */
+  | { kind: 'blocked' }
+  /** The page settled without ever asking for a stream. */
+  | { kind: 'no-stream' }
+  /** The host could not be reached at all. */
+  | { kind: 'unreachable' }
+  /** The provider's link format cannot express this title or episode. */
+  | { kind: 'unsupported' }
+
+/**
+ * What the tests know about every provider for one title.
+ *
+ * It started as one scan measured at one moment and replaced whole. The
+ * background tester fills it one provider at a time instead, and re-tests each
+ * on its own schedule — so every provider now carries its own test time in
+ * `testedAt`, and a row mixing a result from this morning with one from last
+ * week says so rather than pretending to be a single measurement.
+ */
 export interface ProviderScan {
   /** `tv:tt0903747` or `movie:tt0137523` — `outcomes.titleKey`. */
   titleKey: string
-  /** Epoch ms the scan finished. Staleness is judged from this. */
+  /** Epoch ms of the newest result in the row. */
   at: number
-  /** Keyed by provider id. Absent means the scan never reached it. */
+  /** Keyed by provider id. Absent means no test has reached it. */
   verdicts: Record<string, ProbeVerdict>
+  /**
+   * When each provider was tested, epoch ms. Staleness and re-testing are
+   * judged per provider from this. Absent for scans stored before it existed,
+   * whose providers were all tested at `at`.
+   */
+  testedAt?: Record<string, number>
+  /**
+   * Why each provider that did not stream failed, where the test could tell.
+   * Absent for streaming providers and for scans stored before it existed.
+   */
+  reasons?: Record<string, ScanReason>
   /**
    * How long each streaming provider took to fetch its first media request,
    * in milliseconds from the start of its load. Only providers whose verdict

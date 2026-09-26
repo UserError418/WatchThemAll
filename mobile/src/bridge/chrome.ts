@@ -114,6 +114,8 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
 
     /** Nothing raises a suggestion here, so there is never one to dismiss. */
     dismissSuggestion: async () => {},
+    /** Nor one to accept. */
+    acceptSuggestion: async () => false,
 
     /** No skip offer can be raised, so nothing can ask to be skipped to. */
     skipTo: () => {},

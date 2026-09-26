@@ -55,6 +55,8 @@ function seriesRating(over: Partial<TitleRating> = {}): TitleRating {
     tmdbId: 1396,
     type: 'tv',
     season: null,
+    value: 8,
+    coarse: true,
     rating: 'like',
     genreIds: [18],
     at: 1,

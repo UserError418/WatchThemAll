@@ -10,6 +10,7 @@
 import { app, BrowserWindow, ipcMain, Notification, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, TitleRef } from '@shared/ipc'
 import { Store } from './store'
@@ -32,13 +33,15 @@ import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
 import {
   defaultProviderOrder,
+  lastPlayedAt,
   mediaKey,
   outcomesForTitle,
   record,
   titleKey,
 } from './outcomes'
-import { freshScan, scanAwareOrder } from './providerscan'
+import { freshScan, pruneScans, recordScan, scanAwareOrder } from './providerscan'
 import { createScanService } from './scanservice'
+import { createWatchlistTester } from './watchlisttester'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from './resume'
 import {
   readCache,
@@ -96,6 +99,7 @@ const store = new Store()
  * option a caller has.
  */
 store.subscribe(() => send(EV.storeChanged, null))
+
 
 /**
  * Set once the app is ready, and null in a build with no OAuth client.
@@ -203,6 +207,62 @@ const scan = createScanService({
 })
 
 /**
+ * Testing the watchlist's sources in the background, one a minute, so the
+ * answer is ready before the user asks. See `watchlisttester.ts` for the rules
+ * it keeps — above all, never while the user is watching or scanning by hand.
+ */
+const watchlistTester = createWatchlistTester({
+  watchlist: () => store.read().watchlist,
+  history: () => store.read().history,
+  scans: () => store.read().providerScans,
+  // A film's watched fraction, as the Watchlist tab computes it for its order.
+  filmPercent: (tmdbId) => {
+    const key = resumeKey({ tmdbId, season: null, episode: null })
+    const point = store.read().resumePoints.find((p) => p.key === key)
+    return point && point.duration > 0 ? Math.min(100, Math.round((point.seconds / point.duration) * 100)) : null
+  },
+  providers: enabledProviders,
+  lookUp: async (entry) => {
+    try {
+      const found = await tmdb.detail(entry.tmdbId, entry.type)
+      const date = found.releaseDate ? Date.parse(found.releaseDate) : Number.NaN
+      return { released: Number.isFinite(date) && date <= Date.now(), imdbId: found.imdbId }
+    } catch {
+      return null
+    }
+  },
+  probeOne: (key, subject, provider) => scan.probeOne(key, subject, provider),
+  pausedFor: () => (player ? 'playback' : scan.busy() ? 'scan' : null),
+  save: (result) => store.setProviderScans(recordScan(pruneScans(store.read().providerScans), result)),
+  onStatus: (status) => send(EV.watchlistTest, status),
+  // Two minutes after launch: start-up, the catalogue refresh and the release
+  // sweep all want the network first.
+  startDelayMs: 2 * 60_000,
+})
+
+/*
+ * A title added to the watchlist should be tested soon, not at the tester's
+ * next idle check ten minutes away. Keyed on the watchlist's ids rather than
+ * on any change: the store changes constantly — a position every thirty
+ * seconds while playing — and poking on each would make the tester run far
+ * more often than once a minute.
+ */
+let watchlistIds = ''
+store.subscribe(() => {
+  // Listed only: ticking an episode of an unlisted title changes nothing
+  // the tester works on, and listing one is exactly a new addition.
+  const ids = store
+    .read()
+    .watchlist.filter(isListed)
+    .map((entry) => entry.id)
+    .sort()
+    .join(',')
+  if (ids === watchlistIds) return
+  watchlistIds = ids
+  watchlistTester.poke()
+})
+
+/**
  * A television that stops on its own gives the sound back.
  *
  * `setAudioMuted` is the one piece of cast state that lives outside the cast
@@ -263,6 +323,16 @@ function openPlayer(
       enabled: () => store.read().settings.skipIntro,
       dataDir: store.dir,
       isAnimated: isAnimatedTitle,
+    },
+    /*
+      Never let the countdown switch away from a source "Test all sources"
+      found working for this title. Read at the moment of the offer, from the
+      same results the source pickers show.
+    */
+    testedWorking: (providerId) => {
+      const { providerScans, streamOutcomes } = store.read()
+      const key = titleKey(context)
+      return freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))?.verdicts[providerId] === 'stream'
     },
     // Where this was left last time; the view only acts on it if the provider
     // has not restored the position itself.
@@ -478,6 +548,8 @@ function closePlayer(announce = true): void {
   leaveCurrent()
   player.destroy()
   player = null
+  // The user stopped watching; the tester may take its turn again.
+  watchlistTester.poke()
 
   if (announce) {
     send(EV.playbackActive, false)
@@ -584,7 +656,7 @@ function orderedForRequest(req: TitleRef): Provider[] {
   return scanAwareOrder(enabledProviders(), outcomesForTitle(streamOutcomes, key), {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
-    scan: freshScan(providerScans, key),
+    scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
     sourceOrder: settings.sourceOrder,
   })
 }
@@ -775,6 +847,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       store,
       sync,
       getMainWindow,
+      backgroundStatus: () => watchlistTester.status(),
       openPlayer,
       setPlayerBounds: (bounds) => player?.setBounds(bounds),
       closePlayer: () => closePlayer(),
@@ -785,6 +858,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
         return ok
       },
       keepWaiting: () => player?.keepWaiting(),
+      acceptSuggestion: () => player?.acceptSuggestion() ?? false,
       reloadPlayer: () => player?.reload(),
       setPlayerMuted: (muted) => player?.setMuted(muted),
       cast,
@@ -809,6 +883,9 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       orderProviders: orderedForRequest,
       scan,
     })
+
+    // After the IPC is up, so its first status reaches a window that can ask.
+    watchlistTester.start()
 
     // Export/import from the menu are routed back through the renderer so they
     // reach the same IPC handler the in-app buttons use. The original had two

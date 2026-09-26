@@ -27,6 +27,7 @@
  */
 
 import { mergeDocuments } from '../store/merge'
+import { migrate } from '../store/migrate'
 import type { StoreDocument } from '../store/document'
 import type { SyncBackend } from './types'
 
@@ -66,7 +67,19 @@ export async function syncOnce(
     return { changed: false, createdRemote: true, at: now }
   }
 
-  const merged = mergeDocuments(local, remote.document)
+  /**
+   * The pulled document is migrated before it is merged, exactly as a document
+   * read off disk is.
+   *
+   * `mergeDocuments` requires both sides at the current schema, and the remote
+   * is not guaranteed to be: it is whatever the last device to push had, and
+   * that may be a phone a release behind. Merged raw, its records reach this
+   * device's live document in the old shape — a rating with no `value` reads
+   * as unrated until the next restart migrates it — and are then written to
+   * disk that way. Migrating here also means the push below carries the
+   * current shape back up, so the remote heals rather than staying behind.
+   */
+  const merged = mergeDocuments(local, migrate(remote.document, now))
 
   /**
    * Compare against both sides to decide whether anything actually moved.

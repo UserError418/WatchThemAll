@@ -29,6 +29,9 @@
  * XML, and the failure mode is a title we skip rather than data we corrupt.
  */
 
+import type { RatingValue } from '@shared/types'
+import { isRatingValue } from '@shared/rating'
+
 /** The statuses MAL writes, normalised to our own vocabulary. */
 export type MalStatus = 'watching' | 'completed' | 'onHold' | 'dropped' | 'planToWatch'
 
@@ -187,16 +190,25 @@ export const STATUS_LABELS: Record<MalStatus, string> = {
 /**
  * Turn a MAL score into a rating, or nothing.
  *
- * MAL's 1–10 is not linear in sentiment: its community average sits near 7, so
- * a 6 is mild disappointment rather than approval. The thresholds reflect that
- * rather than splitting the range down the middle. Everything between is left
- * unrated, because a shrug is not a signal and pretending otherwise would
- * flood the taste profile with noise from an import.
+ * One to one: a MAL 7 is a 7 here. The two scales are the same 1–10 in the
+ * same hands, so any remapping would be the app second-guessing the user's
+ * own numbers. 0 is MAL's "not scored" and becomes no rating at all, as does
+ * anything outside the scale, which a well-formed export never contains.
+ *
+ * This used to keep only 8 and above (a like) and 5 and below (a dislike), and
+ * drop 6 and 7 on the argument that a shrug is not a signal. Two things made
+ * that obsolete. The ratings themselves are now 1–10, so a 6 or a 7 is
+ * representable rather than having to be rounded to a side. And the taste
+ * model centres every rating on the user's own mean, so a 7 from someone
+ * whose average is 8 is a mild negative and says something — dropping it
+ * threw away exactly the calibration the new model reads.
+ *
+ * MAL's sentiment reading still holds and still matters, just elsewhere: its
+ * community average sits near 7, so a 6 is mild disappointment rather than
+ * approval. `ratingBand` in `@shared/rating` draws its bands on that reading.
  */
-export function ratingFromScore(score: number): 'like' | 'dislike' | null {
-  if (score >= 8) return 'like'
-  if (score >= 1 && score <= 5) return 'dislike'
-  return null
+export function ratingFromScore(score: number): RatingValue | null {
+  return isRatingValue(score) ? score : null
 }
 
 /**
@@ -307,6 +319,15 @@ export interface RankableMatch {
   title: string
   /** TMDB vote count. Absent on results from sources that do not report it. */
   voteCount?: number
+  /** TMDB genre ids. Absent, the result counts as not animated. */
+  genreIds?: readonly number[]
+}
+
+/** TMDB's Animation genre, the same id for films and series. */
+const ANIMATION = 16
+
+function isAnimated(result: RankableMatch): boolean {
+  return result.genreIds?.includes(ANIMATION) ?? false
 }
 
 /** Case, punctuation and spacing removed, so two spellings of one title agree. */
@@ -322,7 +343,17 @@ function normaliseTitle(title: string): string {
  * Academia itself, so a 311-title import files the wrong show and every
  * recommendation built on it inherits the error.
  *
- * Two rules, in order, and the order is the whole design:
+ * **Only animation is considered when there is any**, because every entry on
+ * a MyAnimeList is anime. Without this, rule 1 below took whatever carried
+ * the romanised title: on a real 311-entry export 6 picks were not
+ * animation, and all 6 were wrong. There were three 0-vote stub entries
+ * ("Tate no Yuusha no Nariagari" instead of The Rising of the Shield Hero),
+ * a live-action film ("Grand Blue"), and an American crime drama ("Golden
+ * Boy", beside the 1995 anime of the same name). The real anime sat in the
+ * same results every time. With no animated result at all, everything is
+ * considered as before.
+ *
+ * Then two rules, in order, and the order is the whole design:
  *
  * 1. **An exact title match wins outright.** "Sword Art Online Alternative:
  *    Gun Gale Online" is a real distinct series far less known than plain Sword
@@ -339,9 +370,11 @@ function normaliseTitle(title: string): string {
  *    ecstatic votes outscores a classic. How many people bothered to rate it is
  *    the only one of the three that means "this is the well-known one".
  *
- * Media type filters rule 2 rather than gating it, because an anime film and
- * the series it was cut from often share a name and TMDB does not always agree
- * with MAL about which is which. A wrong-typed match beats no match at all.
+ * Media type filters both rules rather than gating them, because an anime
+ * film and the series it was cut from often share a name and TMDB does not
+ * always agree with MAL about which is which. A wrong-typed match beats no
+ * match at all. Among several exact titles the requested type wins: "Mob
+ * Psycho 100" is a series and a film.
  */
 export function pickBestMatch<T extends RankableMatch>(
   term: string,
@@ -350,12 +383,47 @@ export function pickBestMatch<T extends RankableMatch>(
 ): T | null {
   if (results.length === 0) return null
 
-  const wanted = normaliseTitle(term)
-  const exact = results.find((r) => normaliseTitle(r.title) === wanted)
-  if (exact) return exact
+  const animated = results.filter(isAnimated)
+  const candidates = animated.length > 0 ? animated : results
 
-  const sameType = results.filter((r) => r.type === type)
-  const pool = sameType.length > 0 ? sameType : results
+  const exact = candidates.filter((r) => isExactMatch(term, r))
+  if (exact.length > 0) return exact.find((r) => r.type === type) ?? exact[0]!
+
+  const sameType = candidates.filter((r) => r.type === type)
+  const pool = sameType.length > 0 ? sameType : candidates
 
   return pool.reduce((best, r) => ((r.voteCount ?? 0) > (best.voteCount ?? 0) ? r : best))
+}
+
+function isExactMatch(term: string, result: RankableMatch): boolean {
+  return normaliseTitle(result.title) === normaliseTitle(term)
+}
+
+/**
+ * Resolve one MAL title: try each of its `searchVariants` in turn and pick
+ * the result it meant. The whole resolver apart from the network, shared by
+ * the desktop and the phone so the two cannot resolve a list differently.
+ *
+ * Stops at the first term whose pick is animated and either the requested
+ * type or an exact title. Any other pick is only the best of a bad lot, and
+ * is held back while the shorter terms are tried. The full title often finds *only* a film cut
+ * from the series: "Shingeki no Kyojin Season 3" returns a recap film and
+ * nothing else, while "Shingeki no Kyojin" finds the series. Stopping at the
+ * first term that found anything filed that film, and two more like it, as
+ * the anime on one real library. A held-back pick still wins when no term
+ * finds anything better (see `pickBestMatch`).
+ */
+export async function findBestMatch<T extends RankableMatch>(
+  title: string,
+  type: 'tv' | 'movie',
+  search: (term: string) => Promise<readonly T[]>,
+): Promise<T | null> {
+  let fallback: T | null = null
+  for (const term of searchVariants(title)) {
+    const best = pickBestMatch(term, type, await search(term))
+    if (!best) continue
+    if (isAnimated(best) && (best.type === type || isExactMatch(term, best))) return best
+    fallback ??= best
+  }
+  return fallback
 }

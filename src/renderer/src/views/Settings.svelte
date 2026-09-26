@@ -23,7 +23,7 @@
   import SyncPanel from '../components/SyncPanel.svelte'
   import MalImportDialog from '../components/MalImportDialog.svelte'
   import { library } from '../lib/library.svelte'
-  import type { MalPreview } from '@shared/ipc'
+  import type { MalPreview, WatchlistTestStatus } from '@shared/ipc'
   import type { SourceSortKey } from '@shared/types'
 
   let note = $state<string | null>(null)
@@ -92,6 +92,38 @@
     library.setSourceOrder(next)
   }
 
+  /**
+   * The watchlist tester's state, for one line under the order.
+   *
+   * Asked once on mount, then kept current by its event. Null on the phone,
+   * which has no tester, and until the first answer arrives — the line is
+   * simply absent then rather than saying something provisional.
+   */
+  let testStatus = $state<WatchlistTestStatus | null>(null)
+  $effect(() => {
+    void window.wta.providers.backgroundStatus().then((status) => (testStatus ??= status))
+    return window.wta.on.watchlistTest((status) => (testStatus = status))
+  })
+
+  /** The status in words. See `watchlisttester.ts` for what each state means. */
+  function describeTesting(status: WatchlistTestStatus): string {
+    const progress = `${status.done} of ${status.total} watchlist sources up to date`
+    switch (status.state) {
+      case 'testing':
+        return `Testing ${status.providerName} on ${status.title} — ${progress}.`
+      case 'paused':
+        return status.pausedFor === 'playback'
+          ? `Paused while you watch — ${progress}.`
+          : `Paused while a test by hand runs — ${progress}.`
+      case 'idle':
+        return status.total === 0
+          ? 'Nothing on your watchlist to test yet.'
+          : `All ${status.total} watchlist sources up to date. Reds are tested again after 3 days, ambers after 4, greens after 30.`
+      case 'waiting':
+        return `One source a minute — ${progress}.`
+    }
+  }
+
   async function importMal(): Promise<void> {
     choosingImport = false
     note = null
@@ -150,6 +182,10 @@
       Within each group, this decides the order — in the source lists and for Automatic. Speed
       and quality come from <strong>Test all sources</strong>.
     </p>
+    {#if testStatus}
+      <!-- The watchlist is tested in the background, so its lists are ready before you open them. -->
+      <p class="hint testing">{describeTesting(testStatus)}</p>
+    {/if}
 
     <ol class="sort-keys">
       {#each sourceOrder as key, index (key)}

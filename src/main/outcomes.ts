@@ -150,6 +150,23 @@ export function lastWorkingForTitle(log: StreamOutcome[], key: string): string |
   return best?.providerId ?? null
 }
 
+/**
+ * When each provider last actually streamed this title, at any episode.
+ *
+ * For `freshScan`, which lets a real play overrule an older red or amber test
+ * result — and so needs the time, not just the fact, to know which came last.
+ */
+export function lastPlayedAt(log: StreamOutcome[], key: string): Record<string, number> {
+  const prefix = `${key}:`
+  const out: Record<string, number> = {}
+  for (const entry of log) {
+    if (entry.outcome !== 'stream') continue
+    if (entry.mediaKey !== key && !entry.mediaKey.startsWith(prefix)) continue
+    out[entry.providerId] = Math.max(out[entry.providerId] ?? 0, entry.at)
+  }
+  return out
+}
+
 /** Append an outcome, dropping the oldest once the log is full. */
 export function record(
   log: StreamOutcome[],

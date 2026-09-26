@@ -18,6 +18,7 @@
     PlayerContext,
     PlayerSuggestion,
     ProbeVerdict,
+    ScanReason,
     TitleProviderState,
   CastDevice,
   CastStatus,
@@ -137,6 +138,7 @@
   let scanVerdicts = $state<Record<string, ProbeVerdict>>({})
   let scanTimings = $state<Record<string, number>>({})
   let scanQualities = $state<Record<string, number>>({})
+  let scanReasons = $state<Record<string, ScanReason>>({})
   let scanning = $state(false)
   let scanDone = $state(0)
   let scanTotal = $state(0)
@@ -148,6 +150,7 @@
       scanVerdicts = progress.verdicts
       scanTimings = progress.timings
       scanQualities = progress.qualities
+      scanReasons = progress.reasons
       scanDone = progress.done
       scanTotal = progress.total
       scanCurrent = progress.providerName
@@ -166,6 +169,9 @@
   )
   const qualities = $derived<Record<string, number>>(
     Object.keys(scanVerdicts).length > 0 ? scanQualities : (sourceState.scan?.qualities ?? {}),
+  )
+  const reasons = $derived<Record<string, ScanReason>>(
+    Object.keys(scanVerdicts).length > 0 ? scanReasons : (sourceState.scan?.reasons ?? {}),
   )
 
   /** " · 3.8 s · 1080p" for a source that streamed; see `SourcePicker.svelte`. */
@@ -568,6 +574,16 @@
       return
     }
 
+    /*
+     * Some offers only offer: a stall mid-episode, and a source that "Test all
+     * sources" found working. Main decides which (`mayAutoSwitch`); this only
+     * obeys. The banner stays, without a clock.
+     */
+    if (!pending.autoSwitch) {
+      countdown = null
+      return
+    }
+
     /**
      * The seconds live in a plain local and are only mirrored into state.
      * Reading `countdown` inside the effect would make the effect depend on a
@@ -583,7 +599,9 @@
       countdown = left
       if (left > 0) return
       clearInterval(tick)
-      api.switchProvider(pending.nextProviderId)
+      // Taking the offer, not picking from the menu: main marks the source
+      // being left as tried, so the next offer cannot send the user back.
+      void api.acceptSuggestion()
     }, 1000)
 
     return () => clearInterval(tick)
@@ -592,7 +610,7 @@
   function switchNow(): void {
     if (!suggestion) return
     countdown = null
-    api.switchProvider(suggestion.nextProviderId)
+    void api.acceptSuggestion()
   }
 
   /** Stop the clock and stay put. The source keeps loading either way. */
@@ -1125,7 +1143,7 @@
         </div>
         {#each sourceRows as provider (provider.id)}
           {@const resume = provider.id === sourceState.lastUsed}
-          {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id])}
+          {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
           {@const testing = scanning && scanCurrent === provider.name}
           {@const time = measurement(provider.id)}
           <button
@@ -1190,11 +1208,15 @@
         the same information in their labels.
       -->
       <span class="offer">
-        Switching to {suggestion.nextProviderName}
-        {#if countdown !== null}<span class="count" aria-hidden="true">in {countdown}s</span>{/if}
+        {#if suggestion.autoSwitch}
+          Switching to {suggestion.nextProviderName}
+          {#if countdown !== null}<span class="count" aria-hidden="true">in {countdown}s</span>{/if}
+        {:else}
+          Try {suggestion.nextProviderName} instead?
+        {/if}
       </span>
       <button class="switch" onclick={switchNow}>Switch now</button>
-      <button class="wait" onclick={keepWaiting}>Keep waiting</button>
+      <button class="wait" onclick={keepWaiting}>{suggestion.autoSwitch ? 'Keep waiting' : 'Stay'}</button>
 
       <!-- A draining bar, so the deadline is legible without reading it. -->
       {#if countdown !== null}

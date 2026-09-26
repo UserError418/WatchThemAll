@@ -20,7 +20,7 @@
  * just keeps the derivation in one process.
  */
 
-import type { ProbeVerdict, ProviderScanProgress, TitleRef } from '@shared/ipc'
+import type { ProbeVerdict, ProviderScanProgress, ScanReason, TitleRef } from '@shared/ipc'
 
 /** Whether two title references mean the same title. Mirrors `titleKey`'s inputs. */
 function sameTitle(a: TitleRef | null, b: TitleRef | null): boolean {
@@ -42,6 +42,8 @@ class ProviderScanState {
   timings = $state<Record<string, number>>({})
   /** Best quality class offered, for each provider whose stream says. */
   qualities = $state<Record<string, number>>({})
+  /** Why each settled source that did not stream failed. */
+  reasons = $state<Record<string, ScanReason>>({})
 
   running = $state(false)
   done = $state(0)
@@ -66,6 +68,7 @@ class ProviderScanState {
       this.verdicts = progress.verdicts
       this.timings = progress.timings
       this.qualities = progress.qualities
+      this.reasons = progress.reasons
       this.done = progress.done
       this.total = progress.total
       this.current = progress.providerName
@@ -93,6 +96,7 @@ class ProviderScanState {
     this.verdicts = {}
     this.timings = {}
     this.qualities = {}
+    this.reasons = {}
     this.done = 0
     this.cancelled = false
     this.running = true
@@ -119,6 +123,7 @@ class ProviderScanState {
     this.verdicts = {}
     this.timings = {}
     this.qualities = {}
+    this.reasons = {}
     this.done = 0
     this.total = 0
     this.current = null

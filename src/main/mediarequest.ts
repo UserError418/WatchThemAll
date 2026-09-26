@@ -139,3 +139,42 @@ export function totalBytesOf(status: number, contentRange: string, contentLength
 export function isMediaResponse(contentType: string, body: string): boolean {
   return MEDIA_MIME.test(contentType.trim()) || body.trimStart().startsWith('#EXTM3U')
 }
+
+/**
+ * Which part of a stream a media response is.
+ *
+ * `isMediaRequest` answers "is this the stream at all"; this answers the
+ * question behind a green dot, which is sharper: **did video arrive?** A
+ * playlist proves only that the provider found a stream. Videasy showed why
+ * that is not enough: on Game of Thrones and Frieren its playlists loaded
+ * cleanly, every segment they listed was refused with 403, and nothing ever
+ * played — while the test, satisfied by the playlist, said "works". Agreed
+ * with the owner on 2026-09-26: on the desktop, a source works when video arrives.
+ *
+ * - `playlist` — an HLS or DASH manifest, by name or by type.
+ * - `file` — a whole video fetched by a media element (ScreenScape's `.mkv`).
+ * - `segment` — everything else that is media: `.ts`, `.m4s`, fMP4 `.mp4`
+ *   pieces fetched by the player's script, or any response typed video or
+ *   audio. That last clause is what recognises segments behind opaque proxy
+ *   paths, whose names say nothing.
+ *
+ * Null when the response is not media, or is the placeholder kind that only
+ * looks like a whole file (`isFalseWholeFile`).
+ */
+export type MediaKind = 'playlist' | 'segment' | 'file'
+
+const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)|\/manifest(\/|\?|$)/i
+const PLAYLIST_MIME = /^application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)/i
+
+export function mediaKind(
+  url: string,
+  resourceType: string,
+  mime: string,
+  totalBytes: number | null,
+): MediaKind | null {
+  if (!isMediaRequest(url, resourceType, mime)) return null
+  if (isFalseWholeFile(url, resourceType, mime, totalBytes)) return null
+  if (PLAYLIST_MIME.test(mime.trim()) || PLAYLIST_URL.test(url)) return 'playlist'
+  if (resourceType === 'media') return 'file'
+  return 'segment'
+}
