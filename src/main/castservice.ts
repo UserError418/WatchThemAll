@@ -27,11 +27,13 @@
 
 import type { Session } from 'electron'
 import type { CastDevice, CastStatus } from '@shared/ipc'
+import type { CastOutcome } from '@shared/types'
+import { isCastableFileType } from '@shared/castability'
 import { buildCastBundle, isPlaylist, isWholeVideoFile } from './hlsrewrite'
 import { createCastCapture, type Candidate, type CastCapture } from './castcapture'
 import { createCastProxy, replayableHeaders } from './castproxy'
 import { discover } from './castdiscovery'
-import { CastSession } from './castsender'
+import { CastSession, ReceiverRefusedError } from './castsender'
 
 /**
  * How much of a candidate to read while deciding what it is.
@@ -46,14 +48,37 @@ const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
 
 const FETCH_TIMEOUT_MS = 15_000
 
-const PROGRESSIVE_TYPES = ['video/mp4', 'video/webm']
-
 /** What the receiver should be told it is playing. */
 export interface NowPlaying {
   title: string
   subtitle: string
   providerName: string
   startSeconds: number
+  /** The title and source being cast, so what the cast learns is filed under them. Null when unknown. */
+  titleKey: string | null
+  providerId: string | null
+}
+
+/**
+ * What a beam found out about the source, whether or not it succeeded.
+ *
+ * A cast is a better measurement than a test: it identified the stream by
+ * fetching what the provider's player really fetched, and a television then
+ * answered for it. `outcome` is set only where the answer is unambiguous —
+ * see `beam`.
+ */
+export interface CastLearned {
+  delivery: 'progressive' | 'segmented'
+  outcome: CastOutcome | null
+}
+
+export interface BeamResult {
+  ok: boolean
+  error?: string
+  /** Nothing has been captured yet: the source has not fetched anything. */
+  waiting?: boolean
+  /** Absent when no stream was identified: then there is nothing to learn. */
+  learned?: CastLearned
 }
 
 export interface CastService {
@@ -67,7 +92,7 @@ export interface CastService {
   devices(): Promise<CastDevice[]>
   connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
   disconnect(): Promise<void>
-  beam(now: NowPlaying): Promise<{ ok: boolean; error?: string }>
+  beam(now: NowPlaying): Promise<BeamResult>
   status(): Promise<CastStatus>
   control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
   /**
@@ -137,11 +162,9 @@ async function identifyStream(candidates: Candidate[]): Promise<Identified | nul
       continue
     }
 
-    const type = response.contentType.toLowerCase()
-    if (
-      PROGRESSIVE_TYPES.some((known) => type.startsWith(known)) &&
-      isWholeVideoFile(response.body)
-    ) {
+    // The same test a scan uses to record `progressive`, so "this source
+    // casts" and "the cast sends this" cannot disagree.
+    if (isCastableFileType(response.contentType) && isWholeVideoFile(response.body)) {
       return { url: candidate.url, headers, kind: 'progressive' }
     }
   }
@@ -220,14 +243,16 @@ export function createCastService(): CastService {
       endSession()
     },
 
-    async beam(now): Promise<{ ok: boolean; error?: string }> {
+    async beam(now): Promise<BeamResult> {
       if (!session) return { ok: false, error: 'Not connected to a TV.' }
 
       const candidates = capture.candidates()
       if (candidates.length === 0) {
-        return { ok: false, error: 'Nothing to cast yet — start playing first, then try again.' }
+        return { ok: false, error: 'Nothing to cast yet — start playing first, then try again.', waiting: true }
       }
 
+      /** How the identified stream arrived, once there is one. */
+      let delivery: CastLearned['delivery'] | null = null
       try {
         const stream = await identifyStream(candidates)
         if (stream === null) {
@@ -237,6 +262,7 @@ export function createCastService(): CastService {
           }
         }
 
+        delivery = stream.kind === 'progressive' ? 'progressive' : 'segmented'
         const bundle = await buildCastBundle(stream.url, stream.kind, async (url) => {
           const response = await fetchText(url, stream.headers)
           if (response.status !== 200 && response.status !== 206) {
@@ -261,12 +287,22 @@ export function createCastService(): CastService {
           startSeconds: now.startSeconds,
         })
 
-        return { ok: true }
+        return { ok: true, learned: { delivery, outcome: 'played' } }
       } catch (error) {
         // The proxy must not outlive a failed attempt: it would sit on the
         // network serving a stream nothing is watching.
         proxy.stop()
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        if (delivery === null) return { ok: false, error: message }
+        /*
+         * A refused playlist is the receiver's known limit and says something
+         * about the source. A refused whole file does not, reliably: the same
+         * answer comes back when the TV cannot reach this computer, and filing
+         * a network hiccup as "this source cannot cast" would hide a source
+         * that can. So only the first is recorded as a refusal.
+         */
+        const refused = error instanceof ReceiverRefusedError && delivery === 'segmented'
+        return { ok: false, error: message, learned: { delivery, outcome: refused ? 'refused' : null } }
       }
     },
 

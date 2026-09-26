@@ -25,9 +25,10 @@
   CastDevice,
   CastStatus,
 } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote, sharedLabel } from '@shared/scanrank'
+  import type { Castability } from '@shared/castability'
   import { untrack } from 'svelte'
-  import type { Episode } from '@shared/types'
+  import type { Episode, StreamDelivery } from '@shared/types'
   import { clock } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
   import {
@@ -140,6 +141,9 @@
   )
 
   function sendAway(): void {
+    // The cast list is a question held open with a television waiting on it;
+    // hiding the chrome would leave the TV held with nothing to answer.
+    if (castChoosing) void cancelCastChoice()
     // Cleared by hand: the chrome leaves the DOM under the pointer, so no
     // `mouseleave` arrives, and a stale hover would hold the bar open for good
     // once it returned.
@@ -167,6 +171,16 @@
     return () => clearInterval(tick)
   })
 
+  /** What a picker shows before anything is known: every dot blank. */
+  const NO_SOURCE_STATE: TitleProviderState = {
+    outcomes: {},
+    resume: null,
+    scan: null,
+    sharedFrom: {},
+    castability: {},
+    order: [],
+  }
+
   /**
    * What each source has actually done with this title.
    *
@@ -180,12 +194,7 @@
    * one without guessing. Listed in Automatic's order, as there, for the same
    * reason — so the top of the list is the next one worth trying.
    */
-  let sourceState = $state<TitleProviderState>({
-    outcomes: {},
-    resume: null,
-    scan: null,
-    order: [],
-  })
+  let sourceState = $state<TitleProviderState>(NO_SOURCE_STATE)
 
   /* ── Testing every source ─────────────────────────────────────────────────
    *
@@ -201,6 +210,8 @@
   let scanTimings = $state<Record<string, number>>({})
   let scanQualities = $state<Record<string, number>>({})
   let scanReasons = $state<Record<string, ScanReason>>({})
+  /** How each source's video arrived in the live run — what the cast list fills in from. */
+  let scanDelivery = $state<Record<string, StreamDelivery>>({})
   let scanning = $state(false)
   let scanDone = $state(0)
   let scanTotal = $state(0)
@@ -213,6 +224,7 @@
       scanTimings = progress.timings
       scanQualities = progress.qualities
       scanReasons = progress.reasons
+      scanDelivery = progress.delivery
       scanDone = progress.done
       scanTotal = progress.total
       scanTesting = progress.testing
@@ -237,13 +249,25 @@
 
   /** " · 3.8 s · 1080p" for a source that streamed; see `SourcePicker.svelte`. */
   function measurement(id: string): string {
-    if (verdicts[id] !== 'stream') return ''
+    const shared = sharedNote(id)
+    if (verdicts[id] !== 'stream') return shared
     const ms = timings[id]
     const quality = qualities[id]
     return (
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
-      (quality !== undefined ? ` · ${formatQuality(quality)}` : '')
+      (quality !== undefined ? ` · ${formatQuality(quality)}` : '') +
+      shared
     )
+  }
+
+  /**
+   * " · on your computer" for a result measured on another of the user's
+   * devices, so a green from elsewhere is not passed off as this device's own.
+   * Not during a live run here, whose results are all this device's.
+   */
+  function sharedNote(id: string): string {
+    if (Object.keys(scanVerdicts).length > 0) return ''
+    return sharedLabel(sourceState.sharedFrom[id])
   }
 
   /**
@@ -309,7 +333,110 @@
    * state a user comes back to.
    */
   let remoteHidden = $state(false)
-  const showRemote = $derived(casting && !remoteHidden)
+  /** Connected, and waiting for the user to choose a source — see `castFrom`. The remote stays down meanwhile. */
+  let castChoosing = $state(false)
+  const showRemote = $derived(casting && !remoteHidden && !castChoosing)
+
+  /* ── Choosing what to cast ────────────────────────────────────────────────
+   *
+   * Agreed with the owner 2026-09-26: connecting to a television no longer
+   * sends whatever happens to be playing. It opens a list — the ordinary
+   * source list, narrowed to what can cast — and the user picks. Only then is
+   * the source loaded here, started, and handed over.
+   *
+   * The reason is the receiver. A plain Chromecast plays a whole MP4 and
+   * refuses HLS, and most sources hand out HLS, so "cast what is playing" was
+   * a coin toss the user could not see. See `shared/castability.ts`.
+   */
+
+  /** Sources a cast from the list could not start this time, with why, so their rows can say. */
+  let castFailures = $state<Record<string, string>>({})
+  /** The last failure, shown at the head of the list it returned to. */
+  let castFailureNote = $state<string | null>(null)
+
+  /**
+   * Whether a source can cast this title, with the live test's findings first.
+   * A test run from the list itself fills the list in as each source settles.
+   */
+  function castabilityOf(id: string): Castability {
+    const live = scanDelivery[id]
+    if (live === 'progressive') return 'yes'
+    if (live === 'segmented' || live === 'other') return 'no'
+    return sourceState.castability[id] ?? 'unknown'
+  }
+
+  /**
+   * The list, in the ordinary order: castable first, then what nothing has
+   * checked — a source seen handing out a file elsewhere ahead of the rest.
+   * Sources known not to cast are left out and counted, except one the user
+   * just tried, which stays so its row can say what happened.
+   */
+  const castGroups = $derived.by(() => {
+    const rows = sourceRows.map((provider) => ({ provider, castable: castabilityOf(provider.id) }))
+    const tried = (id: string): boolean => id in castFailures
+    return {
+      yes: rows.filter((r) => r.castable === 'yes' && !tried(r.provider.id)),
+      maybe: [
+        ...rows.filter((r) => r.castable === 'likely' && !tried(r.provider.id)),
+        ...rows.filter((r) => r.castable === 'unknown' && !tried(r.provider.id)),
+        ...rows.filter((r) => tried(r.provider.id)),
+      ],
+      hidden: rows.filter((r) => r.castable === 'no' && !tried(r.provider.id)).length,
+    }
+  })
+
+  /** Re-read what is known about this title's sources — for the dots, and for castability. */
+  async function refreshSourceState(): Promise<void> {
+    if (context === null) return
+    try {
+      sourceState = await api.outcomes({ type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId })
+    } catch {
+      // No record is a fair answer: every dot is blank, every source unchecked.
+      sourceState = NO_SOURCE_STATE
+    }
+  }
+
+  /**
+   * Cast from one source: load it here, start it, hand it over.
+   *
+   * The television is fed from this window, so a source not already playing
+   * has to be loaded here first. A failure of any kind comes back to the list
+   * rather than to the remote's "stuck" state: the question at that moment is
+   * which source to try next, and the list is where that is answered.
+   */
+  async function castFrom(providerId: string, providerName: string): Promise<void> {
+    if (context === null) return
+    const token = ++switchToken
+    castChoosing = false
+    castFailureNote = null
+    panel = 'none'
+
+    if (providerId !== context.providerId) {
+      remotePhase = 'switching'
+      remoteNote = `Loading ${providerName} here first — the television is fed from this window.`
+      api.switchProvider(providerId)
+      // Nothing is captured for a beat after a navigation.
+      await sleep(2000)
+      if (token !== switchToken) return
+    }
+
+    const result = await handOver(token)
+    if (result === null || result.ok) return
+    castFailures = { ...castFailures, [providerId]: result.reason }
+    castFailureNote = `${providerName}: ${result.reason}`
+    castChoosing = true
+    panel = 'cast'
+    // The attempt was filed as a measurement; the list should reflect it.
+    void refreshSourceState()
+  }
+
+  /** Close the list without choosing: let the television go rather than leave it held. */
+  async function cancelCastChoice(): Promise<void> {
+    castChoosing = false
+    castFailureNote = null
+    panel = 'none'
+    await stopCasting()
+  }
 
 
   /*
@@ -398,6 +525,10 @@
 
   function openCast(): void {
     if (panel === 'cast') {
+      if (castChoosing) {
+        void cancelCastChoice()
+        return
+      }
       panel = 'none'
       return
     }
@@ -454,48 +585,26 @@
   })
 
   /**
-   * Connect, then move the stream across.
+   * Connect, then ask what to cast.
    *
-   * Deliberately one action from the user's side. Connecting without beaming
-   * leaves a Chromecast showing its idle screen while the phone keeps playing,
-   * which looks like a failure even though both halves worked.
+   * It used to connect and send whatever was playing in one action, because a
+   * Chromecast connected with nothing on it shows its idle screen and reads
+   * as a failure. Now the list of castable sources follows at once, in the
+   * same panel, so the idle screen lasts only as long as the choice does.
    */
   async function castTo(deviceId: string): Promise<void> {
     castBusy = true
     castError = null
-    /*
-     * Say what is happening *before* connecting, not after.
-     *
-     * The poll flips `connected` the moment the session exists, which is one
-     * or two seconds before there is a stream on it — so the remote appears
-     * during the beam. Left at `playing` for those seconds it reads
-     * `proxyRunning: false` and announces "the stream ended" over a cast that
-     * is going perfectly. The panel this replaces had the identical bug and
-     * fixed it by testing `castBusy` first; this is the same fix in the phase.
-     */
-    remotePhase = 'beaming'
-    remoteNote = 'Starting the stream on the television…'
     try {
       const connected = await api.cast.connect(deviceId)
       if (!connected.ok) {
         castError = connected.error ?? 'Could not connect to that TV.'
         return
       }
-      const beamed = await api.cast.beam()
-      /*
-       * Either way the panel closes and the remote takes the screen, because
-       * `connect` succeeded and a television is attached. So a failure to beam
-       * is handed to the remote as `stuck` rather than left in a panel that is
-       * about to be covered — and `stuck` is the state that offers the player
-       * back, which is exactly what a source that has not started fetching
-       * needs.
-       */
-      remotePhase = beamed.ok ? 'playing' : 'stuck'
-      remoteNote = beamed.ok
-        ? ''
-        : (beamed.error ?? 'Could not start the stream on that TV.')
-      // Closing the panel tears the sweep down; see the effect above.
-      panel = 'none'
+      castFailures = {}
+      castFailureNote = null
+      castChoosing = true
+      void refreshSourceState()
     } finally {
       castBusy = false
       castStatus = await api.cast.status()
@@ -572,7 +681,7 @@
       .catch(() => {
         // No record is a fair answer: every dot is simply blank, which is what
         // "never tried" looks like anyway.
-        sourceState = { outcomes: {}, resume: null, scan: null, order: [] }
+        sourceState = NO_SOURCE_STATE
       })
   }
 
@@ -717,12 +826,15 @@
     // Not while sent away: the offer waits for the bar, and an auto-switch
     // goes ahead on its own either way.
     if (suggestion && awayUntil === null) barVisible = true
+    // Nor may it close under the cast list: closing it lets the TV go.
+    if (castChoosing) barVisible = true
   })
 
   $effect(() => {
     if (!barVisible) return
     if (touch) return
     if (suggestion) return
+    if (castChoosing) return
     // Hovering the chrome holds it open — including hovering a panel, which is
     // a child of it. Nothing else does.
     if (hoveringChrome) return
@@ -868,6 +980,7 @@
     remoteHidden = false
     remotePhase = 'playing'
     remoteNote = ''
+    castChoosing = false
   })
 
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -885,27 +998,40 @@
    * not a failure — several providers fetch nothing at all until their own play
    * button is pressed, and the honest thing is to say so and offer the screen.
    */
-  async function handOver(token: number): Promise<void> {
+  async function handOver(token: number): Promise<{ ok: true } | { ok: false; reason: string } | null> {
     const deadline = Date.now() + STREAM_WAIT_MS
     remotePhase = 'beaming'
     remoteNote = `Handing it to ${castStatus?.deviceName ?? 'the television'}…`
 
     while (Date.now() < deadline) {
-      if (token !== switchToken) return
+      if (token !== switchToken) return null
       const result = await api.cast.beam()
-      if (token !== switchToken) return
+      if (token !== switchToken) return null
       if (result.ok) {
         remotePhase = 'playing'
         remoteNote = ''
         castStatus = await api.cast.status()
-        return
+        return { ok: true }
       }
+      // A stream was found and the television could not take it: asking
+      // again would only reload the TV with the same refusal.
+      if (result.final) return { ok: false, reason: result.error ?? 'The television could not play it.' }
       await sleep(1200)
     }
 
-    if (token !== switchToken) return
+    if (token !== switchToken) return null
+    return {
+      ok: false,
+      reason: `${context?.providerName ?? 'This source'} has not handed over a stream yet. Some sources fetch nothing until their own play button is pressed.`,
+    }
+  }
+
+  /** Hand over, and on failure say so in the remote — for the remote's own buttons. */
+  async function handOverInRemote(token: number): Promise<void> {
+    const result = await handOver(token)
+    if (result === null || result.ok) return
     remotePhase = 'stuck'
-    remoteNote = `${context?.providerName ?? 'This source'} has not handed over a stream yet. Some sources fetch nothing until their own play button is pressed.`
+    remoteNote = result.reason
   }
 
   /**
@@ -929,7 +1055,7 @@
     // only burns the first attempt.
     await sleep(2000)
     if (token !== switchToken) return
-    await handOver(token)
+    await handOverInRemote(token)
   }
 
   /** The season the television is playing, for `canNext` and the still. */
@@ -968,6 +1094,38 @@
   })
 </script>
 
+{#snippet castRow(provider: { id: string; name: string }, castable: Castability)}
+  {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
+  {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
+  {@const failed = castFailures[provider.id]}
+  <button
+    class="source"
+    class:playing={provider.id === context?.providerId}
+    title={failed}
+    onclick={() => void castFrom(provider.id, provider.name)}
+  >
+    {#if dot.tone}
+      <span class="dot" style:background={TONE[dot.tone]} title={dot.hint}></span>
+    {:else}
+      <span class="dot none" title={dot.hint}></span>
+    {/if}
+    <span class="name">{provider.name}</span>
+    {#if test}
+      <span class="tag">{test.recheck ? 'testing again…' : 'testing…'}</span>
+    {:else if failed}
+      <span class="tag bad">did not cast</span>
+    {:else if castable === 'yes'}
+      <span class="tag">{provider.id === context?.providerId ? 'playing · ' : ''}casts{measurement(provider.id)}</span>
+    {:else if castable === 'likely'}
+      <span class="tag">cast on another title</span>
+    {:else if provider.id === context?.providerId}
+      <span class="tag">playing</span>
+    {:else if dot.label}
+      <span class="tag" class:bad={dot.tone === 'bad'}>{dot.label}{measurement(provider.id)}</span>
+    {/if}
+  </button>
+{/snippet}
+
 <!--
   `onmouseenter`/`onmouseleave` on the chrome itself is what holds it open. The
   pointer merely being near the top is a trigger, handled above.
@@ -992,7 +1150,7 @@
     canPrevious={previousEpisode(remoteStep) !== null}
     canNext={nextEpisode(remoteStep, playingEpisodes.length) !== null}
     onreveal={() => (remoteHidden = true)}
-    onretry={() => void handOver(++switchToken)}
+    onretry={() => void handOverInRemote(++switchToken)}
     onback={() => api.back()}
     onstop={() => void stopCasting()}
     ontoggle={() => void send(castStatus?.playing ? 'pause' : 'play')}
@@ -1144,7 +1302,50 @@
           on screen for the whole of a perfectly normal beam.
         -->
         {#if castBusy}
-          <p class="hint">Starting the stream…</p>
+          <p class="hint">Connecting…</p>
+        {:else if castChoosing}
+          <!--
+            Choose what to cast. The ordinary source list, in its ordinary
+            order, narrowed to what this television can play — see
+            `castGroups`. The test button is here too: it is what turns
+            "not checked" rows into answers, live.
+          -->
+          <p class="cast-head">
+            Connected to <span class="name">{castStatus?.deviceName ?? 'the TV'}</span>. Choose a source to cast.
+          </p>
+          {#if castFailureNote}
+            <p class="hint bad">{castFailureNote}</p>
+          {/if}
+          <button class="source test" class:playing={scanning} onclick={toggleScan}>
+            <span class="dot none"></span>
+            <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+            {#if scanning}
+              <span class="tag"
+                >{#if scanTotal > 0 && scanDone >= scanTotal}double-checking{:else}{scanDone}/{scanTotal}{/if}</span
+              >
+            {/if}
+          </button>
+          {#if castGroups.yes.length > 0}
+            <p class="cast-group">Casts to this TV</p>
+            {#each castGroups.yes as row (row.provider.id)}
+              {@render castRow(row.provider, row.castable)}
+            {/each}
+          {/if}
+          {#if castGroups.maybe.length > 0}
+            <p class="cast-group">Not checked for casting yet</p>
+            {#each castGroups.maybe as row (row.provider.id)}
+              {@render castRow(row.provider, row.castable)}
+            {/each}
+          {/if}
+          {#if castGroups.hidden > 0}
+            <!-- Counted rather than silently dropped: a list that shrank for
+                 no stated reason reads as sources having gone missing. -->
+            <p class="hint">
+              {castGroups.hidden === 1 ? '1 source only streams' : `${castGroups.hidden} sources only stream`} in a format
+              this TV cannot play.
+            </p>
+          {/if}
+          <button class="source stop" onclick={() => void cancelCastChoice()}>Cancel</button>
         {:else if castStatus?.connected}
           <div class="cast-now">
             <span class="name">Playing on {castStatus.deviceName}</span>
@@ -1724,11 +1925,34 @@
      A house with a dozen Chromecasts scrolls rather than growing. */
   .cast-panel {
     padding: 6px;
-    max-height: 260px;
+    max-height: 380px;
     overflow-y: auto;
-    width: 260px;
+    width: 300px;
     margin-left: auto;
     margin-right: 14px;
+  }
+
+  .cast-head {
+    margin: 0;
+    padding: 10px 12px 6px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.72);
+  }
+
+  .cast-head .name {
+    color: #cfe0ff;
+  }
+
+  /* The two groups' headings: small caps-ish labels, like the season picker's. */
+  .cast-group {
+    margin: 8px 0 2px;
+    padding: 0 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
   }
 
   .cast-now {

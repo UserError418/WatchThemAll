@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Provider, ScanReason } from '@shared/types'
+import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
 import type { ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import type { ProbeSubject, StreamVerdict } from './streamprobe'
 import type { QualityProbeResult } from './qualityprobe'
@@ -17,7 +17,14 @@ import type { QualityProbeResult } from './qualityprobe'
 /** Each provider's answers, in the order its probes will be asked for them. */
 const script = new Map<
   string,
-  Array<{ verdict: StreamVerdict; ms: number | null; quality?: number; reason?: ScanReason; hold?: Promise<void> }>
+  Array<{
+    verdict: StreamVerdict
+    ms: number | null
+    quality?: number
+    reason?: ScanReason
+    delivery?: StreamDelivery | null
+    hold?: Promise<void>
+  }>
 >()
 /** The budget each probe was given, in call order, per provider. */
 const budgets = new Map<string, number[]>()
@@ -50,6 +57,7 @@ vi.mock('./qualityprobe', () => ({
       verdict: answer.verdict,
       reason: answer.reason ?? DEFAULT_REASON[answer.verdict],
       timeToMediaMs: answer.ms,
+      delivery: answer.delivery ?? null,
       mediaSamples: [],
       playlists: [],
       wholeFiles: [],
@@ -211,6 +219,28 @@ describe('why a source failed', () => {
     const before = Date.now()
     const scan = await scanOf([provider('a')]).run()
     expect(scan.testedAt?.a).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('how the video arrived', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  it('records it for sources that streamed, and nothing for the rest', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 900, delivery: 'progressive' }])
+    script.set('b', [{ verdict: 'stream', ms: 1_200, delivery: 'segmented' }])
+    script.set('c', [{ verdict: 'no-media', ms: null }, { verdict: 'no-media', ms: null }])
+    const scan = await scanOf([provider('a'), provider('b'), provider('c')]).run()
+    expect(scan.delivery).toEqual({ a: 'progressive', b: 'segmented' })
+  })
+
+  it('records a stream whose traffic showed nothing as unknown, which is an answer', async () => {
+    // Absent would read as "tested before deliveries existed" and be due again forever.
+    script.set('a', [{ verdict: 'stream', ms: 900, delivery: null }])
+    const result = await scanOf([provider('a')]).probeOne(provider('a'))
+    expect(result?.delivery).toEqual({ a: 'unknown' })
   })
 })
 

@@ -44,7 +44,9 @@
  * fail, the solo run's reason does, because it had the phone to itself.
  */
 
-import type { Provider } from '@shared/types'
+import type { Provider, StreamDelivery } from '@shared/types'
+import { wholeFileDelivery } from '@shared/castability'
+import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequest'
@@ -168,6 +170,8 @@ interface Measured {
   ms: number | null
   quality: number | null
   reason: ScanReason | null
+  /** How the video arrived, for a stream only. See `StreamDelivery`. */
+  delivery: StreamDelivery | null
 }
 
 export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
@@ -199,6 +203,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       const reasons: Record<string, ScanReason> = {}
       /** When each provider's standing result was measured. */
       const testedAt: Record<string, number> = {}
+      /** How each streaming provider's video arrived. */
+      const delivery: Record<string, StreamDelivery> = {}
       const total = providers.length
 
       /** What is under test right now, by provider, in the order it started. */
@@ -221,6 +227,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           timings: { ...timings },
           qualities: { ...qualities },
           reasons: { ...reasons },
+          delivery: { ...delivery },
           finished,
           cancelled: finished && token !== mine,
         })
@@ -235,6 +242,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         else delete timings[provider.id]
         if (measured.quality !== null) qualities[provider.id] = measured.quality
         else delete qualities[provider.id]
+        if (measured.delivery !== null) delivery[provider.id] = measured.delivery
+        else delete delivery[provider.id]
       }
 
       const measure = (provider: Provider, budgetMs: number): Promise<Measured> => {
@@ -242,7 +251,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         // The provider cannot express this request at all — no template for
         // this media type, or an id it needs and the title lacks. Nothing to
         // load, and nothing transient about it.
-        if (url === null) return Promise.resolve({ verdict: 'dead', ms: null, quality: null, reason: { kind: 'unsupported' } })
+        if (url === null) return Promise.resolve({ verdict: 'dead', ms: null, quality: null, reason: { kind: 'unsupported' }, delivery: null })
         return probeOne(url, budgetMs, cancelled)
       }
 
@@ -293,7 +302,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         if (token === mine) running = false
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
       testing.clear()
       publish(true)
       return scan
@@ -302,7 +311,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
 }
 
 /**
- * Whether any whole file named in the session's log really is a video.
+ * Whether any whole file named in the session's log really is a video, and if
+ * so its `Content-Type` — which decides whether it could be cast.
  *
  * The desktop judges a `.mp4` by the response it got; the phone has only the
  * URL, and a URL can lie. VidRock's player loads `…/demo-video.mp4` first on
@@ -314,7 +324,7 @@ async function confirmWholeFiles(
   named: Candidate[],
   peeked: Set<string>,
   bodies: Map<string, string>,
-): Promise<boolean> {
+): Promise<string | null> {
   const files = named.filter((candidate) => WHOLE_FILE_URL.test(candidate.url) && !peeked.has(candidate.url))
   for (const candidate of files.slice(0, PEEKS_PER_POLL)) {
     peeked.add(candidate.url)
@@ -322,12 +332,12 @@ async function confirmWholeFiles(
       const response = await capture.peek(candidate)
       const ok = response.status === 200 || response.status === 206
       if (ok) bodies.set(candidate.url, response.body)
-      if (ok && !/^text\/html/i.test(response.contentType.trim())) return true
+      if (ok && !/^text\/html/i.test(response.contentType.trim())) return response.contentType
     } catch {
       // Unreachable or refused: not proof of anything, so not a stream yet.
     }
   }
-  return false
+  return null
 }
 
 /**
@@ -343,7 +353,7 @@ async function peekForMedia(
   candidates: Candidate[],
   peeked: Set<string>,
   bodies: Map<string, string>,
-): Promise<boolean> {
+): Promise<StreamDelivery | null> {
   // Clamped at zero: `confirmWholeFiles` shares `peeked` without this cap, so
   // it can already be past it — and a negative end would make `slice` keep
   // all but the last few candidates rather than none.
@@ -359,12 +369,16 @@ async function peekForMedia(
       const response = await capture.peek(candidate)
       const ok = response.status === 200 || response.status === 206
       if (ok) bodies.set(candidate.url, response.body)
-      if (ok && isMediaResponse(response.contentType, response.body)) return true
+      if (ok && isMediaResponse(response.contentType, response.body)) {
+        // A playlist says what it is; a bare media response could be a
+        // segment or a whole file, and one peek cannot tell which.
+        return isPlaylistBody(response.body) ? 'segmented' : 'unknown'
+      }
     } catch {
       // Expired, unreachable or refused. The next candidate may still answer.
     }
   }
-  return false
+  return null
 }
 
 /**
@@ -392,7 +406,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   } catch {
     // No session at all: the plugin is missing (the browser preview harness)
     // or refused. That says nothing about the provider.
-    return { verdict: 'unsure', ms: null, quality: null, reason: null }
+    return { verdict: 'unsure', ms: null, quality: null, reason: null, delivery: null }
   }
 
   /** Every request the session has logged, oldest first. */
@@ -426,13 +440,15 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
    * carries a time, so a stream is dated by the request that proved it, not
    * by the poll that noticed.
    */
-  const streamProvenAt = async (playingAtMs: number | null): Promise<number | null> => {
+  const streamProven = async (playingAtMs: number | null): Promise<{ at: number; delivery: StreamDelivery } | null> => {
     const named = requests.filter((request) => isMediaRequest(request.url))
     const firstNamed = named.find((request) => !WHOLE_FILE_URL.test(request.url))
-    if (firstNamed) return firstNamed.atMs
-    if (playingAtMs !== null) return playingAtMs
-    if (await confirmWholeFiles(named, peeked, bodies)) return Date.now()
-    if (await peekForMedia(candidates(), peeked, bodies)) return Date.now()
+    if (firstNamed) return { at: firstNamed.atMs, delivery: 'segmented' }
+    if (playingAtMs !== null) return { at: playingAtMs, delivery: 'unknown' }
+    const fileType = await confirmWholeFiles(named, peeked, bodies)
+    if (fileType !== null) return { at: Date.now(), delivery: wholeFileDelivery(fileType) }
+    const opaque = await peekForMedia(candidates(), peeked, bodies)
+    if (opaque !== null) return { at: Date.now(), delivery: opaque }
     return null
   }
 
@@ -444,15 +460,21 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
       if (!open || gone) {
         // The renderer went, and took the provider with it. A crash is not a
         // verdict on the provider's catalogue, so amber, with nothing to add.
-        return { verdict: 'unsure', ms: null, quality: null, reason: null }
+        return { verdict: 'unsure', ms: null, quality: null, reason: null, delivery: null }
       }
       // The document failed in a way no waiting changes; nothing will follow.
       if (documentError && documentFailedForGood(documentError)) break
 
-      const provenAt = await streamProvenAt(playingAtMs)
-      if (provenAt !== null) {
-        const ms = Math.max(0, provenAt - session.openedAtMs)
-        return { verdict: 'stream', ms, quality: await readQuality(bodies, latestCandidates), reason: null }
+      const proven = await streamProven(playingAtMs)
+      if (proven !== null) {
+        const ms = Math.max(0, proven.at - session.openedAtMs)
+        return {
+          verdict: 'stream',
+          ms,
+          quality: await readQuality(bodies, latestCandidates),
+          reason: null,
+          delivery: proven.delivery,
+        }
       }
 
       const elapsed = Date.now() - startedAt
@@ -464,7 +486,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
     }
 
     const judged = judgeMissedStream({ documentError, lastRequestAtMs, endedAtMs: Date.now(), budgetMs })
-    return { verdict: judged.verdict, ms: null, quality: null, reason: judged.reason }
+    return { verdict: judged.verdict, ms: null, quality: null, reason: judged.reason, delivery: null }
   } finally {
     await session.close().catch(() => {})
   }

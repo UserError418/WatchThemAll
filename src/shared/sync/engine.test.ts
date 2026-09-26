@@ -50,6 +50,7 @@ function doc(deviceId: string, titles: string[] = []): StoreDocument {
     favouriteProviderIds: [],
     providerOrder: [],
     providerScans: [],
+    sharedScans: [],
     settings: { ...DEFAULT_SETTINGS },
   }
 }

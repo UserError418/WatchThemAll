@@ -42,6 +42,7 @@ function emptyDoc(deviceId: string): StoreDocument {
     favouriteProviderIds: [],
     providerOrder: [],
     providerScans: [],
+    sharedScans: [],
     settings: { ...DEFAULT_SETTINGS },
   }
 }
@@ -558,5 +559,26 @@ describe('ratings on the 1–10 scale', () => {
     for (const merged of [mergeDocuments(local, remote), mergeDocuments(remote, local)]) {
       expect(merged.ratings).toEqual([remote.ratings[0]])
     }
+  })
+})
+
+describe('test results across devices', () => {
+  it("files the peer's own results as shared and leaves this device's untouched", () => {
+    const at = Date.now()
+    const local: StoreDocument = {
+      ...emptyDoc('phone-1'),
+      deviceKind: 'phone',
+      providerScans: [{ titleKey: 'tv:tt1', at, verdicts: { a: 'dead' } }],
+    }
+    const remote: StoreDocument = {
+      ...emptyDoc('pc-1'),
+      deviceKind: 'desktop',
+      providerScans: [{ titleKey: 'tv:tt1', at, verdicts: { a: 'stream' } }],
+    }
+    const merged = mergeDocuments(local, remote)
+    // Never overwritten by a peer: a red here stays this device's own answer.
+    expect(merged.providerScans).toEqual(local.providerScans)
+    expect(merged.deviceKind).toBe('phone')
+    expect(merged.sharedScans).toEqual([{ ...remote.providerScans[0], deviceId: 'pc-1', deviceKind: 'desktop' }])
   })
 })

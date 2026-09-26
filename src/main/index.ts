@@ -33,7 +33,6 @@ import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
 import {
   defaultProviderOrder,
-  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -41,11 +40,11 @@ import {
   titleKey,
 } from './outcomes'
 import {
-  freshScan,
   pruneScans,
   recordScan,
   resumeFirst,
   scanAwareOrder,
+  titleResults,
   type AutomaticOrder,
 } from './providerscan'
 import { createScanService } from './scanservice'
@@ -341,11 +340,8 @@ function openPlayer(
       found working for this title. Read at the moment of the offer, from the
       same results the source pickers show.
     */
-    testedWorking: (providerId) => {
-      const { providerScans, streamOutcomes } = store.read()
-      const key = titleKey(context)
-      return freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))?.verdicts[providerId] === 'stream'
-    },
+    testedWorking: (providerId) =>
+      titleResults(store.read(), titleKey(context), 'desktop').scan?.verdicts[providerId] === 'stream',
     // Where this was left last time; the view only acts on it if the provider
     // has not restored the position itself.
     resumeAt: savedPositionFor(context),
@@ -665,10 +661,11 @@ function enabledProviders(): Provider[] {
  * that were measured dead a minute ago.
  */
 function automaticOrderFor(req: TitleRef): AutomaticOrder {
-  const { streamOutcomes, favouriteProviderIds, providerScans, settings } = store.read()
+  const doc = store.read()
+  const { streamOutcomes, favouriteProviderIds, settings } = doc
   const key = titleKey(req)
   const outcomes = outcomesForTitle(streamOutcomes, key)
-  const scan = freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))
+  const { scan } = titleResults(doc, key, 'desktop')
   const ordered = scanAwareOrder(enabledProviders(), outcomes, {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
@@ -879,6 +876,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       acceptSuggestion: () => player?.acceptSuggestion() ?? false,
       reloadPlayer: () => player?.reload(),
       setPlayerMuted: (muted) => player?.setMuted(muted),
+      pressPlay: async () => player?.pressPlay(),
       cast,
       castNowPlaying: () => {
         if (!player) return null
@@ -894,6 +892,8 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
           // Cast during playback, and the saved point is however far back the
           // last write was.
           startSeconds: player.position()?.seconds ?? 0,
+          titleKey: titleKey(context),
+          providerId: provider?.id ?? null,
         }
       },
       checkReleases,

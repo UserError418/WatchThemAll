@@ -24,7 +24,7 @@
  */
 
 import type { ProbeVerdict, ResumeSource, TitleOutcome } from './ipc'
-import type { ScanReason, SourceSortKey } from './types'
+import type { DeviceKind, ScanReason, SourceSortKey } from './types'
 import { describeReason } from './scanreason'
 
 /**
@@ -151,6 +151,20 @@ export function providerDot(
     default:
       return UNKNOWN
   }
+}
+
+/**
+ * How both pickers credit a result measured on another of the user's devices.
+ *
+ * Appended to the row's label, as the timing is: " · works · 3.8 s · on your
+ * computer". The result is honest either way — only good news crosses (see
+ * `scanshare.ts`) — but a green this device never measured should say whose
+ * it is, or the list claims a measurement that did not happen here.
+ */
+export function sharedLabel(from: DeviceKind | undefined): string {
+  if (from === 'desktop') return ' · on your computer'
+  if (from === 'phone') return ' · on your phone'
+  return ''
 }
 
 /**

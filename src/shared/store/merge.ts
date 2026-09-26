@@ -49,6 +49,7 @@
  */
 
 import type { EpisodeMark, EpisodeStub, PreferenceKey, StoreShape, Synced } from '../types'
+import { mergeSharedScans } from '../scanshare'
 import {
   COLLECTION_KEYS,
   PREFERENCE_KEYS,
@@ -325,6 +326,10 @@ export function mergeDocuments(local: StoreDocument, remote: StoreDocument): Sto
     ...mergePreferences(local, remote),
     schemaVersion: Math.max(local.schemaVersion, remote.schemaVersion),
     deviceId: local.deviceId,
+    // `providerScans` and `deviceKind` stay local through the spread above:
+    // they are this install's own. What the peer measured is filed apart,
+    // to be read by the stricter rule in `scanshare.ts`.
+    sharedScans: mergeSharedScans(local, remote),
   } as StoreDocument
 
   // Written through an untyped view because the key is only known at runtime;

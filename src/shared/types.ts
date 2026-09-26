@@ -573,20 +573,41 @@ export interface StoreShape {
    */
   providerOrder: string[]
   /**
-   * The most recent background scan of each title, newest last.
+   * This device's own test results, one row per title, newest last.
    *
-   * Deliberately **not** a synced collection, and that is the whole design
-   * decision. A scan measures what this device's network could reach at one
-   * moment; it is not a fact about the title the way a watchlist entry or a
-   * recorded play is. Syncing it would let a phone on a hotel wifi mark six
-   * providers dead on the desktop at home, which is exactly backwards — and
-   * because `mergeDocuments` spreads `...local` first, a field that is in
-   * neither `COLLECTIONS` nor `PREFERENCE_KEYS` survives a merge untouched
-   * rather than being dropped.
+   * **Not** a synced collection. A red measures what this device's network and
+   * engine could reach at one moment; taken as a fact about the title, a phone
+   * on a hotel wifi would mark six providers dead on the desktop at home. So a
+   * merge keeps the local rows as they are (`mergeDocuments` spreads
+   * `...local`), and the other devices' rows travel separately, in
+   * `sharedScans`, to be read by a stricter rule.
    *
    * Pruned per provider as results are stored: see `RESULT_TTL_MS`.
    */
   providerScans: ProviderScan[]
+  /**
+   * The user's other devices' test results, as each last published them.
+   *
+   * Agreed with the owner 2026-09-26: only good news crosses devices. A green
+   * from elsewhere fills a gap here, and castability travels; a red never
+   * does, and this device's own newer result always wins. That rule is applied
+   * when the results are read (`shared/scanshare.ts`), not when they are
+   * stored — see `SharedScan` for why.
+   *
+   * Filled by the sync merge from what a peer uploaded: its own
+   * `providerScans`, and what it had in turn from others.
+   */
+  sharedScans: SharedScan[]
+  /**
+   * What kind of device this document lives on, set on every load and never
+   * merged — like `deviceId`, it describes the install, not the library.
+   *
+   * It travels in the synced file so a peer knows how to read the results that
+   * come with it. Optional because documents written before it existed have
+   * none, and a peer that cannot tell imports nothing from them rather than
+   * guessing.
+   */
+  deviceKind?: DeviceKind
   settings: Settings
 }
 
@@ -681,6 +702,53 @@ export type ProbeVerdict =
   | 'dead'
 
 /**
+ * How a provider's video reached the player — the fact casting depends on.
+ *
+ * A plain Chromecast running the Default Media Receiver plays one whole MP4 or
+ * WebM file and refuses HLS before it fetches a byte (measured 2026-09-13; see
+ * `docs/internal/casting.md`). Which of the two a provider hands out is not a
+ * fixed property of the provider: VidSrc gave a whole file on 2026-09-13 and a
+ * playlist on 2026-09-26, and VidLux gives an MP4 for one title and a playlist
+ * for another. So it is measured per title, by every test, and stored as what
+ * was *seen* rather than as "castable" — the receiver's rule is applied when
+ * it is read (`shared/castability.ts`), so a receiver that plays more would
+ * need no re-testing.
+ */
+export type StreamDelivery =
+  /** One whole MP4 or WebM file. What a plain Chromecast plays. */
+  | 'progressive'
+  /** An HLS or DASH playlist and its pieces. What a plain Chromecast refuses. */
+  | 'segmented'
+  /** One whole file in another container, such as ScreenScape's MKV. The app does not hand these to a TV. */
+  | 'other'
+  /**
+   * It streamed, but the test could not see how: the page reported a video
+   * playing, and nothing in the traffic says what fed it. Stored rather than
+   * left absent, because absent means "tested before this was recorded", which
+   * is due for a new test — and this one would be due forever.
+   */
+  | 'unknown'
+
+/**
+ * What happened when a provider's stream was put on a television.
+ *
+ * Stronger evidence than `StreamDelivery`, which predicts; this is the
+ * receiver's own answer. `refused` covers the case the prediction cannot see,
+ * such as a whole MP4 whose codec the receiver does not decode.
+ */
+export type CastOutcome = 'played' | 'refused'
+
+/**
+ * Which kind of device measured something.
+ *
+ * Their tests do not mean the same thing. The desktop calls a source working
+ * when video arrives; the phone accepts a playlist alone, and runs in an
+ * Android WebView that some providers refuse outright. That difference decides
+ * how a result from one reads on the other — see `shared/scanshare.ts`.
+ */
+export type DeviceKind = 'desktop' | 'phone'
+
+/**
  * Why a provider did not stream, in terms the user can act on.
  *
  * The verdict alone said "may work" or "no stream" whatever had happened, and
@@ -747,6 +815,36 @@ export interface ProviderScan {
    * `streamquality.ts`. Absent for a provider means unknown, not low.
    */
   qualities?: Record<string, number>
+  /**
+   * How each streaming provider's video arrived. Only providers whose verdict
+   * is `stream` have one.
+   *
+   * Absent for results stored before it existed, and that absence is
+   * meaningful: the background tester treats a green without it as due for a
+   * new test (`isRetestDue`), which is how the stored results learn it.
+   */
+  delivery?: Record<string, StreamDelivery>
+  /**
+   * What the television said when each provider was cast. Written by a real
+   * cast, not by a test, and replaced like every other detail when the
+   * provider is next measured.
+   */
+  casts?: Record<string, CastOutcome>
+}
+
+/**
+ * Test results from another of the user's devices, as it last published them.
+ *
+ * The same shape as the device's own row for the title, whole — reds and
+ * ambers included — with where it came from. Stored faithfully and filtered
+ * when read, not on the way in: a row replaced wholesale by that device's
+ * newer one is how a source it has since found dead stops being reported as
+ * working here, and a filtered copy would keep the old green forever.
+ */
+export interface SharedScan extends ProviderScan {
+  /** The install that measured it — `StoreShape.deviceId` over there. */
+  deviceId: string
+  deviceKind: DeviceKind
 }
 
 /**

@@ -29,7 +29,7 @@
  * `read()` several times per keystroke.
  */
 
-import type { ProviderScan, Settings } from '../types'
+import type { DeviceKind, ProviderScan, Settings } from '../types'
 import {
   COLLECTION_KEYS,
   PREFERENCE_KEYS,
@@ -113,6 +113,7 @@ export function emptyDocument(deviceId = newDeviceId()): StoreDocument {
     favouriteProviderIds: [],
     providerOrder: [],
     providerScans: [],
+    sharedScans: [],
     settings: { ...DEFAULT_SETTINGS },
   }
 }
@@ -192,9 +193,16 @@ export class StoreCore {
   private writing: Promise<void> = Promise.resolve()
   private loaded = false
 
+  /**
+   * @param deviceKind What this install is. Stamped on the document at every
+   *   load rather than stored once, because it is a fact about the install:
+   *   a library restored from another device's backup must not keep calling
+   *   itself a phone. See `StoreShape.deviceKind`.
+   */
   constructor(
     private readonly persistence: StorePersistence,
     private readonly migrate: (raw: unknown) => StoreDocument,
+    private readonly deviceKind: DeviceKind,
   ) {}
 
   /**
@@ -213,7 +221,7 @@ export class StoreCore {
     }
 
     if (text === null) {
-      this.doc = emptyDocument()
+      this.doc = { ...emptyDocument(), deviceKind: this.deviceKind }
       this.invalidate()
       await this.flush()
       return
@@ -225,6 +233,7 @@ export class StoreCore {
       await this.persistence.quarantine().catch(() => {})
       this.doc = emptyDocument()
     }
+    this.doc.deviceKind = this.deviceKind
     this.invalidate()
   }
 
@@ -452,7 +461,8 @@ export class StoreCore {
    * expensive in a way an ordinary toggle is not.
    */
   async replaceDocument(next: StoreDocument): Promise<void> {
-    this.doc = keepTombstones(this.doc, next)
+    // An imported backup may come from the other kind of device.
+    this.doc = { ...keepTombstones(this.doc, next), deviceKind: this.deviceKind }
     this.invalidate()
     this.notify()
     await this.flush()

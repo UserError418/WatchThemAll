@@ -34,6 +34,7 @@
 import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle, isPlaylist, isWholeVideoFile } from '@main/hlsrewrite'
+import { isCastableFileType } from '@shared/castability'
 
 /** One request the player made, as the native side recorded it. */
 export interface Candidate {
@@ -182,7 +183,6 @@ export const PEEK_LIMIT_BYTES = 16 * 1024
 const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
 
 /** Content types that are worth casting without being a playlist. */
-const PROGRESSIVE_TYPES = ['video/mp4', 'video/webm']
 
 /**
  * Headers we replay upstream, minus the ones that must not be.
@@ -256,15 +256,28 @@ async function identifyStream(candidates: Candidate[]): Promise<Identified | nul
       continue
     }
 
-    const type = response.contentType.toLowerCase()
-    if (
-      PROGRESSIVE_TYPES.some((known) => type.startsWith(known)) &&
-      isWholeVideoFile(response.body)
-    ) {
+    // The same test a scan uses to record `progressive`; see `castability.ts`.
+    if (isCastableFileType(response.contentType) && isWholeVideoFile(response.body)) {
       return { url: candidate.url, headers, kind: 'progressive' }
     }
   }
   return playlist
+}
+
+/**
+ * What a beam did, and how the stream it found arrived.
+ *
+ * Unlike the desktop's, this carries no verdict from the television: the
+ * native `loadMedia` resolves once the request is sent and never waits for
+ * the receiver's answer, so a refusal is not visible here. `delivery` is —
+ * it comes from fetching what the player really fetched.
+ */
+export interface PhoneBeamResult {
+  ok: boolean
+  error?: string
+  providerName?: string
+  /** Absent when no stream was identified. */
+  delivery?: 'progressive' | 'segmented'
 }
 
 /** What the cast needs to know about what is on screen. */
@@ -283,7 +296,7 @@ export interface CastBridge {
   devices(): Promise<CastDevice[]>
   connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
   disconnect(): Promise<void>
-  beam(now: NowPlaying): Promise<{ ok: boolean; error?: string; providerName?: string }>
+  beam(now: NowPlaying): Promise<PhoneBeamResult>
   status(): Promise<CastStatus>
   control(action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number): Promise<void>
   /** The receiver's own volume, 0–1. See `CastStatus.volume`. */
@@ -327,7 +340,9 @@ export function createCastBridge(): CastBridge {
 
     disconnect: () => Cast.disconnect(),
 
-    async beam(now: NowPlaying): Promise<{ ok: boolean; error?: string; providerName?: string }> {
+    async beam(now: NowPlaying): Promise<PhoneBeamResult> {
+      /** How the identified stream arrived, once there is one. */
+      let delivery: PhoneBeamResult['delivery']
       try {
         const { candidates } = await Cast.candidates()
         if (candidates.length === 0) {
@@ -342,6 +357,7 @@ export function createCastBridge(): CastBridge {
           }
         }
 
+        delivery = stream.kind === 'hls' ? 'segmented' : 'progressive'
         const bundle = await buildCastBundle(stream.url, stream.kind === 'hls' ? 'hls' : 'progressive', async (url) => {
           const response = await Cast.fetchText({ url, headers: stream.headers, limitBytes: SNIFF_LIMIT_BYTES })
           if (response.status !== 200 && response.status !== 206) {
@@ -366,7 +382,7 @@ export function createCastBridge(): CastBridge {
           startSeconds: now.startSeconds,
         })
 
-        return { ok: true, providerName: now.providerName }
+        return { ok: true, providerName: now.providerName, delivery }
       } catch (error) {
         // The proxy must not outlive a failed attempt: it would sit on the
         // network serving a stream nothing is watching.
@@ -375,7 +391,7 @@ export function createCastBridge(): CastBridge {
         } catch {
           // Already down, which is the state we wanted.
         }
-        return { ok: false, error: messageOf(error) }
+        return { ok: false, error: messageOf(error), delivery }
       }
     },
 

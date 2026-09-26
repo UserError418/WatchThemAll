@@ -67,7 +67,7 @@
    */
   import { flip } from 'svelte/animate'
   import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
-  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote } from '@shared/scanrank'
+  import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote, sharedLabel } from '@shared/scanrank'
   import { library } from '../lib/library.svelte'
   import { DUR_MID, duration, menuIn, menuOut } from '../lib/motion'
   import { scan } from '../lib/scan.svelte'
@@ -102,6 +102,8 @@
     outcomes: {},
     resume: null,
     scan: null,
+    sharedFrom: {},
+    castability: {},
     order: [],
   })
 
@@ -182,12 +184,16 @@
    * is poor.
    */
   function measurement(id: string): string {
-    if (verdicts[id] !== 'stream') return ''
+    // Credit a result another of the user's devices measured — not during a
+    // live run here, whose results are all this device's. See `sharedLabel`.
+    const shared = scan.matches(media) ? '' : sharedLabel(sourceState.sharedFrom[id])
+    if (verdicts[id] !== 'stream') return shared
     const ms = timings[id]
     const quality = qualities[id]
     return (
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
-      (quality !== undefined ? ` · ${formatQuality(quality)}` : '')
+      (quality !== undefined ? ` · ${formatQuality(quality)}` : '') +
+      shared
     )
   }
 

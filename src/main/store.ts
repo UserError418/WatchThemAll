@@ -60,7 +60,7 @@ export class Store extends StoreCore {
 
   constructor(dir = join(app.getPath('userData'), 'data')) {
     const file = join(dir, 'watchthemall.json')
-    super(new NodePersistence(dir, file), migrate)
+    super(new NodePersistence(dir, file), migrate, 'desktop')
     this.dir = dir
     this.file = file
   }

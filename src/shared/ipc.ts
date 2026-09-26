@@ -10,7 +10,9 @@
  * of UI silently did nothing. A shared contract makes that a compile error.
  */
 
+import type { Castability } from './castability'
 import type {
+  DeviceKind,
   EpisodeStub,
   MediaDetail,
   MediaSummary,
@@ -20,6 +22,7 @@ import type {
   ProviderScan,
   ScanReason,
   Season,
+  StreamDelivery,
   StoreShape,
   StorePatch,
 } from './types'
@@ -520,6 +523,8 @@ export interface ProviderScanProgress {
   qualities: Record<string, number>
   /** Why each settled provider that did not stream failed. See `ProviderScan.reasons`. */
   reasons: Record<string, ScanReason>
+  /** How each streaming provider's video arrived, so the cast list fills in live. See `ProviderScan.delivery`. */
+  delivery: Record<string, StreamDelivery>
   /** True once every provider has resolved or the user cancelled. */
   finished: boolean
   /** Set when the user stopped it, so the UI can say so rather than claim a result. */
@@ -578,8 +583,22 @@ export interface TitleProviderState {
    * different instants. Null when the title has never been tested. Results
    * older than `RESULT_TTL_MS`, and red or amber ones overtaken by a real play,
    * are left out rather than shown faded — see `freshScan`.
+   *
+   * Includes the user's other devices' good news, read by the rule in
+   * `scanshare.ts`; `sharedFrom` says which entries those are.
    */
   scan: ProviderScan | null
+  /**
+   * The providers whose result in `scan` was measured on another device, and
+   * which kind — so a picker can say "tested on your computer" rather than
+   * pass another device's measurement off as this one's.
+   */
+  sharedFrom: Record<string, DeviceKind>
+  /**
+   * Whether each enabled provider can put this title on a television — see
+   * `shared/castability.ts`. What the cast list is built from.
+   */
+  castability: Record<string, Castability>
   /**
    * The enabled providers' ids in the order Automatic would try them for this
    * title: measured and proven sources first, dead ones last, favourites and
@@ -1082,7 +1101,15 @@ export interface WtaChromeApi {
     devices(): Promise<CastDevice[]>
     connect(deviceId: string): Promise<{ ok: boolean; error?: string }>
     disconnect(): Promise<void>
-    beam(): Promise<{ ok: boolean; error?: string }>
+    /**
+     * Send what the player is playing to the connected television.
+     *
+     * `final` marks a failure that asking again will not change: a stream was
+     * found and the television could not take it. Without it a caller that
+     * retries while the source is still loading would keep reloading the TV
+     * with a playlist it has already refused.
+     */
+    beam(): Promise<{ ok: boolean; error?: string; final?: boolean }>
     status(): Promise<CastStatus>
     /**
      * Transport for the television.

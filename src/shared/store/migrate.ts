@@ -18,7 +18,17 @@
  *   metadata that makes two copies mergeable. See `document.ts`.
  */
 
-import type { ProbeVerdict, ProviderScan, StoreShape, TitleRating } from '../types'
+import type {
+  CastOutcome,
+  DeviceKind,
+  ProbeVerdict,
+  ProviderScan,
+  ScanReason,
+  SharedScan,
+  StoreShape,
+  StreamDelivery,
+  TitleRating,
+} from '../types'
 import { isLegacyRating, isRatingValue, legacyRatingOf, valueOfLegacy } from '../rating'
 import { SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
@@ -166,6 +176,11 @@ function fromTyped(
   doc.providerOrder = stringList(raw.providerOrder)
 
   doc.providerScans = providerScans(raw.providerScans)
+  doc.sharedScans = sharedScans(raw.sharedScans)
+  // Kept through a migration because a *pulled* document is migrated too, and
+  // the merge needs to know what kind of device wrote it. The store sets its
+  // own on every load.
+  if (isDeviceKind(raw.deviceKind)) doc.deviceKind = raw.deviceKind
 
   if (raw.preferenceUpdatedAt && typeof raw.preferenceUpdatedAt === 'object') {
     doc.preferenceUpdatedAt = { ...(raw.preferenceUpdatedAt as Record<string, number>) }
@@ -343,8 +358,85 @@ function providerScans(value: unknown): ProviderScan[] {
         }
       }
     }
-    return [{ titleKey: scan.titleKey, at, verdicts, timings, qualities }]
+
+    /*
+     * When each provider was tested, and why the failures failed.
+     *
+     * Both were dropped here, on every load, from the day they were added
+     * until 2026-09-26: this function was not updated with the type. After a
+     * restart every provider in a row read as tested at the row's newest time
+     * — so a red from five days ago looked fresh and its re-test was put off
+     * for days — and every failure lost its reason.
+     */
+    const testedAt: Record<string, number> = {}
+    for (const [id, value] of entriesOf(scan.testedAt)) {
+      const when = timestamp(value)
+      if (id in verdicts && when !== null) testedAt[id] = when
+    }
+    const reasons: Record<string, ScanReason> = {}
+    for (const [id, value] of entriesOf(scan.reasons)) {
+      if (verdicts[id] !== undefined && verdicts[id] !== 'stream' && isScanReason(value)) reasons[id] = value
+    }
+
+    // How the video arrived, and what a television made of it: facts about a
+    // stream, so only beside a verdict that says there was one.
+    const delivery: Record<string, StreamDelivery> = {}
+    for (const [id, value] of entriesOf(scan.delivery)) {
+      if (verdicts[id] === 'stream' && STREAM_DELIVERIES.has(value as StreamDelivery)) delivery[id] = value as StreamDelivery
+    }
+    const casts: Record<string, CastOutcome> = {}
+    for (const [id, value] of entriesOf(scan.casts)) {
+      if (verdicts[id] === 'stream' && (value === 'played' || value === 'refused')) casts[id] = value
+    }
+
+    return [{ titleKey: scan.titleKey, at, verdicts, testedAt, timings, qualities, reasons, delivery, casts }]
   })
+}
+
+/**
+ * Other devices' results: the same rows, each with the device it came from.
+ * A row whose origin cannot be read is dropped — the rule for reading it
+ * depends on which kind of device measured it.
+ */
+function sharedScans(value: unknown): SharedScan[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry): SharedScan[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const { deviceId, deviceKind } = entry as Record<string, unknown>
+    if (typeof deviceId !== 'string' || !isDeviceKind(deviceKind)) return []
+    return providerScans([entry]).map((row) => ({ ...row, deviceId, deviceKind }))
+  })
+}
+
+const STREAM_DELIVERIES = new Set<StreamDelivery>(['progressive', 'segmented', 'other', 'unknown'])
+
+function isDeviceKind(value: unknown): value is DeviceKind {
+  return value === 'desktop' || value === 'phone'
+}
+
+function entriesOf(value: unknown): [string, unknown][] {
+  return value && typeof value === 'object' ? Object.entries(value as Record<string, unknown>) : []
+}
+
+/** Whether a stored value is one of `ScanReason`'s shapes, with the number its kind carries. */
+function isScanReason(value: unknown): value is ScanReason {
+  if (!value || typeof value !== 'object') return false
+  const reason = value as Record<string, unknown>
+  const count = (key: string): boolean => typeof reason[key] === 'number' && Number.isFinite(reason[key])
+  switch (reason.kind) {
+    case 'error':
+    case 'refused':
+      return count('status')
+    case 'timeout':
+      return count('seconds')
+    case 'blocked':
+    case 'no-stream':
+    case 'unreachable':
+    case 'unsupported':
+      return true
+    default:
+      return false
+  }
 }
 
 /** Version 0 — the extension's `vidsrc_*` keys. */

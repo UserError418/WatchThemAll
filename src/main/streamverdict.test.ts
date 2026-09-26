@@ -22,6 +22,7 @@ function observed(over: Partial<StreamProbeResult> = {}): StreamProbeResult {
     requestCount: 40,
     mediaSamples: [],
     videoArrived: false,
+    delivery: null,
     refusedSegments: [],
     stillLoading: false,
     apiErrors: [],

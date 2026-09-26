@@ -51,22 +51,20 @@
  * and the `lint-imports` contract that guards it.
  */
 
-import type { Provider, SourceSortKey } from '@shared/types'
+import type { CastOutcome, DeviceKind, Provider, SourceSortKey, StoreShape, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
-
-const DAY_MS = 24 * 60 * 60 * 1000
+import { MAX_SCANS, RESULT_TTL_MS, testedAtOf } from '@shared/scanrow'
+import { withSharedResults, type TitleResults } from '@shared/scanshare'
+import { lastPlayedAt } from './outcomes'
 
 /**
- * How long a test result is shown and used at all: thirty days.
- *
- * It was six hours, on the belief that these providers change by the hour.
- * Months of real use say they do not, and the owner set thirty days on
- * 2026-09-26. What keeps a month-old result honest is not expiry but
- * re-testing, below — and a real play, which overrides an older red or amber
- * (see `freshScan`).
+ * Moved to `shared/scanrow.ts` so the sync merge can reach them; re-exported so
+ * this stays the one module a caller needs for test results.
  */
-export const RESULT_TTL_MS = 30 * DAY_MS
+export { MAX_SCANS, RESULT_TTL_MS, testedAtOf }
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
  * When the background tester tests a provider again, by what it found last.
@@ -80,23 +78,6 @@ export const RETEST_AFTER_MS: Record<ProbeVerdict, number> = {
   dead: 3 * DAY_MS,
   unsure: 4 * DAY_MS,
   stream: RESULT_TTL_MS,
-}
-
-/**
- * How many titles' results to keep.
- *
- * Bounded for the same reason the outcome log is: this is written on every test
- * and read on every ranking. Least recently updated go first. Two hundred
- * covers a long watchlist plus a month of titles scanned by hand, and stays
- * cheap to search linearly.
- */
-export const MAX_SCANS = 200
-
-/** When one provider in a row was tested, or null if it never was. */
-export function testedAtOf(scan: ProviderScan, providerId: string): number | null {
-  if (!(providerId in scan.verdicts)) return null
-  // Rows stored before per-provider times existed were all tested at `at`.
-  return scan.testedAt?.[providerId] ?? scan.at
 }
 
 /**
@@ -119,18 +100,29 @@ function keepProviders(
   return Object.keys(out.verdicts).length > 0 ? out : null
 }
 
-/** Move one provider's timing, quality and reason from `from` to `to`, or clear them there. */
+/**
+ * Move one provider's details — timing, quality, reason, how its video arrived
+ * and what a television made of it — from `from` to `to`, or clear them there.
+ *
+ * All or nothing per provider: a new measurement replaces everything the old
+ * one said about that provider, so a detail it did not produce is removed
+ * rather than left standing beside a result it no longer describes.
+ */
 function copyDetails(from: ProviderScan, to: ProviderScan, id: string): void {
-  const timing = from.timings?.[id]
-  const quality = from.qualities?.[id]
-  const reason = from.reasons?.[id]
-  if (timing !== undefined) (to.timings ??= {})[id] = timing
-  else if (to.timings) delete to.timings[id]
-  if (quality !== undefined) (to.qualities ??= {})[id] = quality
-  else if (to.qualities) delete to.qualities[id]
-  if (reason !== undefined) (to.reasons ??= {})[id] = reason
-  else if (to.reasons) delete to.reasons[id]
+  // The maps hold different value types, which one loop can only see as unknown.
+  const source = from as Details
+  const target = to as Details
+  for (const key of DETAIL_KEYS) {
+    const value = source[key]?.[id]
+    if (value !== undefined) (target[key] ??= {})[id] = value
+    else delete target[key]?.[id]
+  }
 }
+
+/** Every per-provider detail a row can carry besides the verdict and its time. */
+const DETAIL_KEYS = ['timings', 'qualities', 'reasons', 'delivery', 'casts'] as const
+
+type Details = Partial<Record<(typeof DETAIL_KEYS)[number], Record<string, unknown>>>
 
 /**
  * What is still worth believing about one title, or null if nothing is.
@@ -162,6 +154,27 @@ export function freshScan(
 }
 
 /**
+ * One title's results as this device reads them: its own fresh ones, with the
+ * user's other devices' good news folded in (the rule is `scanshare.ts`'s).
+ *
+ * Everything that acts on test results reads them through this — Automatic's
+ * order, the pickers' dots, the resume rule, the player's switch offer — so
+ * a green that came from the desktop means the same thing in all of them.
+ * Only the background tester reads the device's own rows alone: what it
+ * decides is what *this* device should measure next.
+ */
+export function titleResults(
+  doc: Pick<StoreShape, 'providerScans' | 'sharedScans' | 'streamOutcomes'>,
+  key: string,
+  here: DeviceKind,
+  now: number = Date.now(),
+): TitleResults {
+  const playedAt = lastPlayedAt(doc.streamOutcomes, key)
+  const own = freshScan(doc.providerScans, key, now, playedAt)
+  return withSharedResults(own, doc.sharedScans, key, here, now, playedAt)
+}
+
+/**
  * Store test results for one title, merged into what is already known.
  *
  * Merged per provider, not replaced. This used to replace the whole row,
@@ -190,6 +203,8 @@ export function recordScan(
         timings: { ...previous.timings },
         qualities: { ...previous.qualities },
         reasons: { ...previous.reasons },
+        delivery: { ...previous.delivery },
+        casts: { ...previous.casts },
       }
     : { titleKey: result.titleKey, at: 0, verdicts: {}, testedAt: {} }
 
@@ -207,17 +222,58 @@ export function recordScan(
 }
 
 /**
+ * File what a real cast found out about one source for one title.
+ *
+ * A cast that identified a stream is a measurement — the source streamed, and
+ * the stream was fetched and classified — so it is stored as one: a green
+ * verdict, tested now, with how the video arrived and, where the television
+ * answered unambiguously, what it said. Unlike a test it measured no start
+ * time and no quality, so the ones already known for the source are kept
+ * rather than cleared.
+ */
+export function recordCast(
+  scans: readonly ProviderScan[],
+  titleKey: string,
+  providerId: string,
+  learned: { delivery: StreamDelivery; outcome: CastOutcome | null },
+  now: number,
+): ProviderScan[] {
+  const previous = scans.find((entry) => entry.titleKey === titleKey)
+  const result: ProviderScan = {
+    titleKey,
+    at: now,
+    verdicts: { [providerId]: 'stream' },
+    testedAt: { [providerId]: now },
+    delivery: { [providerId]: learned.delivery },
+  }
+  const timing = previous?.verdicts[providerId] === 'stream' ? previous.timings?.[providerId] : undefined
+  const quality = previous?.verdicts[providerId] === 'stream' ? previous.qualities?.[providerId] : undefined
+  if (timing !== undefined) result.timings = { [providerId]: timing }
+  if (quality !== undefined) result.qualities = { [providerId]: quality }
+  if (learned.outcome !== null) result.casts = { [providerId]: learned.outcome }
+  return recordScan(scans, result)
+}
+
+/**
  * Whether the background tester should test this provider for this title now.
  *
  * Never tested is always due. Otherwise by `RETEST_AFTER_MS`, measured from the
  * provider's own test time — not the row's, or re-testing one red would reset
  * the clock on its neighbours.
+ *
+ * One exception: a green that does not say how its video arrived is due now.
+ * Greens were stored for a month before `delivery` existed, and without it
+ * nobody can say whether the source casts — so each is measured once more,
+ * at the tester's one-provider-a-minute pace, and never again for that
+ * reason: every test since records a delivery, `unknown` included.
  */
 export function isRetestDue(scan: ProviderScan | undefined, providerId: string, now: number): boolean {
   if (!scan) return true
   const testedAt = testedAtOf(scan, providerId)
   if (testedAt === null) return true
-  return now - testedAt >= RETEST_AFTER_MS[scan.verdicts[providerId]!]
+  const verdict = scan.verdicts[providerId]!
+  if (verdict === 'stream' && scan.delivery?.[providerId] === undefined) return true
+  return now - testedAt >= RETEST_AFTER_MS[verdict]
 }
 
 /**

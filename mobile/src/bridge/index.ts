@@ -66,7 +66,6 @@ import { buildPlayUrl } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
-  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -75,14 +74,16 @@ import {
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
 import {
-  freshScan,
   pruneScans,
+  recordCast,
   recordScan,
   resumeFirst,
   scanAwareOrder,
   scanEpisode,
+  titleResults,
   type AutomaticOrder,
 } from '@main/providerscan'
+import { castabilities } from '@shared/castability'
 import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
@@ -440,7 +441,7 @@ export async function createBridge(): Promise<WtaApi> {
    * blanked rather than closed so the chrome, the episode list and the source
    * picker all stay where they are and `restore` can bring the picture back.
    */
-  const beamToTv = async (): Promise<{ ok: boolean; error?: string; providerName?: string }> => {
+  const beamToTv = async (): Promise<{ ok: boolean; error?: string; providerName?: string; final?: boolean }> => {
     const now = nowPlaying()
     if (now === null) return { ok: false, error: 'Nothing is playing.' }
 
@@ -449,7 +450,21 @@ export async function createBridge(): Promise<WtaApi> {
       surface.blank()
       standUpright()
     }
-    return result
+    // A beam that identified a stream measured the source, succeeded or not —
+    // filed like the desktop's. No verdict from the TV: see `PhoneBeamResult`.
+    const providerId = currentPlayerState?.providerId
+    if (result.delivery && session && providerId) {
+      const learned = { delivery: result.delivery, outcome: null }
+      store.setProviderScans(
+        recordCast(pruneScans(store.read().providerScans), titleKey(session.req), providerId, learned, Date.now()),
+      )
+    }
+    return {
+      ok: result.ok,
+      error: result.error,
+      providerName: result.providerName,
+      final: !result.ok && result.delivery !== undefined,
+    }
   }
 
   /**
@@ -993,10 +1008,11 @@ export async function createBridge(): Promise<WtaApi> {
    * that draws them is shared. The same goes for `resumeFirst` after it.
    */
   const automaticOrderFor = (req: TitleRef): AutomaticOrder => {
-    const { streamOutcomes, favouriteProviderIds, providerScans, settings } = store.read()
+    const doc = store.read()
+    const { streamOutcomes, favouriteProviderIds, settings } = doc
     const key = titleKey(req)
     const outcomes = outcomesForTitle(streamOutcomes, key)
-    const scan = freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key))
+    const { scan } = titleResults(doc, key, 'phone')
     const ordered = scanAwareOrder(enabledProviders(), outcomes, {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
@@ -1017,14 +1033,19 @@ export async function createBridge(): Promise<WtaApi> {
    * so the rows read top to bottom in the order Automatic will try them.
    */
   const providerStateFor = (media: TitleRef): TitleProviderState => {
-    const { streamOutcomes, providerScans } = store.read()
+    const doc = store.read()
     const key = titleKey(media)
+    const now = Date.now()
     const automatic = automaticOrderFor(media)
+    const order = automatic.providers.map((provider) => provider.id)
+    const results = titleResults(doc, key, 'phone', now)
     return {
-      outcomes: outcomesForTitle(streamOutcomes, key),
+      outcomes: outcomesForTitle(doc.streamOutcomes, key),
       resume: automatic.resume,
-      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
-      order: automatic.providers.map((provider) => provider.id),
+      scan: results.scan,
+      sharedFrom: results.sharedFrom,
+      castability: castabilities(order, results.scan, [...doc.providerScans, ...doc.sharedScans], now),
+      order,
     }
   }
 

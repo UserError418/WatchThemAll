@@ -23,7 +23,8 @@
  */
 
 import { BrowserWindow, session, type WebContents } from 'electron'
-import type { Provider } from '@shared/types'
+import type { Provider, StreamDelivery } from '@shared/types'
+import { strongerDelivery, wholeFileDelivery } from '@shared/castability'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
@@ -76,6 +77,13 @@ export interface StreamProbeResult {
   mediaSamples: string[]
   /** Whether video itself arrived, as opposed to only a playlist. What `stream` means. */
   videoArrived: boolean
+  /**
+   * How the video arrived, as far as the traffic shows — what decides whether
+   * the source can cast (`shared/castability.ts`). Kept current as evidence
+   * arrives rather than worked out at the end, so a result cut short by the
+   * watchdog still says. Only meaningful beside `videoArrived`.
+   */
+  delivery: StreamDelivery | null
   /** Statuses of refused segments and files, up to a few — what `refused` means. */
   refusedSegments: number[]
   /** Whether the page was still making requests when the budget ran out — what `timeout` means. */
@@ -241,6 +249,7 @@ export async function probeStream(
             requestCount: 0,
             mediaSamples: [],
             videoArrived: false,
+            delivery: null,
             refusedSegments: [],
             stillLoading: false,
             apiErrors: [],
@@ -281,6 +290,7 @@ async function runProbe(
     requestCount: 0,
     mediaSamples: [],
     videoArrived: false,
+    delivery: null,
     refusedSegments: [],
     stillLoading: false,
     apiErrors: [],
@@ -423,6 +433,7 @@ async function runProbe(
 
     if (kind !== null && details.statusCode < 400) {
       if (base.mediaSamples.length < 4) base.mediaSamples.push(details.url.slice(0, 160))
+      base.delivery = strongerDelivery(base.delivery, kind === 'file' ? wholeFileDelivery(mime) : 'segmented')
       if (onMedia && !mediaReported) {
         mediaReported = true
         onMedia({ url: details.url, headers: sentHeaders.get(details.url) ?? {}, mime })
@@ -489,6 +500,9 @@ async function runProbe(
   win.webContents.on('media-started-playing', () => {
     firstMediaAt ??= Date.now()
     base.videoArrived = true
+    // Decoding with nothing in the traffic to say what fed it: MSE from a
+    // blob, a WebSocket, a service worker.
+    base.delivery = strongerDelivery(base.delivery, 'unknown')
     if (base.mediaSamples.length < 4) base.mediaSamples.push('[media element began playing]')
   })
 

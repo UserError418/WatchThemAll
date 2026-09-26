@@ -26,6 +26,7 @@ async function storeWith(document: Record<string, unknown>): Promise<StoreCore> 
       describe: async () => 'memory',
     },
     migrate,
+    'desktop',
   )
   await store.load()
   return store

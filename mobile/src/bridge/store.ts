@@ -80,6 +80,6 @@ class CapacitorPersistence implements StorePersistence {
 
 export class MobileStore extends StoreCore {
   constructor() {
-    super(new CapacitorPersistence(), migrate)
+    super(new CapacitorPersistence(), migrate, 'phone')
   }
 }

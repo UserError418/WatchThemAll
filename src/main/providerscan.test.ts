@@ -18,6 +18,7 @@ import {
   isRetestDue,
   providerRank,
   pruneScans,
+  recordCast,
   recordScan,
   resumeFirst,
   scanAwareOrder,
@@ -322,6 +323,22 @@ describe('recordScan', () => {
     expect(merged?.reasons).toEqual({ b: { kind: 'error', status: 500 } })
   })
 
+  it('treats how the video arrived and what a TV said like every other detail', () => {
+    const first: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: 1,
+      verdicts: { a: 'stream', b: 'stream' },
+      delivery: { a: 'progressive', b: 'progressive' },
+      casts: { a: 'played' },
+    }
+    // `a` re-tested and now serves a playlist; `b` untouched.
+    const second: ProviderScan = { titleKey: 'tv:tt1', at: 2, verdicts: { a: 'stream' }, delivery: { a: 'segmented' } }
+    const [merged] = recordScan([first], second)
+    expect(merged?.delivery).toEqual({ a: 'segmented', b: 'progressive' })
+    // The cast that played was of the file `a` no longer hands out.
+    expect(merged?.casts).toEqual({})
+  })
+
   it('keeps scans of other titles', () => {
     const other = { titleKey: 'movie:tt2', at: 1, verdicts: {} }
     const next = recordScan([other], { titleKey: 'tv:tt1', at: 2, verdicts: {} })
@@ -340,8 +357,20 @@ describe('recordScan', () => {
 
 describe('isRetestDue', () => {
   const now = 1_700_000_000_000
-  const at = (verdict: ProviderScan['verdicts'][string], age: number): ProviderScan =>
-    scanOf({ a: verdict }, now - age)
+  // Greens as they are recorded today, saying how their video arrived.
+  const at = (verdict: ProviderScan['verdicts'][string], age: number): ProviderScan => ({
+    ...scanOf({ a: verdict }, now - age),
+    ...(verdict === 'stream' ? { delivery: { a: 'segmented' as const } } : {}),
+  })
+
+  it('re-tests a green once when it does not say how its video arrived', () => {
+    // Stored before deliveries were recorded: nobody can say whether it casts.
+    expect(isRetestDue(scanOf({ a: 'stream' }, now - 1000), 'a', now)).toBe(true)
+    // `unknown` is an answer, so it is not due again for that reason.
+    expect(isRetestDue({ ...scanOf({ a: 'stream' }, now - 1000), delivery: { a: 'unknown' } }, 'a', now)).toBe(false)
+    // Only greens: a red has no delivery to record.
+    expect(isRetestDue(scanOf({ a: 'dead' }, now - 1000), 'a', now)).toBe(false)
+  })
 
   it('is due for a provider never tested', () => {
     expect(isRetestDue(undefined, 'a', now)).toBe(true)
@@ -454,5 +483,42 @@ describe('resumeFirst', () => {
 
   it('does nothing for a title never watched', () => {
     expect(resumeFirst(ordered, null, {}, null)).toEqual({ providers: ordered, resume: null })
+  })
+})
+
+describe('recordCast', () => {
+  const now = 1_800_000_000_000
+
+  it('files a cast as a green measured now, with what the TV said', () => {
+    const [row] = recordCast([], 'tv:tt1', 'a', { delivery: 'progressive', outcome: 'played' }, now)
+    expect(row).toMatchObject({
+      verdicts: { a: 'stream' },
+      testedAt: { a: now },
+      delivery: { a: 'progressive' },
+      casts: { a: 'played' },
+    })
+  })
+
+  it("keeps the source's measured start time and quality, which a cast does not measure", () => {
+    const tested: ProviderScan = {
+      titleKey: 'tv:tt1',
+      at: 1,
+      verdicts: { a: 'stream', b: 'dead' },
+      timings: { a: 900 },
+      qualities: { a: 1080 },
+      delivery: { a: 'progressive' },
+    }
+    const [row] = recordCast([tested], 'tv:tt1', 'a', { delivery: 'segmented', outcome: 'refused' }, now)
+    expect(row?.timings).toEqual({ a: 900 })
+    expect(row?.qualities).toEqual({ a: 1080 })
+    expect(row?.delivery).toEqual({ a: 'segmented' })
+    expect(row?.casts).toEqual({ a: 'refused' })
+    // The other sources are left as they were.
+    expect(row?.verdicts.b).toBe('dead')
+  })
+
+  it('records no outcome where the television did not answer clearly', () => {
+    const [row] = recordCast([], 'tv:tt1', 'a', { delivery: 'progressive', outcome: null }, now)
+    expect(row?.casts ?? {}).toEqual({})
   })
 })

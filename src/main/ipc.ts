@@ -35,8 +35,9 @@ import { buildPlayUrl } from './providers'
 import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
-import { lastPlayedAt, outcomesForTitle, titleKey } from './outcomes'
-import { freshScan, pruneScans, recordScan, scanEpisode, type AutomaticOrder } from './providerscan'
+import { outcomesForTitle, titleKey } from './outcomes'
+import { pruneScans, recordCast, recordScan, scanEpisode, titleResults, type AutomaticOrder } from './providerscan'
+import { castabilities } from '@shared/castability'
 import { airedEpisode, notOutYet } from '@shared/aired'
 import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
@@ -139,6 +140,8 @@ export interface IpcDeps {
    * has to keep running for the remote's next-episode button to work at all.
    */
   setPlayerMuted: (muted: boolean) => void
+  /** Click the provider's own play button, for a source that fetches nothing until pressed. */
+  pressPlay: () => Promise<void>
   /**
    * Measure every enabled provider against one title.
    *
@@ -202,16 +205,21 @@ export function registerIpc(deps: IpcDeps): void {
    * exactly when the user opens the picker to see what just happened.
    */
   ipcMain.handle(CH.providersOutcomes, (_e, media: TitleRef): TitleProviderState => {
-    const { streamOutcomes, providerScans } = store.read()
+    const doc = store.read()
     const key = titleKey(media)
+    const now = Date.now()
     // From the same store read a moment later, by the function Automatic
     // itself calls — so the rows and the fallback chain cannot disagree.
     const automatic = deps.automaticOrder(media)
+    const order = automatic.providers.map((provider) => provider.id)
+    const results = titleResults(doc, key, 'desktop', now)
     return {
-      outcomes: outcomesForTitle(streamOutcomes, key),
+      outcomes: outcomesForTitle(doc.streamOutcomes, key),
       resume: automatic.resume,
-      scan: freshScan(providerScans, key, Date.now(), lastPlayedAt(streamOutcomes, key)),
-      order: automatic.providers.map((provider) => provider.id),
+      scan: results.scan,
+      sharedFrom: results.sharedFrom,
+      castability: castabilities(order, results.scan, [...doc.providerScans, ...doc.sharedScans], now),
+      order,
     }
   })
 
@@ -335,14 +343,38 @@ export function registerIpc(deps: IpcDeps): void {
   )
   ipcMain.handle(CH.castSetVolume, (_e, level: number) => cast.setVolume(level))
   ipcMain.handle(CH.castSetMuted, (_e, muted: boolean) => cast.setMuted(muted))
+  /**
+   * When the play button was last pressed on the cast's behalf.
+   *
+   * The desktop player does not press play, and a source chosen from the cast
+   * list is loaded fresh — several fetch nothing until their overlay is
+   * clicked, so without a press the cast would wait out its whole budget and
+   * give up on a source that works. Pressed only while nothing has been
+   * fetched at all, because a press on a playing video pauses it, and no more
+   * than once per interval, because the chrome asks about once a second.
+   */
+  let pressedForCastAt = 0
+  const PRESS_FOR_CAST_EVERY_MS = 5_000
+
   ipcMain.handle(CH.castBeam, async () => {
     const now = deps.castNowPlaying()
     if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON }
     const result = await cast.beam(now)
+    if (result.waiting && Date.now() - pressedForCastAt >= PRESS_FOR_CAST_EVERY_MS) {
+      pressedForCastAt = Date.now()
+      void deps.pressPlay().catch(() => {})
+    }
     // Only on success. A failed beam leaves the user watching here, and taking
     // the sound away from that would turn one disappointment into two.
     if (result.ok) deps.setPlayerMuted(true)
-    return result
+    // Succeeded or not, a beam that identified a stream measured the source:
+    // filed, so the cast list knows it next time. See `recordCast`.
+    if (result.learned && now.titleKey && now.providerId) {
+      store.setProviderScans(
+        recordCast(pruneScans(store.read().providerScans), now.titleKey, now.providerId, result.learned, Date.now()),
+      )
+    }
+    return { ok: result.ok, error: result.error, final: !result.ok && result.learned !== undefined }
   })
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())

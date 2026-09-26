@@ -104,6 +104,16 @@ interface MediaStatusEntry {
   media?: { duration?: number }
 }
 
+/**
+ * The receiver answered a LOAD with LOAD_FAILED or LOAD_CANCELLED.
+ *
+ * Its own type because it is the one failure that says something about the
+ * source rather than about the connection: the television was reached, was
+ * handed the stream, and said no. `castservice.ts` records it against the
+ * source and title, so the cast list stops offering what this TV refused.
+ */
+export class ReceiverRefusedError extends Error {}
+
 export class CastSession {
   private socket: TLSSocket | null = null
   private pending: Buffer = Buffer.alloc(0)
@@ -281,11 +291,11 @@ export class CastSession {
        * interface all surface exactly here and nowhere earlier.
        */
       if (media.contentType.includes('mpegurl')) {
-        throw new Error(
+        throw new ReceiverRefusedError(
           `${this.deviceName} will not play this kind of stream. This source hands out an HLS playlist, and a basic Chromecast can only play a plain video file. Try another source.`,
         )
       }
-      throw new Error(
+      throw new ReceiverRefusedError(
         `${this.deviceName} could not load the stream. It has to reach this computer over the network; check that both are on the same Wi-Fi and that client isolation is off.`,
       )
     }

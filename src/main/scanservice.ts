@@ -65,7 +65,7 @@
  * the contention the first pass used to run at.
  */
 
-import type { Provider } from '@shared/types'
+import type { Provider, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
 import type { ProbeSubject } from './streamprobe'
 import { probeQuality } from './qualityprobe'
@@ -90,6 +90,8 @@ interface Measured {
   quality: number | null
   /** Why it did not stream; null when it did. */
   reason: ScanReason | null
+  /** How the video arrived, for a source that streamed; null otherwise. See `StreamDelivery`. */
+  delivery: StreamDelivery | null
 }
 
 /** One test the pool runs: a provider's first, or the second a red gets. */
@@ -201,6 +203,9 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       ms: streamed ? result.timeToMediaMs : null,
       quality: streamed ? result.judgement.best : null,
       reason: streamed ? null : result.reason,
+      // A stream whose traffic showed nothing identifiable is still an answer
+      // (`unknown`), so the tester does not keep coming back to ask.
+      delivery: streamed ? (result.delivery ?? 'unknown') : null,
     }
   }
 
@@ -222,6 +227,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       if (measured.ms !== null) scan.timings = { [provider.id]: measured.ms }
       if (measured.quality !== null) scan.qualities = { [provider.id]: measured.quality }
       if (measured.reason !== null) scan.reasons = { [provider.id]: measured.reason }
+      if (measured.delivery !== null) scan.delivery = { [provider.id]: measured.delivery }
       return scan
     },
 
@@ -247,6 +253,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const reasons: Record<string, ScanReason> = {}
       /** When each provider's standing result was measured. */
       const testedAt: Record<string, number> = {}
+      /** How each streaming provider's video arrived. */
+      const delivery: Record<string, StreamDelivery> = {}
       const total = providers.length
 
       /** What is under test right now, by provider, in the order it started. */
@@ -266,6 +274,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           timings: { ...timings },
           qualities: { ...qualities },
           reasons: { ...reasons },
+          delivery: { ...delivery },
           finished,
           cancelled: finished && token !== mine,
         })
@@ -280,6 +289,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         else delete timings[provider.id]
         if (measured.quality !== null) qualities[provider.id] = measured.quality
         else delete qualities[provider.id]
+        if (measured.delivery !== null) delivery[provider.id] = measured.delivery
+        else delete delivery[provider.id]
       }
 
       /**
@@ -340,7 +351,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         await Promise.race(tasks)
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
       if (token === mine) running = false
       publish(true)
       return scan

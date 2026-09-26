@@ -51,10 +51,20 @@ function entry(over: Partial<WatchlistEntry> & { tmdbId: number }): WatchlistEnt
   } as WatchlistEntry
 }
 
+/**
+ * A stored row as a test writes it today: every green says how its video
+ * arrived. A green without that is due again (see `isRetestDue`), which the
+ * scheduling tests here are not about.
+ */
 const row = (tmdbId: number, verdicts: ProviderScan['verdicts'], at = NOW): ProviderScan => ({
   titleKey: `tv:tt${tmdbId}`,
   at,
   verdicts,
+  delivery: Object.fromEntries(
+    Object.entries(verdicts)
+      .filter(([, verdict]) => verdict === 'stream')
+      .map(([id]) => [id, 'segmented' as const]),
+  ),
 })
 
 describe('planNextTest', () => {

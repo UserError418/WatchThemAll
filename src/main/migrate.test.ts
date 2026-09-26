@@ -671,6 +671,59 @@ describe('stored provider scans', () => {
     expect(scan?.verdicts).toEqual({ a: 'stream' })
     expect(scan?.timings).toEqual({})
   })
+
+  it("keeps each provider's own test time and failure reason across a load", () => {
+    // Both were dropped on every load until 2026-09-26: a restart made a
+    // five-day-old red look freshly tested and erased every reason.
+    const scan = scanned({
+      at: 5_000,
+      verdicts: { a: 'dead', b: 'stream' },
+      testedAt: { a: 1_000, b: 5_000, gone: 2_000 },
+      reasons: { a: { kind: 'timeout', seconds: 20 }, b: { kind: 'blocked' } },
+    })
+    expect(scan?.testedAt).toEqual({ a: 1_000, b: 5_000 })
+    // A reason explains a failure, so none beside a stream.
+    expect(scan?.reasons).toEqual({ a: { kind: 'timeout', seconds: 20 } })
+  })
+
+  it('drops a reason that is not one of the shapes the app writes', () => {
+    const scan = scanned({
+      verdicts: { a: 'dead', b: 'dead', c: 'dead' },
+      reasons: { a: { kind: 'error' }, b: { kind: 'gremlins' }, c: { kind: 'error', status: 502 } },
+    })
+    expect(scan?.reasons).toEqual({ c: { kind: 'error', status: 502 } })
+  })
+
+  it('keeps how the video arrived and what a TV said, beside a stream only', () => {
+    const scan = scanned({
+      verdicts: { a: 'stream', b: 'stream', c: 'dead' },
+      delivery: { a: 'progressive', b: 'carrier-pigeon', c: 'segmented' },
+      casts: { a: 'played', b: 'maybe', c: 'refused' },
+    })
+    expect(scan?.delivery).toEqual({ a: 'progressive' })
+    expect(scan?.casts).toEqual({ a: 'played' })
+  })
+})
+
+describe("other devices' results", () => {
+  it('keeps rows that say which device measured them, and drops the rest', () => {
+    const doc = migrate({
+      ...emptyStore(),
+      sharedScans: [
+        { titleKey: 'tv:tt1', at: 1_000, verdicts: { a: 'stream' }, deviceId: 'pc-1', deviceKind: 'desktop' },
+        { titleKey: 'tv:tt2', at: 1_000, verdicts: { a: 'stream' }, deviceId: 'pc-1', deviceKind: 'toaster' },
+        { titleKey: 'tv:tt3', at: 1_000, verdicts: { a: 'stream' }, deviceKind: 'phone' },
+      ],
+    })
+    expect(doc.sharedScans.map((row) => row.titleKey)).toEqual(['tv:tt1'])
+    expect(doc.sharedScans[0]).toMatchObject({ deviceId: 'pc-1', deviceKind: 'desktop' })
+  })
+
+  it("keeps the kind of device a document says wrote it, since a pulled one is migrated too", () => {
+    expect(migrate({ ...emptyStore(), deviceKind: 'phone' }).deviceKind).toBe('phone')
+    expect(migrate({ ...emptyStore(), deviceKind: 'fridge' }).deviceKind).toBeUndefined()
+    expect(migrate({ ...emptyStore() }).sharedScans).toEqual([])
+  })
 })
 
 describe('the source order setting', () => {
