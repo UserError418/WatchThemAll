@@ -26,7 +26,7 @@
   CastStatus,
 } from '@shared/ipc'
   import { formatQuality, formatStreamTime, inScanOrder, providerDot, resumeNote, sharedLabel } from '@shared/scanrank'
-  import type { Castability } from '@shared/castability'
+  import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
   import type { Episode, StreamDelivery } from '@shared/types'
   import { clock } from './lib/format'
@@ -362,10 +362,7 @@
    * A test run from the list itself fills the list in as each source settles.
    */
   function castabilityOf(id: string): Castability {
-    const live = scanDelivery[id]
-    if (live === 'progressive') return 'yes'
-    if (live === 'segmented' || live === 'other') return 'no'
-    return sourceState.castability[id] ?? 'unknown'
+    return deliveryCastability(scanDelivery[id]) ?? sourceState.castability[id] ?? 'unknown'
   }
 
   /**

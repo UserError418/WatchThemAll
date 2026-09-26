@@ -105,6 +105,30 @@ interface MediaStatusEntry {
 }
 
 /**
+ * How long a LOAD may stay LOADING before the cast stops waiting for a verdict.
+ *
+ * Long enough for a playlist, its first segments and a decoder to start over a
+ * home network; measured starts on the dongle were 1–4 s. What happens after
+ * it is not a refusal — nothing is recorded against the source.
+ */
+const SETTLE_TIMEOUT_MS = 15_000
+
+/** A receiver's answer that means the LOAD failed. */
+function isRefusal(payload: ReceiverPayload): boolean {
+  if (payload.type === 'LOAD_FAILED' || payload.type === 'LOAD_CANCELLED') return true
+  if (payload.type !== 'MEDIA_STATUS') return false
+  const entry = (payload.status as Array<{ playerState?: string; idleReason?: string }> | undefined)?.[0]
+  return entry?.playerState === 'IDLE' && entry.idleReason === 'ERROR'
+}
+
+/** A MEDIA_STATUS saying the receiver is past loading: it has the stream. */
+function startedState(payload: ReceiverPayload): boolean {
+  if (payload.type !== 'MEDIA_STATUS') return false
+  const state = (payload.status as Array<{ playerState?: string }> | undefined)?.[0]?.playerState
+  return state === 'BUFFERING' || state === 'PLAYING' || state === 'PAUSED'
+}
+
+/**
  * The receiver answered a LOAD with LOAD_FAILED or LOAD_CANCELLED.
  *
  * Its own type because it is the one failure that says something about the
@@ -135,6 +159,8 @@ export class CastSession {
 
   /** requestId -> resolver, for the messages that expect an answer. */
   private waiting = new Map<number, (payload: ReceiverPayload) => void>()
+  /** Listeners for every media-channel message, for `settle`. */
+  private readonly mediaListeners = new Set<(payload: ReceiverPayload) => void>()
 
   private onClosed: (() => void) | null = null
 
@@ -232,7 +258,7 @@ export class CastSession {
 
   /* ── Playback ─────────────────────────────────────────────────────────── */
 
-  async load(media: CastMedia): Promise<void> {
+  async load(media: CastMedia): Promise<'started' | 'unsettled'> {
     if (!this.socket) throw new Error('not connected to a TV')
 
     /*
@@ -274,7 +300,7 @@ export class CastSession {
       'the TV did not accept the stream',
     )
 
-    if (answer.type === 'LOAD_FAILED' || answer.type === 'LOAD_CANCELLED') {
+    if (isRefusal(answer)) {
       /*
        * Two causes, and the wrong guess sends the user to the router for an
        * hour.
@@ -288,19 +314,61 @@ export class CastSession {
        *
        * For a plain file the network is the first suspect: the receiver has
        * to reach this machine, so client isolation, a firewall or the wrong
-       * interface all surface exactly here and nowhere earlier.
+       * interface all surface exactly here and nowhere earlier. `refusal`
+       * words the two differently.
        */
-      if (media.contentType.includes('mpegurl')) {
-        throw new ReceiverRefusedError(
-          `${this.deviceName} will not play this stream. Try another source.`,
-        )
-      }
-      throw new ReceiverRefusedError(
-        `${this.deviceName} could not load the stream. It has to reach this computer over the network; check that both are on the same Wi-Fi and that client isolation is off.`,
-      )
+      throw this.refusal(media)
     }
 
     this.readMediaStatus(answer)
+
+    /*
+     * The first answer is not the verdict.
+     *
+     * A receiver answers a LOAD with LOADING at once and only then fetches:
+     * measured 2026-09-26, Videasy's 2160x1080 stream got LOADING, and a
+     * LOAD_FAILED a second later, when the dongle found it could not decode
+     * it. Taken as success, that put the remote's "playing" over an idle
+     * television and filed the source as one that casts. So wait for the
+     * receiver to settle one way or the other.
+     */
+    if (startedState(answer)) return 'started'
+    const settled = await this.settle(SETTLE_TIMEOUT_MS)
+    if (settled === 'refused') throw this.refusal(media)
+    return settled
+  }
+
+  /** The error for a refused LOAD, worded by what was being loaded. */
+  private refusal(media: CastMedia): ReceiverRefusedError {
+    if (media.contentType.includes('mpegurl')) {
+      return new ReceiverRefusedError(`${this.deviceName} will not play this stream. Try another source.`)
+    }
+    return new ReceiverRefusedError(
+      `${this.deviceName} could not load the stream. It has to reach this computer over the network; check that both are on the same Wi-Fi and that client isolation is off.`,
+    )
+  }
+
+  /**
+   * Wait for the media channel to say whether the load started.
+   *
+   * Listens to every media message rather than asking: the receiver
+   * broadcasts its state changes, and a LOAD_FAILED arrives unsolicited once
+   * the LOAD's own answer has been used up.
+   */
+  private settle(timeoutMs: number): Promise<'started' | 'refused' | 'unsettled'> {
+    return new Promise((resolve) => {
+      const done = (outcome: 'started' | 'refused' | 'unsettled'): void => {
+        clearTimeout(timer)
+        this.mediaListeners.delete(listen)
+        resolve(outcome)
+      }
+      const listen = (payload: ReceiverPayload): void => {
+        if (isRefusal(payload)) done('refused')
+        else if (startedState(payload)) done('started')
+      }
+      const timer = setTimeout(() => done('unsettled'), timeoutMs)
+      this.mediaListeners.add(listen)
+    })
   }
 
   async control(action: 'play' | 'pause' | 'stop' | 'seek', seconds = 0): Promise<void> {
@@ -561,6 +629,7 @@ export class CastSession {
       if (namespace === NS_MEDIA && payload.type === 'MEDIA_STATUS') {
         this.readMediaStatus(payload)
       }
+      if (namespace === NS_MEDIA) for (const listen of [...this.mediaListeners]) listen(payload)
 
       // Unsolicited as well as solicited: a receiver broadcasts this whenever
       // its volume moves, including from the television's own remote.

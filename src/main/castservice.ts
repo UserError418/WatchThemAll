@@ -282,7 +282,7 @@ export function createCastService(): CastService {
           headers: stream.headers,
         })
 
-        await session.load({
+        const settled = await session.load({
           // The `.m3u8` suffix is for the receiver, which sniffs the extension
           // before it reads the content type.
           url: stream.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
@@ -292,7 +292,9 @@ export function createCastService(): CastService {
           startSeconds: now.startSeconds,
         })
 
-        return { ok: true, learned: { delivery, outcome: 'played' } }
+        // Only a load the receiver actually started counts as a cast that
+        // played; one still loading when the wait ran out proves nothing.
+        return { ok: true, learned: { delivery, outcome: settled === 'started' ? 'played' : null } }
       } catch (error) {
         /*
          * A refusal counts against the source only if the television had

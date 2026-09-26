@@ -94,7 +94,17 @@ export function titleCastability(scan: ProviderScan | null | undefined, provider
   // The television's own answer outranks any prediction of it.
   const cast = scan?.casts?.[providerId]
   if (cast) return cast === 'played' ? 'yes' : 'no'
-  switch (scan?.delivery?.[providerId]) {
+  return deliveryCastability(scan?.delivery?.[providerId])
+}
+
+/**
+ * The receiver's rule on its own: whether a stream that arrived this way can
+ * be cast. Exported so the cast list can read a test still in progress by the
+ * same rule — a second copy of it is how the list once hid every HLS source
+ * for an evening after the rule had been corrected here.
+ */
+export function deliveryCastability(delivery: StreamDelivery | undefined): 'yes' | 'no' | null {
+  switch (delivery) {
     case 'progressive':
     case 'segmented':
       return 'yes'

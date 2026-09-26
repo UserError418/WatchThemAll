@@ -46,6 +46,11 @@ class FakeReceiver {
 
   /** Set to refuse the next LOAD, to exercise the failure path. */
   failLoad = false
+  /**
+   * Set to answer a LOAD as a real receiver does: LOADING at once, and the
+   * verdict a moment later — `'fail'` for a LOAD_FAILED, `'play'` for PLAYING.
+   */
+  loadThen: 'fail' | 'play' | null = null
   /** Set to never answer LAUNCH, to exercise the timeout path. */
   ignoreLaunch = false
   /** Media commands dropped for lacking a requestId, as a real receiver drops them. */
@@ -130,6 +135,24 @@ class FakeReceiver {
     if (message.namespace === NS_MEDIA && payload.type === 'LOAD') {
       if (this.failLoad) {
         this.reply(socket, NS_MEDIA, { requestId, type: 'LOAD_FAILED' })
+        return
+      }
+      if (this.loadThen !== null) {
+        const then = this.loadThen
+        this.reply(socket, NS_MEDIA, {
+          requestId,
+          type: 'MEDIA_STATUS',
+          status: [{ mediaSessionId: 7, playerState: 'LOADING', currentTime: 0 }],
+        })
+        setTimeout(() => {
+          this.reply(
+            socket,
+            NS_MEDIA,
+            then === 'fail'
+              ? { requestId, type: 'LOAD_FAILED' }
+              : { requestId: 0, type: 'MEDIA_STATUS', status: [{ mediaSessionId: 7, playerState: 'PLAYING', currentTime: 0.4, media: { duration: 3563.7 } }] },
+          )
+        }, 50)
         return
       }
       this.reply(socket, NS_MEDIA, {
@@ -383,6 +406,28 @@ describe('CastSession', () => {
     await expect(
       session.load({ ...MEDIA, url: 'http://192.168.1.5:41000/s0', contentType: 'video/mp4' }),
     ).rejects.toThrow(/same Wi-Fi|client isolation/i)
+  })
+
+  it('waits past LOADING for the verdict, and reports a refusal that comes after it', async () => {
+    // Measured on the owner's dongle: LOADING at once, LOAD_FAILED a moment
+    // later for a 2160-wide stream it could not decode.
+    receiver = new FakeReceiver()
+    receiver.loadThen = 'fail'
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+
+    await expect(session.load(MEDIA)).rejects.toThrow(/will not play this stream/i)
+  })
+
+  it('reports a load that got past LOADING as started', async () => {
+    receiver = new FakeReceiver()
+    receiver.loadThen = 'play'
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+
+    await expect(session.load(MEDIA)).resolves.toBe('started')
   })
 
   it('reports an unreachable television rather than hanging', async () => {
