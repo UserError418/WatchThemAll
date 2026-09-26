@@ -73,7 +73,7 @@ export interface TitleGroup extends BandCounts {
   flat: boolean
 }
 
-export type WatchedSort = 'recent' | 'title' | 'seasons' | 'score'
+export type WatchedSort = 'recent' | 'title' | 'rating' | 'score' | 'seasons'
 
 /**
  * Sort options, in menu order, with the labels the view draws.
@@ -83,10 +83,18 @@ export type WatchedSort = 'recent' | 'title' | 'seasons' | 'score'
  */
 export const WATCHED_SORTS: Array<{ id: WatchedSort; label: string }> = [
   { id: 'recent', label: 'Recently added' },
-  { id: 'title', label: 'A–Z' },
+  { id: 'title', label: 'Title A–Z' },
+  { id: 'rating', label: 'Your rating' },
+  // Named for whose score it is: "Highest score" beside a list the user rates
+  // 1–10 read as their own, and it was TMDB's.
+  { id: 'score', label: 'TMDB rating' },
   { id: 'seasons', label: 'Most seasons' },
-  { id: 'score', label: 'Highest score' },
 ]
+
+/** Whether a stored value is one of the sorts, for reading it back from storage. */
+export function isWatchedSort(value: unknown): value is WatchedSort {
+  return WATCHED_SORTS.some((option) => option.id === value)
+}
 
 /**
  * Fold entries into one group per title.
@@ -169,6 +177,12 @@ function comparator(sort: WatchedSort): (a: TitleGroup, b: TitleGroup) => number
       return (a, b) => b.seasons.length - a.seasons.length || a.title.localeCompare(b.title)
     case 'score':
       return (a, b) => b.score - a.score || a.title.localeCompare(b.title)
+    case 'rating':
+      // The user's own verdict: the mean of the rated seasons. Unrated titles
+      // go last rather than being read as a zero, then TMDB's score orders the
+      // equal ones, because "which of my 9s" is best answered by everyone else.
+      return (a, b) =>
+        (b.mean ?? -1) - (a.mean ?? -1) || b.score - a.score || a.title.localeCompare(b.title)
     case 'recent':
     default:
       return (a, b) => b.addedAt - a.addedAt || a.title.localeCompare(b.title)

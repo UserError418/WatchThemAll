@@ -48,6 +48,7 @@
     bandOf,
     deepest,
     groupWatched,
+    isWatchedSort,
     leaning,
     RIBBON_LIMIT,
     ribbon,
@@ -75,7 +76,34 @@
 
   let filter = $state<Filter>('all')
   let query = $state('')
-  let sort = $state<WatchedSort>('recent')
+  /**
+   * The sort, remembered on this device.
+   *
+   * It reset to "Recently added" on every visit, so a user who reads the list
+   * by their own rating chose it again each time. Device-local rather than a
+   * synced setting: it is how this screen is being read right now, not a
+   * preference about the library.
+   */
+  const SORT_KEY = 'wta.watchedSort'
+  let sort = $state<WatchedSort>(readSort())
+
+  function readSort(): WatchedSort {
+    try {
+      const stored = localStorage.getItem(SORT_KEY)
+      if (isWatchedSort(stored)) return stored
+    } catch {
+      // No storage: the default below.
+    }
+    return 'recent'
+  }
+
+  $effect(() => {
+    try {
+      localStorage.setItem(SORT_KEY, sort)
+    } catch {
+      // A preference, not data; losing it costs one click.
+    }
+  })
 
   /**
    * Which titles are expanded, by group key.
@@ -224,13 +252,23 @@
         </button>
       {/each}
     </div>
+    <!--
+      Labelled on screen, and shaped as a menu. It was a bare select styled as a
+      pill, with "Sort by" for screen readers only, so it read as one more filter
+      chip at the end of the row — "Recently added" — and the owner asked for a
+      sort that was already there.
+    -->
     <label class="sort">
-      <span class="sr">Sort by</span>
+      <svg class="sort-glyph" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 5v14M4 16l3 3 3-3M14 7h6M14 12h4.5M14 17h3" />
+      </svg>
+      <span class="sort-label">Sort by</span>
       <select bind:value={sort}>
         {#each WATCHED_SORTS as option (option.id)}
           <option value={option.id}>{option.label}</option>
         {/each}
       </select>
+      <svg class="sort-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
     </label>
   </PageHeader>
 
@@ -609,20 +647,74 @@
     color: inherit;
   }
 
-  .sort select {
-    padding: var(--space-1) var(--space-2);
+  /*
+    The same height and outline as the filter box, so the header's two text
+    controls read as a pair; the chevron is what says "menu" rather than
+    "toggle". The native select stays underneath for the keyboard and for
+    screen readers, stripped of its own look.
+  */
+  .sort {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-3) 0 var(--space-3);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-full);
-    background: var(--bg-raised);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
+    background: var(--bg-elevated);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out);
   }
 
-  .sr {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .sort:hover,
+  .sort:focus-within {
+    border-color: var(--border-strong);
+  }
+
+  .sort-glyph,
+  .sort-chevron {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    fill: none;
+    stroke: var(--text-tertiary);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+
+  .sort-label {
+    color: var(--text-tertiary);
+    white-space: nowrap;
+  }
+
+  .sort select {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-weight: var(--weight-emphasis);
+    /* Room for the chevron, which sits over the select's right end. */
+    padding: var(--space-2) 22px var(--space-2) 0;
+    margin-right: -20px;
+    cursor: pointer;
+  }
+
+  /* The pill shows focus; the browser's own ring inside it made a second outline. */
+  .sort select:focus {
+    outline: none;
+  }
+
+  .sort:has(select:focus-visible) {
+    border-color: var(--accent);
+  }
+
+  .sort option {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
   }
 
   /* ── The band ─────────────────────────────────────────────────────── */

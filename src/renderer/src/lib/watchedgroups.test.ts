@@ -5,6 +5,7 @@ import {
   deepest,
   formatMean,
   groupWatched,
+  isWatchedSort,
   leaning,
   ribbon,
   seasonsToGo,
@@ -173,6 +174,29 @@ describe('groupWatched sorting', () => {
     expect(groupWatched(library(), none, 'score').map((g) => g.title)).toEqual(['Alpha', 'Zulu'])
   })
 
+  it('sorts by the user\'s own rating, unrated last, TMDB breaking ties', () => {
+    const mixed = [
+      entry({ tmdbId: 1, title: 'Low', season: 1, rating: 9.5 }),
+      entry({ tmdbId: 2, title: 'Unrated', season: 1, rating: 9.9 }),
+      entry({ tmdbId: 3, title: 'Tie, lower TMDB', season: 1, rating: 6 }),
+      entry({ tmdbId: 4, title: 'Tie, higher TMDB', season: 1, rating: 8 }),
+    ]
+    const mine = ratings({ '1:1': 3, '3:1': 9, '4:1': 9 })
+    expect(groupWatched(mixed, mine, 'rating').map((g) => g.title)).toEqual([
+      'Tie, higher TMDB',
+      'Tie, lower TMDB',
+      'Low',
+      'Unrated',
+    ])
+  })
+
+  it('knows its own sorts, and nothing else, when read back from storage', () => {
+    expect(isWatchedSort('rating')).toBe(true)
+    expect(isWatchedSort('score')).toBe(true)
+    expect(isWatchedSort('highest')).toBe(false)
+    expect(isWatchedSort(null)).toBe(false)
+  })
+
   /**
    * A library whose long tail is all one-season titles would otherwise
    * reshuffle on every render, because the primary key ties for hundreds of
@@ -183,7 +207,7 @@ describe('groupWatched sorting', () => {
       entry({ tmdbId: 1, title: 'Beta', season: 1, addedAt: 5, rating: 7 }),
       entry({ tmdbId: 2, title: 'Alpha', season: 1, addedAt: 5, rating: 7 }),
     ]
-    for (const sort of ['recent', 'seasons', 'score'] as const) {
+    for (const sort of ['recent', 'seasons', 'score', 'rating'] as const) {
       expect(groupWatched(tied, none, sort).map((g) => g.title)).toEqual(['Alpha', 'Beta'])
     }
   })
