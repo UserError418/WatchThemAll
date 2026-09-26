@@ -29,7 +29,7 @@
   import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
   import type { Episode, StreamDelivery } from '@shared/types'
-  import { clock } from './lib/format'
+  import { airDate, clock, hasAired, runtime } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
   import {
     nextEpisode,
@@ -41,7 +41,14 @@
   } from './lib/castremote'
 
   const BAR_HEIGHT = 56
-  const EPISODE_PANEL_HEIGHT = 226
+  /**
+   * The desktop strip's height, border included.
+   *
+   * Declared rather than measured, like the source list's, so the view can be
+   * sized before the season has loaded. The phone's list is sized by CSS
+   * instead; it is not in a view that needs telling.
+   */
+  const EPISODE_PANEL_HEIGHT = 212
   const SOURCE_PANEL_MAX = 300
   /** `.panel`'s top margin, which sits between the bar and the panel itself. */
   const PANEL_GAP = 6
@@ -687,6 +694,7 @@
 
   /** Episodes of the season being browsed, which need not be the one playing. */
   let browsingSeason = $state<number | null>(null)
+  let browsingSeasonName = $state<string | null>(null)
   let episodes = $state<Episode[]>([])
   let loadingEpisodes = $state(false)
 
@@ -866,7 +874,7 @@
    */
   const panelHeight = $derived(
     panel === 'episodes'
-      ? EPISODE_PANEL_HEIGHT
+      ? EPISODE_PANEL_HEIGHT + PANEL_GAP
       : panel === 'sources'
         ? SOURCE_PANEL_MAX
         : panel === 'cast'
@@ -912,14 +920,21 @@
     if (context === null || context.type !== 'tv') return
     loadingEpisodes = true
     browsingSeason = season
+    browsingSeasonName = null
     try {
       const result = await api.season(context.tmdbId, season)
       // Guard against a slow answer for a season the user has since left.
-      if (browsingSeason === season) episodes = result?.episodes ?? []
+      if (browsingSeason === season) {
+        episodes = result?.episodes ?? []
+        browsingSeasonName = result?.name || null
+      }
     } catch {
       // A failed fetch leaves the strip empty rather than breaking the chrome;
       // the player itself is unaffected by not knowing the episode list.
-      if (browsingSeason === season) episodes = []
+      if (browsingSeason === season) {
+        episodes = []
+        browsingSeasonName = null
+      }
     } finally {
       loadingEpisodes = false
     }
@@ -938,12 +953,66 @@
   const still = (path: string | null): string | null =>
     path === null ? null : `https://image.tmdb.org/t/p/w300${path}`
 
-  /** "1h 2m", "52m", or nothing at all rather than a misleading "0m". */
-  function runtimeLabel(minutes: number | null): string {
-    if (minutes === null || minutes <= 0) return ''
-    const hours = Math.floor(minutes / 60)
-    return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+  /** The line under an episode's name: how long it runs, or when it airs. */
+  function episodeDetail(episode: Episode, aired: boolean): string {
+    if (aired) return runtime(episode.runtime)
+    return episode.airDate ? `Airs ${airDate(episode.airDate)}` : 'Not yet aired'
   }
+
+  /** The browsed season as TMDB names it ("Season 1", or "Book One"). */
+  const seasonName = $derived(
+    browsingSeasonName ?? (browsingSeason === null ? '' : `Season ${browsingSeason}`),
+  )
+
+  /** The scrolling list itself, while it is on screen. */
+  let episodeList = $state<HTMLElement | null>(null)
+
+  /**
+   * How much of the episode before the playing one stays in view.
+   *
+   * Enough to show the list goes both ways. Opening flush on the playing
+   * episode made it look like the start of the season.
+   */
+  const EPISODE_PEEK = 48
+
+  /**
+   * Open the list at the episode that is playing, not at episode 1.
+   *
+   * Someone halfway through a season opens this for the next episode, or the
+   * one they just left. Starting at the top made them scroll past everything
+   * they had already seen to reach either. One of the two assignments is a
+   * no-op: the strip scrolls sideways and the phone's list down.
+   */
+  $effect(() => {
+    const list = episodeList
+    const current = list?.querySelector<HTMLElement>('.episode.playing')
+    if (!list || !current) return
+    const listBox = list.getBoundingClientRect()
+    const box = current.getBoundingClientRect()
+    list.scrollLeft += box.left - listBox.left - EPISODE_PEEK
+    list.scrollTop += box.top - listBox.top - EPISODE_PEEK
+  })
+
+  /**
+   * Let a mouse wheel scroll the strip.
+   *
+   * Chromium scrolls a sideways-only box on a vertical wheel only while Shift
+   * is held, so with an ordinary mouse the last episodes of a season were
+   * reachable only by dragging an 8px scrollbar. Registered by hand because
+   * the listener must be allowed to `preventDefault`. A trackpad's own
+   * sideways swipe is left alone.
+   */
+  $effect(() => {
+    const list = episodeList
+    if (!list || touch) return
+    const onWheel = (event: WheelEvent): void => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      event.preventDefault()
+      list.scrollLeft += event.deltaY
+    }
+    list.addEventListener('wheel', onWheel, { passive: false })
+    return () => list.removeEventListener('wheel', onWheel)
+  })
 
   const positionLabel = $derived(
     context === null || context.season === null || context.episode === null
@@ -1254,36 +1323,84 @@
 
     {#if panel === 'episodes'}
       <!--
-        A strip that floats over the picture rather than displacing it. Each
-        card carries the same three facts the series detail view shows, because
-        that is what makes an episode recognisable: the still, what it is
-        called, and how long it runs.
+        Two shapes of one list, and the difference is the screen, not taste.
+
+        On a desktop it is a strip hanging from the bar: a window is wide, a
+        season is a sequence, and the strip covers only the top of the picture.
+
+        On a phone the same strip was two cards wide, so a ten-episode season
+        was five screens of sideways swiping, each card too big to be anything
+        but in the way. There it is a vertical list, a row per episode with the
+        synopsis beside the still, like the detail view's own season list. It
+        sits at the bottom of the screen, because a phone held upright shows a
+        film as a band across the middle with black above and below. The sheet
+        is sized to fill the black below, so the picture stays in view, and
+        it is where a thumb already is. On a phone turned sideways the black is
+        at the sides, and the list becomes a column down the right.
+
+        Each episode carries what makes it recognisable at a glance: the still,
+        its number and name, and how long it runs, or when it airs if it has
+        not yet.
       -->
-      <div class="panel episodes">
+      <div
+        class="panel episodes"
+        class:touch
+        style:height={touch ? null : `${EPISODE_PANEL_HEIGHT}px`}
+        style:--below-bar="{BAR_HEIGHT + PANEL_GAP}px"
+      >
+        <div class="episodes-head">
+          <span class="season-name">{seasonName}</span>
+          {#if !loadingEpisodes && episodes.length > 0}
+            <span class="season-count">{episodes.length} episodes</span>
+          {/if}
+          {#if touch}
+            <span class="spacer"></span>
+            <button class="close" aria-label="Close the episode list" onclick={() => (panel = 'none')}>
+              ✕
+            </button>
+          {/if}
+        </div>
+
         {#if loadingEpisodes}
           <p class="hint">Loading episodes…</p>
         {:else if episodes.length === 0}
           <p class="hint">No episode list for this season.</p>
         {:else}
-          <div class="strip">
+          <div class="episode-list" bind:this={episodeList}>
             {#each episodes as episode (episode.episode)}
+              {@const aired = hasAired(episode.airDate)}
+              {@const art = still(episode.stillPath)}
+              <!-- Not playable before it airs: no provider can have it yet,
+                   and the detail view's list draws the same line. -->
               <button
                 class="episode"
                 class:playing={episode.episode === context?.episode &&
                   browsingSeason === context?.season}
+                class:unaired={!aired}
+                disabled={!aired}
                 onclick={() => {
                   if (browsingSeason !== null) api.goTo(browsingSeason, episode.episode)
                   panel = 'none'
                 }}
               >
                 <span class="thumb">
-                  {#if still(episode.stillPath)}
-                    <img src={still(episode.stillPath)} alt="" loading="lazy" />
+                  {#if art}
+                    <img src={art} alt="" loading="lazy" decoding="async" />
+                  {:else}
+                    <span class="thumb-empty" aria-hidden="true">{episode.episode}</span>
+                  {/if}
+                  {#if episode.episode === context?.episode && browsingSeason === context?.season}
+                    <span class="now-playing">Playing</span>
+                  {:else if aired}
+                    <span class="play" aria-hidden="true">▶</span>
                   {/if}
                 </span>
                 <span class="meta">
-                  <span class="ep-title">{episode.episode}. {episode.name}</span>
-                  <span class="ep-runtime">{runtimeLabel(episode.runtime)}</span>
+                  <span class="ep-title">{episode.episode}. {episode.name || 'TBA'}</span>
+                  <span class="ep-detail">{episodeDetail(episode, aired)}</span>
+                  {#if touch && episode.overview}
+                    <span class="ep-overview">{episode.overview}</span>
+                  {/if}
                 </span>
               </button>
             {/each}
@@ -1705,10 +1822,36 @@
     background: rgba(8, 8, 12, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
     overflow: hidden;
+    /* Inherited by every list inside. The chrome's document declares no
+       colour scheme, so without it a scrollbar is the platform's light one: a
+       white bar across a dark panel. */
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
   }
 
+  /* The desktop strip. Its height is set inline from `EPISODE_PANEL_HEIGHT`,
+     which the view is sized by, so border-box keeps the two the same number. */
   .episodes {
-    height: 200px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .episodes-head {
+    align-items: baseline;
+    display: flex;
+    flex-shrink: 0;
+    gap: 10px;
+    padding: 12px 16px 0;
+  }
+
+  .season-name {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .season-count {
+    color: #9a9aa6;
+    font-size: 12px;
   }
 
   .hint {
@@ -1717,73 +1860,235 @@
     padding: 24px;
   }
 
-  /* Horizontal, because a season is a sequence and scanning it sideways is how
-     the detail view already presents it. */
-  .strip {
+  .episode-list {
     display: flex;
-    gap: 12px;
-    height: 100%;
+    flex: 1;
+    gap: 14px;
+    min-height: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 12px;
+    padding: 10px 16px 6px;
     scrollbar-width: thin;
   }
 
   .episode {
     background: none;
-    border: 1px solid transparent;
-    border-radius: 9px;
+    border: 0;
     color: inherit;
     cursor: pointer;
     display: flex;
     flex: 0 0 auto;
     flex-direction: column;
     font: inherit;
-    gap: 7px;
-    padding: 6px;
+    gap: 8px;
+    padding: 0;
     text-align: left;
-    width: 208px;
+    width: 192px;
   }
 
-  .episode:hover {
-    background: rgba(255, 255, 255, 0.07);
-  }
-
-  .episode.playing {
-    border-color: rgba(240, 180, 90, 0.55);
+  .episode:disabled {
+    cursor: default;
+    opacity: 0.45;
   }
 
   .thumb {
+    aspect-ratio: 16 / 9;
     background: #17171d;
-    border-radius: 6px;
+    border-radius: 8px;
     display: block;
-    height: 110px;
     overflow: hidden;
+    position: relative;
+    transition: box-shadow 0.12s ease-out;
     width: 100%;
   }
 
   .thumb img {
+    display: block;
+    filter: brightness(0.92);
     height: 100%;
     object-fit: cover;
+    transition: filter 0.12s ease-out;
     width: 100%;
+  }
+
+  .thumb-empty {
+    color: #4a4a55;
+    display: grid;
+    font-size: 26px;
+    font-weight: 600;
+    height: 100%;
+    place-items: center;
+  }
+
+  /* Shown on hover only: on every card at once it is a column of identical
+     glyphs, and it says nothing a pointer over a card does not already. */
+  .play {
+    background: rgba(8, 8, 12, 0.6);
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: grid;
+    font-size: 13px;
+    height: 34px;
+    left: 50%;
+    opacity: 0;
+    padding-left: 3px;
+    place-items: center;
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.12s ease-out;
+    width: 34px;
+  }
+
+  .episode:not(:disabled):hover .thumb img {
+    filter: brightness(1.05);
+  }
+
+  .episode:not(:disabled):hover .play {
+    opacity: 1;
+  }
+
+  .episode.playing .thumb {
+    box-shadow: 0 0 0 2px rgba(240, 180, 90, 0.85);
+  }
+
+  .now-playing {
+    background: rgba(240, 180, 90, 0.92);
+    border-radius: 5px;
+    color: #17110a;
+    font-size: 11px;
+    font-weight: 700;
+    left: 6px;
+    padding: 3px 6px;
+    position: absolute;
+    top: 6px;
   }
 
   .meta {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     min-width: 0;
   }
 
   .ep-title {
+    font-size: 13.5px;
+    line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .ep-runtime {
+  .ep-detail {
     color: #9a9aa6;
     font-size: 12px;
+  }
+
+  /*
+    The phone's list: a sheet at the foot of the screen, filling the black
+    below a film that is playing across the middle. The black is half the
+    screen less half the picture, and the picture is 9/16 of the width. The
+    floor keeps two rows on a short phone and the ceiling keeps the picture
+    on a tall one.
+  */
+  .episodes.touch {
+    background: rgba(12, 12, 16, 0.97);
+    border-radius: 16px 16px 0 0;
+    border-width: 1px 0 0;
+    bottom: 0;
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.45);
+    height: calc(clamp(260px, 50vh - 50vw * 9 / 16, 60vh) + var(--safe-bottom, 0px));
+    left: 0;
+    margin: 0;
+    padding-bottom: var(--safe-bottom, 0px);
+    position: fixed;
+    right: 0;
+  }
+
+  .touch .episodes-head {
+    align-items: center;
+    padding: 6px 6px 4px 16px;
+  }
+
+  .touch .season-name {
+    font-size: 16px;
+  }
+
+  .close {
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: #c9c9d2;
+    font: inherit;
+    font-size: 16px;
+    height: 44px;
+    width: 44px;
+  }
+
+  .touch .episode-list {
+    flex-direction: column;
+    gap: 2px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 6px 10px;
+  }
+
+  .touch .episode {
+    align-items: start;
+    border-radius: 10px;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 124px minmax(0, 1fr);
+    padding: 8px 10px;
+    width: auto;
+  }
+
+  .touch .episode.playing {
+    background: rgba(240, 180, 90, 0.1);
+  }
+
+  .touch .play {
+    display: none;
+  }
+
+  .touch .ep-title {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .touch .meta {
+    gap: 4px;
+    padding-top: 2px;
+  }
+
+  .ep-overview {
+    color: #a7a7b2;
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* A phone turned sideways: the black is beside the picture now, not below
+     it, and a sheet from the bottom would cover most of it. A column hanging
+     from the bar covers the right-hand edge instead. */
+  @media (orientation: landscape) {
+    .episodes.touch {
+      border-radius: 12px;
+      border-width: 1px;
+      bottom: calc(8px + var(--safe-bottom, 0px));
+      height: auto;
+      left: auto;
+      padding-bottom: 0;
+      right: 10px;
+      top: calc(var(--safe-top, 0px) + var(--below-bar));
+      width: min(400px, 50vw);
+    }
   }
 
   .sources {
