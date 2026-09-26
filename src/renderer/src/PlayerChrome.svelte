@@ -1336,7 +1336,8 @@
         film as a band across the middle with black above and below. The sheet
         is sized to fill the black below, so the picture stays in view, and
         it is where a thumb already is. On a phone turned sideways the black is
-        at the sides, and the list becomes a column down the right.
+        at the sides, and the list becomes a panel in the middle, hanging from
+        the bar.
 
         Each episode carries what makes it recognisable at a glance: the still,
         its number and name, and how long it runs, or when it airs if it has
@@ -2075,19 +2076,21 @@
   }
 
   /* A phone turned sideways: the black is beside the picture now, not below
-     it, and a sheet from the bottom would cover most of it. A column hanging
-     from the bar covers the right-hand edge instead. */
+     it, and a sheet from the bottom would cover most of it. A panel hanging
+     from the bar instead, centred and two-thirds of the width. The owner chose
+     that over a narrow column down the right edge (2026-09-26): the synopsis
+     gets room to be read. `margin: auto` between `left: 0` and `right: 0` is
+     what centres a fixed box of a set width. */
   @media (orientation: landscape) {
     .episodes.touch {
       border-radius: 12px;
       border-width: 1px;
       bottom: calc(8px + var(--safe-bottom, 0px));
       height: auto;
-      left: auto;
+      margin: 0 auto;
       padding-bottom: 0;
-      right: 10px;
       top: calc(var(--safe-top, 0px) + var(--below-bar));
-      width: min(400px, 50vw);
+      width: min(640px, 66vw);
     }
   }
 
