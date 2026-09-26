@@ -27,16 +27,15 @@
    * wrong thing. There is no receiver menu to navigate here, only one stream to
    * transport. What is drawn is what can actually be commanded.
    *
-   * ## No subtitle or quality control, and that is measured
+   * ## No subtitle or quality control — not built, and no longer impossible
    *
-   * Both live in an HLS master playlist, and the Default Media Receiver refuses
-   * HLS outright — measured 2026-09-13, `LOAD_FAILED` before it opens a single
-   * TCP connection, even against textbook HLS generated locally by ffmpeg. A
-   * cast therefore only ever carries a whole progressive file, which has one
-   * rendition and no text tracks. Lifting that means registering a custom
-   * receiver in the Cast Developer Console, which was decided against on
-   * 2026-09-20. Drawing the controls anyway would be drawing buttons that
-   * cannot work.
+   * Both live in an HLS master playlist. They were left out on the belief that
+   * the Default Media Receiver refuses HLS (a 2026-09-13 measurement), which
+   * was re-measured on 2026-09-26 and is wrong: it plays HLS served with a CORS
+   * header, as the cast proxy's is. So a cast can carry a master playlist, and
+   * both controls are reachable in principle — through the receiver's own
+   * track and rendition handling, with no custom receiver. Not built; until
+   * then, drawing them would be drawing buttons that do nothing.
    *
    * ## No design tokens in this file, on purpose
    *

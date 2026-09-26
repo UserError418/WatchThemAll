@@ -349,9 +349,11 @@ export function registerIpc(deps: IpcDeps): void {
    * The desktop player does not press play, and a source chosen from the cast
    * list is loaded fresh — several fetch nothing until their overlay is
    * clicked, so without a press the cast would wait out its whole budget and
-   * give up on a source that works. Pressed only while nothing has been
-   * fetched at all, because a press on a playing video pauses it, and no more
-   * than once per interval, because the chrome asks about once a second.
+   * give up on a source that works. Measured 2026-09-26: VidSrc chosen from
+   * the list sat on its poster for the whole 20 s. Pressed only while no
+   * stream has been identified — a press on a playing video pauses it — and
+   * no more than once per interval, because the chrome asks about once a
+   * second.
    */
   let pressedForCastAt = 0
   const PRESS_FOR_CAST_EVERY_MS = 5_000

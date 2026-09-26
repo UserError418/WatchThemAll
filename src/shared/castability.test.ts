@@ -24,10 +24,11 @@ describe('the receiver rule', () => {
 })
 
 describe('titleCastability', () => {
-  it('reads how the video arrived', () => {
+  it('reads how the video arrived: a whole file or HLS casts, another container does not', () => {
+    // HLS casts: measured 2026-09-26 on the owner's dongle through the proxy.
     const scan = row('tv:tt1', { delivery: { a: 'progressive', b: 'segmented', c: 'other', d: 'unknown' } })
     expect(titleCastability(scan, 'a')).toBe('yes')
-    expect(titleCastability(scan, 'b')).toBe('no')
+    expect(titleCastability(scan, 'b')).toBe('yes')
     expect(titleCastability(scan, 'c')).toBe('no')
     expect(titleCastability(scan, 'd')).toBeNull()
     expect(titleCastability(scan, 'never-tested')).toBeNull()
@@ -35,39 +36,39 @@ describe('titleCastability', () => {
   })
 
   it("puts the television's own answer above the prediction", () => {
-    // A whole MP4 in a codec the dongle does not decode.
-    const scan = row('tv:tt1', { delivery: { a: 'progressive', b: 'segmented' }, casts: { a: 'refused', b: 'played' } })
+    // A whole MP4 in a codec the dongle does not decode; an MKV that played.
+    const scan = row('tv:tt1', { delivery: { a: 'progressive', b: 'other' }, casts: { a: 'refused', b: 'played' } })
     expect(titleCastability(scan, 'a')).toBe('no')
     expect(titleCastability(scan, 'b')).toBe('yes')
   })
 })
 
 describe('sourceCastability', () => {
-  it('calls a source likely once it has handed out a whole file for any title', () => {
-    const rows = [row('tv:tt1', { delivery: { a: 'segmented' } }), row('tv:tt2', { delivery: { a: 'progressive' } })]
+  it('calls a source likely once it has streamed any title in a form that casts', () => {
+    const rows = [row('tv:tt1', { delivery: { a: 'other' } }), row('tv:tt2', { delivery: { a: 'segmented' } })]
     expect(sourceCastability(rows, 'a', now)).toBe('likely')
   })
 
-  it('calls it no only when it was seen and never with a file', () => {
-    expect(sourceCastability([row('tv:tt1', { delivery: { a: 'segmented' } })], 'a', now)).toBe('no')
+  it('calls it no only when it was seen and never in a form that casts', () => {
+    expect(sourceCastability([row('tv:tt1', { delivery: { a: 'other' } })], 'a', now)).toBe('no')
     expect(sourceCastability([row('tv:tt1', { delivery: { a: 'unknown' } })], 'a', now)).toBeNull()
     expect(sourceCastability([], 'a', now)).toBeNull()
   })
 
   it('forgets what a source did past the lifetime of a result', () => {
-    // VidSrc gave a file once and playlists since; the old file must not keep it "likely".
+    // A castable stream long ago, only MKV since: the old one must not keep it "likely".
     const old = row('tv:tt1', { delivery: { a: 'progressive' } }, now - RESULT_TTL_MS - 1)
-    const recent = row('tv:tt2', { delivery: { a: 'segmented' } })
+    const recent = row('tv:tt2', { delivery: { a: 'other' } })
     expect(sourceCastability([old, recent], 'a', now)).toBe('no')
   })
 })
 
 describe('castabilities', () => {
   it("uses the title's evidence where there is any and the source's record elsewhere", () => {
-    const title = row('tv:tt1', { delivery: { a: 'segmented', b: 'progressive' } })
-    const elsewhere = [row('tv:tt2', { delivery: { a: 'progressive', c: 'progressive', d: 'segmented' } })]
+    const title = row('tv:tt1', { delivery: { a: 'other', b: 'segmented' } })
+    const elsewhere = [row('tv:tt2', { delivery: { a: 'progressive', c: 'progressive', d: 'other' } })]
     expect(castabilities(['a', 'b', 'c', 'd', 'e'], title, [title, ...elsewhere], now)).toEqual({
-      // A file elsewhere, but a playlist for this very title: the title decides.
+      // Castable elsewhere, but MKV for this very title: the title decides.
       a: 'no',
       b: 'yes',
       c: 'likely',

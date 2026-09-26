@@ -75,7 +75,11 @@ export interface CastLearned {
 export interface BeamResult {
   ok: boolean
   error?: string
-  /** Nothing has been captured yet: the source has not fetched anything. */
+  /**
+   * No stream has been identified yet — nothing fetched, or nothing fetched
+   * that is a playlist or a whole video. Usually a source still on its poster,
+   * waiting for its own play button.
+   */
   waiting?: boolean
   /** Absent when no stream was identified: then there is nothing to learn. */
   learned?: CastLearned
@@ -128,14 +132,14 @@ interface Identified {
 /**
  * Find the best candidate something other than this app could play.
  *
- * **A whole progressive file beats a playlist.** That is the opposite of what
- * quality would suggest, and it is what the receiver measured: a plain
- * Chromecast running the Default Media Receiver plays an HTTP MP4 and rejects
- * HLS outright with `LOAD_FAILED`, before it fetches anything. That was checked
- * against a textbook HLS stream generated locally by ffmpeg, with no provider,
- * no rewriting and no proxy involved, across four content types - so it is the
- * device, not this code. A playlist is still returned when nothing else is
- * available: it costs nothing, and a receiver that *can* play one then does.
+ * **A whole progressive file is taken before a playlist.** That order was set
+ * on 2026-09-13 in the belief that a plain Chromecast refuses HLS; measured
+ * again on 2026-09-26 it plays both, as long as the playlist is served with
+ * a CORS header, which the proxy always sends (see `shared/castability.ts`).
+ * The order stands because a file is the shorter path — one upstream URL, no
+ * rewriting — but which of the two gives the better picture is not measured,
+ * and a whole file can be a decoy: VidLux's 297 MB "episode" for Silo was an
+ * unrelated clip with a warning banner. Worth measuring before relying on it.
  *
  * **Pieces of a film are not the film.** A media fragment plays for six seconds
  * and an initialisation segment for none, and both are served as `video/mp4`
@@ -259,6 +263,7 @@ export function createCastService(): CastService {
           return {
             ok: false,
             error: `${now.providerName} does not hand out a stream a TV can play. Try another source.`,
+            waiting: true,
           }
         }
 
@@ -289,19 +294,19 @@ export function createCastService(): CastService {
 
         return { ok: true, learned: { delivery, outcome: 'played' } }
       } catch (error) {
+        /*
+         * A refusal counts against the source only if the television had
+         * already fetched from us. The receiver answers LOAD_FAILED the same
+         * way when it cannot reach this computer at all, and filing a Wi-Fi
+         * problem as "this source cannot cast" would hide a source that can.
+         * Read before `stop`, which resets the count.
+         */
+        const refused = error instanceof ReceiverRefusedError && proxy.served() > 0
         // The proxy must not outlive a failed attempt: it would sit on the
         // network serving a stream nothing is watching.
         proxy.stop()
         const message = error instanceof Error ? error.message : String(error)
         if (delivery === null) return { ok: false, error: message }
-        /*
-         * A refused playlist is the receiver's known limit and says something
-         * about the source. A refused whole file does not, reliably: the same
-         * answer comes back when the TV cannot reach this computer, and filing
-         * a network hiccup as "this source cannot cast" would hide a source
-         * that can. So only the first is recorded as a refusal.
-         */
-        const refused = error instanceof ReceiverRefusedError && delivery === 'segmented'
         return { ok: false, error: message, learned: { delivery, outcome: refused ? 'refused' : null } }
       }
     },

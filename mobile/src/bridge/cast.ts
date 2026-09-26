@@ -221,14 +221,14 @@ interface Identified {
 /**
  * Find the best candidate something other than this app could play.
  *
- * **A whole progressive file beats a playlist.** That is the opposite of what
- * quality would suggest, and it is what the receiver measured: a plain
- * Chromecast running the Default Media Receiver plays an HTTP MP4 and rejects
- * HLS outright with `LOAD_FAILED`, before it fetches anything. That was checked
- * against a textbook HLS stream generated locally by ffmpeg, with no provider,
- * no rewriting and no proxy involved, across four content types - so it is the
- * device, not this code. A playlist is still returned when nothing else is
- * available: it costs nothing, and a receiver that *can* play one then does.
+ * **A whole progressive file is taken before a playlist.** That order was set
+ * on 2026-09-13 in the belief that a plain Chromecast refuses HLS; measured
+ * again on 2026-09-26 it plays both, as long as the playlist is served with
+ * a CORS header, which the proxy always sends (see `shared/castability.ts`).
+ * The order stands because a file is the shorter path — one upstream URL, no
+ * rewriting — but which of the two gives the better picture is not measured,
+ * and a whole file can be a decoy: VidLux's 297 MB "episode" for Silo was an
+ * unrelated clip with a warning banner. Worth measuring before relying on it.
  *
  * **Pieces of a film are not the film.** A media fragment plays for six seconds
  * and an initialisation segment for none, and both are served as `video/mp4`

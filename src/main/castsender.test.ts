@@ -357,21 +357,20 @@ describe('CastSession', () => {
    * here and nowhere earlier.
    */
   /**
-   * A refused playlist is the receiver, not the router.
+   * A refused playlist is about the stream, not the router.
    *
-   * Measured against a real device: a plain Chromecast rejects HLS before it
-   * fetches a byte, while an HTTP MP4 from the same machine plays. Sending the
-   * user to check client isolation there is confidently wrong, and costs them
-   * an evening.
+   * The proxy serves playlists with the CORS header the receiver needs, so a
+   * playlist it will not play is the stream's doing. Sending the user to check
+   * client isolation there is confidently wrong, and costs them an evening.
    */
-  it('blames the receiver, not the network, when a playlist is refused', async () => {
+  it('blames the stream, not the network, when a playlist is refused', async () => {
     receiver = new FakeReceiver()
     receiver.failLoad = true
     const port = await receiver.listen()
     session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
     await session.connect()
 
-    await expect(session.load(MEDIA)).rejects.toThrow(/will not play this kind of stream/i)
+    await expect(session.load(MEDIA)).rejects.toThrow(/will not play this stream/i)
   })
 
   it('blames the network when a plain file is refused, where it is the first suspect', async () => {

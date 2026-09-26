@@ -344,9 +344,12 @@
    * source list, narrowed to what can cast — and the user picks. Only then is
    * the source loaded here, started, and handed over.
    *
-   * The reason is the receiver. A plain Chromecast plays a whole MP4 and
-   * refuses HLS, and most sources hand out HLS, so "cast what is playing" was
-   * a coin toss the user could not see. See `shared/castability.ts`.
+   * The reason was the receiver, and then turned out not to be. It was built
+   * believing a plain Chromecast refuses HLS; measured the same evening, it
+   * plays HLS through the cast proxy. What the list still narrows away is
+   * what genuinely does not cast — another container, a source a television
+   * refused — and what it adds is choosing before loading rather than after.
+   * See `shared/castability.ts`.
    */
 
   /** Sources a cast from the list could not start this time, with why, so their rows can say. */

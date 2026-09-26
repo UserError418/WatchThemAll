@@ -145,6 +145,14 @@ export interface CastProxy {
   start(bundle: CastBundleForProxy): Promise<string>
   stop(): void
   isRunning(): boolean
+  /**
+   * How many requests for this bundle the receiver has made since `start`.
+   *
+   * What tells a television that refused a stream it had looked at from one
+   * that never reached this machine: only the first says anything about the
+   * source. See `beam` in `castservice.ts`.
+   */
+  served(): number
 }
 
 export function createCastProxy(): CastProxy {
@@ -152,9 +160,11 @@ export function createCastProxy(): CastProxy {
   let playlists = new Map<string, string>()
   let targets = new Map<string, string>()
   let headers: Record<string, string> = {}
+  let servedCount = 0
 
   const handle = (request: IncomingMessage, response: ServerResponse): void => {
     const id = idFromPath(request.url ?? '/')
+    if (playlists.has(id) || targets.has(id)) servedCount += 1
 
     const playlist = playlists.get(id)
     if (playlist !== undefined) {
@@ -214,6 +224,7 @@ export function createCastProxy(): CastProxy {
       playlists = new Map(Object.entries(bundle.playlists))
       targets = new Map(Object.entries(bundle.targets))
       headers = bundle.headers
+      servedCount = 0
 
       const address = lanAddress()
       if (address === null) {
@@ -246,6 +257,10 @@ export function createCastProxy(): CastProxy {
 
     isRunning(): boolean {
       return server !== null
+    },
+
+    served(): number {
+      return servedCount
     },
   }
 }

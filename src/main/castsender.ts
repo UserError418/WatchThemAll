@@ -276,23 +276,23 @@ export class CastSession {
 
     if (answer.type === 'LOAD_FAILED' || answer.type === 'LOAD_CANCELLED') {
       /*
-       * Two very different causes, and the wrong guess sends the user to the
-       * router for an hour.
+       * Two causes, and the wrong guess sends the user to the router for an
+       * hour.
        *
-       * For a playlist it is almost always the receiver itself. A plain
-       * Chromecast running the Default Media Receiver rejects HLS outright —
-       * measured against a textbook stream generated locally, with no provider
-       * and no proxy in the way, and it fails before it fetches a single byte
-       * while an HTTP MP4 from the same machine plays. Blaming the network
-       * there is confidently wrong.
+       * A playlist the receiver could not play is about the stream: the proxy
+       * serves every playlist with the CORS header the receiver's HLS player
+       * needs, so what is left is the stream itself — a codec, an encrypted
+       * segment, a source that answers the proxy with an error. (It was once
+       * blamed on the receiver refusing HLS altogether. Measured 2026-09-26,
+       * it does not: the 2026-09-13 test that said so served no CORS header.)
        *
-       * For a plain file the network really is the first suspect: the receiver
-       * has to reach this machine, so client isolation, a firewall or the wrong
+       * For a plain file the network is the first suspect: the receiver has
+       * to reach this machine, so client isolation, a firewall or the wrong
        * interface all surface exactly here and nowhere earlier.
        */
       if (media.contentType.includes('mpegurl')) {
         throw new ReceiverRefusedError(
-          `${this.deviceName} will not play this kind of stream. This source hands out an HLS playlist, and a basic Chromecast can only play a plain video file. Try another source.`,
+          `${this.deviceName} will not play this stream. Try another source.`,
         )
       }
       throw new ReceiverRefusedError(

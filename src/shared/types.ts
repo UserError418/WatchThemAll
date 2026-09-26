@@ -704,20 +704,19 @@ export type ProbeVerdict =
 /**
  * How a provider's video reached the player — the fact casting depends on.
  *
- * A plain Chromecast running the Default Media Receiver plays one whole MP4 or
- * WebM file and refuses HLS before it fetches a byte (measured 2026-09-13; see
- * `docs/internal/casting.md`). Which of the two a provider hands out is not a
- * fixed property of the provider: VidSrc gave a whole file on 2026-09-13 and a
- * playlist on 2026-09-26, and VidLux gives an MP4 for one title and a playlist
- * for another. So it is measured per title, by every test, and stored as what
- * was *seen* rather than as "castable" — the receiver's rule is applied when
- * it is read (`shared/castability.ts`), so a receiver that plays more would
- * need no re-testing.
+ * Which form a provider hands out is not a fixed property of the provider:
+ * VidSrc gave a whole file on 2026-09-13 and a playlist on 2026-09-26, and
+ * VidLux resolves different titles to different hosts. So it is measured per
+ * title, by every test and every cast, and stored as what was *seen* rather
+ * than as "castable" — the receiver's rule is applied when it is read
+ * (`shared/castability.ts`). That paid off on the day it was written: the
+ * rule believed at the start of 2026-09-26 (HLS never casts) was measured
+ * wrong the same evening, and only the rule had to change.
  */
 export type StreamDelivery =
-  /** One whole MP4 or WebM file. What a plain Chromecast plays. */
+  /** One whole MP4 or WebM file. */
   | 'progressive'
-  /** An HLS or DASH playlist and its pieces. What a plain Chromecast refuses. */
+  /** An HLS or DASH playlist and its pieces. */
   | 'segmented'
   /** One whole file in another container, such as ScreenScape's MKV. The app does not hand these to a TV. */
   | 'other'
