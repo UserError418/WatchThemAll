@@ -20,7 +20,7 @@ const RATINGS = [
 const EVERY_VALUE: RatingValue[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 describe('the legacy conversion', () => {
-  /** the owner's explicit requirement, pinned so nobody "tidies" it to 10 and 1. */
+  /** An explicit requirement, pinned so nobody "tidies" it to 10 and 1. */
   it('turns a like into an 8 and a dislike into a 4', () => {
     expect(LEGACY_LIKE_VALUE).toBe(8)
     expect(LEGACY_DISLIKE_VALUE).toBe(4)

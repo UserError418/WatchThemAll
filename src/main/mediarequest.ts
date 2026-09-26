@@ -149,7 +149,7 @@ export function isMediaResponse(contentType: string, body: string): boolean {
  * that is not enough: on Game of Thrones and Frieren its playlists loaded
  * cleanly, every segment they listed was refused with 403, and nothing ever
  * played — while the test, satisfied by the playlist, said "works". Agreed
- * with the owner on 2026-09-26: on the desktop, a source works when video arrives.
+ * on 2026-09-26: on the desktop, a source works when video arrives.
  *
  * - `playlist` — an HLS or DASH manifest, by name or by type.
  * - `file` — a whole video fetched by a media element (ScreenScape's `.mkv`).

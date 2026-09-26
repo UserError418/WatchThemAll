@@ -390,8 +390,8 @@ async function because(
  * then the chart.
  *
  * A genre id alone cannot tell a user's kind of "Animation" from TMDB's — the
- * first version, charts only, filled the owner's Animation shelf with Toy Story
- * and Pokémon while his was anime. The recommendations of his own favourites
+ * first version, charts only, filled an anime fan's Animation shelf with Toy
+ * Story and Pokémon. The recommendations of the user's own favourites
  * in the genre can, because they inherit everything about those titles a genre
  * does not capture. So a shelf pools its seeds' recommendations, keeps only
  * candidates that carry every genre of the shelf and belong to its lane (the
@@ -550,9 +550,10 @@ const DISCOVERY_SEEDS = 8
  * Each lane's part comes first from its favourites' recommendations that pass
  * the flavour: a hidden gem the user's own favourites point at, not just any
  * obscure title in a genre they like. The first version asked `/discover`
- * alone, in each lane's top genres. For the owner those are Drama and Comedy, and
- * "New for you" opened with whatever romance was popular that week. The chart
- * now only tops up a lane whose favourites turned up too little.
+ * alone, in each lane's top genres. On a real library those were Drama and
+ * Comedy, and "New for you" opened with whatever romance was popular that
+ * week. The chart now only tops up a lane whose favourites turned up too
+ * little.
  */
 async function mixedRow(
   flavour: 'new' | 'gems' | 'acclaimed',

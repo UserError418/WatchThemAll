@@ -2,7 +2,7 @@
  * Browse's three lanes: series, films and anime.
  *
  * A library that is three-quarters anime produced a page that was four-fifths
- * anime — measured on the owner's after his MyAnimeList import: 81% of the cards in
+ * anime — measured after a real MyAnimeList import: 81% of the cards in
  * the personal rows were animation, Top picks all of them. Scores can't fix
  * that on their own, because a profile that loves anime ranks anime first,
  * correctly. So the lanes are kept apart structurally: every lane row shows
@@ -44,7 +44,7 @@ export function inLane(lane: Lane): (m: Classifiable) => boolean {
   return (m) => laneOf(m) === lane
 }
 
-/** What a lane is called in a row's heading, in the words the owner used for them. */
+/** What a lane is called in a row's heading, in the owner's words. */
 export const LANE_NOUN: Record<Lane, string> = {
   series: 'TV shows',
   films: 'movies',

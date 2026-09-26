@@ -295,7 +295,7 @@ export interface WatchlistEntry {
    *
    * It exists because those records have nowhere else to live — episode state
    * is stored on the entry — and creating a listed one for them put every
-   * ticked or rated title on the watchlist. the owner, 2026-09-26: only pressing
+   * ticked or rated title on the watchlist. Decided 2026-09-26: only pressing
    * play should do that. Pressing play, "+ Watchlist" or a MyAnimeList import
    * lists the entry; removing it from the watchlist deletes it, ticks and all,
    * as before.

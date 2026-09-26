@@ -86,8 +86,8 @@ describe('pickLanAddress', () => {
    * times out saying nothing useful.
    */
   it('prefers a real LAN address over a Tailscale one, whatever the order', () => {
-    expect(pickLanAddress(['100.69.226.123', '192.168.178.157'])).toBe('192.168.178.157')
-    expect(pickLanAddress(['192.168.178.157', '100.69.226.123'])).toBe('192.168.178.157')
+    expect(pickLanAddress(['100.101.102.103', '192.168.1.20'])).toBe('192.168.1.20')
+    expect(pickLanAddress(['192.168.1.20', '100.101.102.103'])).toBe('192.168.1.20')
   })
 
   it('accepts every private range a home network uses', () => {

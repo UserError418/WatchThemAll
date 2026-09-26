@@ -44,7 +44,7 @@ import type { LegacyRating, RatingValue, TitleRating, WatchedEntry } from './typ
 /**
  * What a legacy like and dislike become on the 1–10 scale.
  *
- * the owner's call, not a derivation: an 8 is a clear "yes" without claiming a
+ * The owner's call, not a derivation: an 8 is a clear "yes" without claiming a
  * favourite, and a 4 a clear "no" without claiming contempt. Both sit far
  * enough inside their band (see `ratingBand`) that the Watched filters hold
  * exactly what they held before the upgrade. A converted value is marked

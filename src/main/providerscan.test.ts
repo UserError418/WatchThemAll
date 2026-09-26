@@ -246,7 +246,7 @@ describe('freshScan', () => {
     expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'stream' })
   })
 
-  it('keeps a result for thirty days, as the owner set', () => {
+  it('keeps a result for thirty days', () => {
     const scans = [scanOf({ a: 'dead' }, now - 29 * day)]
     expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'dead' })
   })

@@ -8,11 +8,11 @@
  * The *stream* rule is the phone's own and unchanged by the move to hidden
  * sessions: a playlist, a segment or a confirmed whole file in the session's
  * log — or the page's own report that a video started — is a stream. The
- * desktop now asks for video itself (`streamverdict.ts`); agreed with the owner
+ * desktop now asks for video itself (`streamverdict.ts`); agreed on
  * 2026-09-26 that this stays a desktop rule. What the phone gains is the
  * desktop's *reasons* for everything else, and with them the desktop's reds:
- * "timeout (20 s)" sorts with the reds, as the owner asked, instead of the amber
- * "may work" the phone used to give any page that made a request.
+ * "timeout (20 s)" sorts with the reds, as the desktop's does, instead of the
+ * amber "may work" the phone used to give any page that made a request.
  */
 
 import type { ProbeVerdict, ScanReason } from '@shared/ipc'

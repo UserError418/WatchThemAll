@@ -1,11 +1,12 @@
 /**
  * The taste profile Browse plans from: the whole library's, and one per lane.
  *
- * Per lane because a genre means different things in each. the owner's "Drama" is
- * nearly all anime — measured, the Drama shelf was 91% animation — so a
- * live-action drama scored by the whole library's taste was being scored by
- * how much it resembled anime. Each lane is scored by its own titles instead,
- * as long as it has enough of them to go on (`MIN_LANE_TITLES`).
+ * Per lane because a genre means different things in each. In the library
+ * this was tuned on, "Drama" is nearly all anime — measured, the Drama shelf
+ * was 91% animation — so a live-action drama scored by the whole library's
+ * taste was being scored by how much it resembled anime. Each lane is scored
+ * by its own titles instead, as long as it has enough of them to go on
+ * (`MIN_LANE_TITLES`).
  */
 
 import type { MediaType } from '@shared/types'

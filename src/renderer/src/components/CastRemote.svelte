@@ -34,8 +34,8 @@
    * TCP connection, even against textbook HLS generated locally by ffmpeg. A
    * cast therefore only ever carries a whole progressive file, which has one
    * rendition and no text tracks. Lifting that means registering a custom
-   * receiver in the Cast Developer Console; the owner was asked on 2026-09-20 and
-   * chose not to. Drawing the controls anyway would be drawing buttons that
+   * receiver in the Cast Developer Console, which was decided against on
+   * 2026-09-20. Drawing the controls anyway would be drawing buttons that
    * cannot work.
    *
    * ## No design tokens in this file, on purpose

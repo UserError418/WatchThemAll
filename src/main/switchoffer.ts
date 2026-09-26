@@ -4,7 +4,7 @@
  * Extracted from `playerview.ts` because these are the parts that *decide*,
  * and the decisions have been wrong in ways the user noticed, repeatedly:
  * ignoring the provider's own document once it was framed; treating a
- * rate-limited analytics beacon as a dead source; and, reported by the owner on
+ * rate-limited analytics beacon as a dead source; and, reported on
  * 2026-09-26, switching away from sources that were fine — VidLux cut off
  * seconds before it would have played, a video waiting for its play button
  * abandoned, a paused one treated as frozen.
@@ -101,7 +101,7 @@ export interface LoadEvidence {
  * The desktop player does not press play, and many providers do not autoplay:
  * they load the stream and wait for the user. Nothing plays, so the silence
  * detector used to conclude the source had failed and switch away from a video
- * that was ready — the owner's report, 2026-09-26. A source that has resolved its
+ * that was ready — reported 2026-09-26. A source that has resolved its
  * stream is waiting for the user, and the user is not a failure.
  *
  * A refused segment overrides a playlist or an element: Videasy's playlists
@@ -153,7 +153,7 @@ export interface PageActivity {
  * `<video>`, fetch no playlist, and go quiet — so there is no stream to find,
  * and the old rule read "nothing arrived" as "nothing will". Measured
  * 2026-09-26: VidSrc was switched away from at 29 s while showing Fight Club's
- * poster with a play button on it, which is the owner's report exactly. Videasy
+ * poster with a play button on it, which is the report exactly. Videasy
  * is the same, and loads its stream the moment it is clicked.
  *
  * The cost is on the other side: a page that fails without saying so and then
@@ -196,7 +196,7 @@ export type OfferKind = 'silence' | 'failure' | 'stall'
  *   moved somewhere else unasked is worse than the freeze. The watcher's own
  *   comment always said "offers rather than switches"; the countdown did not
  *   know that.
- * - **A source "Test all sources" found working.** Agreed with the owner: never
+ * - **A source "Test all sources" found working.** Agreed 2026-09-26: never
  *   auto-switch away from a green source. A slow start there is far likelier
  *   than a dead one, and the user can still take the offer.
  */

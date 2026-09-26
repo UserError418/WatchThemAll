@@ -8,7 +8,7 @@
  * could not tell a broken source from a slow one, and so could not decide
  * whether it was worth waiting for.
  *
- * The colours follow what the user should do, agreed with the owner on 2026-09-26:
+ * The colours follow what the user should do, agreed on 2026-09-26:
  *
  * - **red** for anything the test saw fail, including a timeout. A source that
  *   needs more than the test's budget to start is not one Automatic should try

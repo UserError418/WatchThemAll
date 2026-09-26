@@ -774,7 +774,7 @@ class Library {
    *
    * Stored on the title's entry, which is created unlisted if there is none:
    * choosing a source is not asking for the title on the watchlist — only
-   * pressing play is (the owner, 2026-09-26).
+   * pressing play is (decided 2026-09-26).
    */
   setEntryProvider(media: MediaSummary | MediaDetail, providerId: string | null): void {
     const entry = this.entryFor(media)

@@ -16,9 +16,9 @@
  * ## How many rows a lane gets
  *
  * Every lane gets `BODY_BASE` body rows, whatever its share: this is what
- * "equal at the top" buys (agreed with the owner, 2026-09-26). The `BODY_EXTRA`
+ * "equal at the top" buys (agreed 2026-09-26). The `BODY_EXTRA`
  * rows after that go to the lanes the user likes most, but no lane takes more
- * than `BODY_EXTRA_CAP` of them. On the owner's library, three-quarters anime, the
+ * than `BODY_EXTRA_CAP` of them. On a real library, three-quarters anime, the
  * anime lane ends with 6 of 15 lane rows instead of 12.
  */
 
@@ -140,7 +140,7 @@ export function planRows({ profile, genreName, because, themes }: PlanInputs): F
 
   // Built strongest lane first, sharing what is already used: a genre heads
   // one shelf on the page and a keyword one micro-genre. Drama is the top
-  // genre of every lane on the owner's library, and "Drama TV shows", "Drama
+  // genre of every lane on a real library, and "Drama TV shows", "Drama
   // movies" and "Drama anime" was one idea three times.
   const used: Used = { concepts: new Set(), keywords: new Set() }
   const queues = Object.fromEntries(

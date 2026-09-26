@@ -176,7 +176,7 @@ export function library(): TasteStore {
 
 /**
  * A library with enough of every lane to stand on its own (`MIN_LANE_TITLES`),
- * shaped like the owner's: mostly anime.
+ * shaped like the real one the lanes were tuned on: mostly anime.
  * - anime: 1–8, from MyAnimeList,
  * - series: 11–15,
  * - films: 21–24,

@@ -342,7 +342,7 @@ body {
   The desktop's `main` clears `--nav-height`, and the phone's bar is taller
   than that by the status-bar inset it grows to cover (see `nav` above). So
   every surface without a hero started that much too high, under the bar:
-  the owner, 2026-09-26, the Watchlist's All/Series/Films filters showing only
+  reported 2026-09-26, the Watchlist's All/Series/Films filters showing only
   their bottom edge. Browse keeps its zero — the hero is meant to run under
   the bar.
 */

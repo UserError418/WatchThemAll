@@ -301,7 +301,7 @@
     }
 
     // Playing something implies wanting it in the library — the one action
-    // that lists a title by itself (the owner, 2026-09-26). Watched is a separate
+    // that lists a title by itself (decided 2026-09-26). Watched is a separate
     // question, settled on the way out from how long it ran.
     library.addToWatchlist(playable)
     library.recordWatch(playable, episode?.season ?? null, episode?.episode ?? null)

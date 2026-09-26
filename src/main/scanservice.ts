@@ -70,9 +70,9 @@ import { verdictForReason } from '@shared/scanreason'
  * test saw fail — a backend error, a refused segment, a timeout — red.
  *
  * That used to be softer. A 500 from the provider's own API was amber, on the
- * theory that it "is usually gone in an hour". the owner's months of use said
+ * theory that it "is usually gone in an hour". Months of real use said
  * otherwise — VidFast answered 500 on every title for days — and on
- * 2026-09-26 he asked for red. What keeps red safe is the re-check below: any
+ * 2026-09-26 it became red. What keeps red safe is the re-check below: any
  * red is probed again alone, with a longer budget, before it is believed.
  */
 /** What one probe of one provider settles. */
@@ -130,8 +130,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
    * The fan-out's budget was eighteen, set by 111Movies' series pages at
    * 12.0–15.3 s to their first media request. Two things moved it. A source
    * now has to deliver video, not just a playlist, which adds the first
-   * segment to every start. And the owner asked on 2026-09-26 for sources slower
-   * than 20–25 s to be called out as a timeout rather than a vague "may work".
+   * segment to every start. And since 2026-09-26 a source slower than 20–25 s
+   * is called out as a timeout rather than a vague "may work".
    *
    * The re-check gets the upper end of that range because it is where a false
    * red is caught, and slow sources exist: VidLux, probed alone on five titles,

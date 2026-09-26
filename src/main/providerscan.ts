@@ -61,8 +61,8 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * How long a test result is shown and used at all: thirty days.
  *
  * It was six hours, on the belief that these providers change by the hour.
- * the owner's experience over months of use is that they do not, and he set thirty
- * days on 2026-09-26. What keeps a month-old result honest is not expiry but
+ * Months of real use say they do not, and the owner set thirty days on
+ * 2026-09-26. What keeps a month-old result honest is not expiry but
  * re-testing, below — and a real play, which overrides an older red or amber
  * (see `freshScan`).
  */
@@ -73,8 +73,8 @@ export const RESULT_TTL_MS = 30 * DAY_MS
  *
  * Reds soonest, because a wrong red is the expensive mistake and nothing else
  * corrects it: a source painted red is one nobody clicks. Ambers a day later,
- * greens only when they expire — spread out, in the owner's words, "to spread the
- * load". Agreed 2026-09-26.
+ * greens only when they expire — spread out, as the owner put it, "to spread
+ * the load". Agreed 2026-09-26.
  */
 export const RETEST_AFTER_MS: Record<ProbeVerdict, number> = {
   dead: 3 * DAY_MS,

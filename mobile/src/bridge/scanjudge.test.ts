@@ -69,7 +69,7 @@ describe('missedStreamReason', () => {
 })
 
 describe('judgeMissedStream', () => {
-  it('puts a timeout with the reds, as the owner asked', () => {
+  it('puts a timeout with the reds', () => {
     const judged = judgeMissedStream({ documentError: null, lastRequestAtMs: END, endedAtMs: END, budgetMs: 25_000 })
     expect(judged).toEqual({ verdict: 'dead', reason: { kind: 'timeout', seconds: 25 } })
   })

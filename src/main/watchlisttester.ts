@@ -3,7 +3,7 @@
  *
  * "Test all sources" answers the question when the user asks it, and makes them
  * wait a minute or two for the answer. For the titles they are actually going
- * to watch — the watchlist — the answer can be ready before they ask. the owner's
+ * to watch — the watchlist — the answer can be ready before they ask. The
  * brief, 2026-09-26: test one provider every minute or two, the first
  * watchlist entry until every provider is tested, then the next, to the end;
  * then stop until something new is added. Series on the episode the user is
@@ -88,7 +88,7 @@ export interface PlannedTest {
 /**
  * The next test to run, or null when nothing is due.
  *
- * Finishes one title before starting the next, as the owner asked: every due
+ * Finishes one title before starting the next, as the brief asks: every due
  * provider of the first entry, in the user's provider order, then the second
  * entry. `skip` names titles to pass over this time — unreleased ones, and any
  * whose lookup just failed.
@@ -173,7 +173,7 @@ export interface WatchlistTester {
 }
 
 /**
- * One minute between tests, as the owner specified ("every 1 or 2 minutes"). A
+ * One minute between tests, as the brief specifies ("every 1 or 2 minutes"). A
  * test itself takes up to 25 seconds, so a hidden player is running for at
  * most a third of the time, and one at a time.
  */

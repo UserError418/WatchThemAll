@@ -162,7 +162,7 @@ describe('why a source failed', () => {
     budgets.clear()
   })
 
-  it('paints a backend 500 red and says so, as the owner asked', async () => {
+  it('paints a backend 500 red and says so', async () => {
     script.set('vidfast', [
       { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },
       { verdict: 'api-error', ms: null, reason: { kind: 'error', status: 500 } },

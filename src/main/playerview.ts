@@ -1147,7 +1147,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * Every automatic switch goes through here and its countdown, which the user
    * can refuse; `mayAutoSwitch` decides whether the countdown runs at all.
    * Failures that used to switch outright (`advance`) come through here too:
-   * one of those was a *sub-frame* failing, which moved the owner off videos that
+   * one of those was a *sub-frame* failing, which moved the user off videos that
    * were playing without asking, and without the bar ever appearing.
    */
   const suggest = (reason: string, kind: OfferKind): void => {
@@ -1519,7 +1519,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * handler used to treat any of them as the provider failing and switched on
    * the spot — no countdown, no check that anything was playing. Reproduced on
    * 2026-09-26: one failing iframe added to a playing VidRock moved the player
-   * to ScreenScape instantly. That is the "switched without the bar" the owner
+   * to ScreenScape instantly. That is the "switched without the bar" that was
    * reported.
    *
    * So only two frames count: our own shell (the main frame), and the
