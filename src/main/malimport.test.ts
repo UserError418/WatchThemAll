@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
+  findBestMatch,
   mediaTypeFor,
   parseMalExport,
   pickBestMatch,
@@ -345,5 +346,93 @@ describe('pickBestMatch', () => {
     ])
 
     expect(best).not.toBeNull()
+  })
+  it('prefers the requested type among several exact titles', () => {
+    // "Mob Psycho 100" is both the series and a film, and TMDB may list either first.
+    const best = pickBestMatch('Mob Psycho 100', 'tv', [
+      { type: 'movie', title: 'Mob Psycho 100', voteCount: 30 },
+      tv('Mob Psycho 100', 2000),
+    ])
+
+    expect(best?.type).toBe('tv')
+  })
+})
+
+describe('findBestMatch', () => {
+  type Result = RankableMatch & { id: number }
+  /** A TMDB search that answers from a table, recording what it was asked. */
+  function searchFrom(table: Record<string, Result[]>) {
+    const asked: string[] = []
+    const search = async (term: string): Promise<Result[]> => {
+      asked.push(term)
+      return table[term] ?? []
+    }
+    return { search, asked }
+  }
+
+  /**
+   * Measured on a real library: the full title finds only a recap film, and
+   * the shorter term finds the series. Stopping at the first term that found
+   * anything filed the film as the anime.
+   */
+  it('passes over a wrong-typed pick when a shorter term finds the right type', async () => {
+    const { search } = searchFrom({
+      'Shingeki no Kyojin Season 3': [
+        { id: 492999, type: 'movie', title: 'Attack on Titan: The Roar of Awakening', voteCount: 300 },
+      ],
+      'Shingeki no Kyojin': [
+        { id: 295830, type: 'movie', title: 'Attack on Titan', voteCount: 500 },
+        { id: 1429, type: 'tv', title: 'Attack on Titan', voteCount: 7000 },
+      ],
+    })
+
+    const best = await findBestMatch('Shingeki no Kyojin Season 3', 'tv', search)
+
+    expect(best?.id).toBe(1429)
+  })
+
+  it('still settles for the wrong type when no term finds the right one', async () => {
+    const { search } = searchFrom({
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'Some Special: The Movie', voteCount: 10 }],
+    })
+
+    const best = await findBestMatch('Some Special Season 2', 'tv', search)
+
+    expect(best?.id).toBe(7)
+  })
+
+  it('takes the first wrong-typed pick as the fallback, not a later one', async () => {
+    const { search } = searchFrom({
+      'Some Special Season 2': [{ id: 7, type: 'movie', title: 'First Film', voteCount: 10 }],
+      'Some Special': [{ id: 8, type: 'movie', title: 'Second Film', voteCount: 900 }],
+    })
+
+    expect((await findBestMatch('Some Special Season 2', 'tv', search))?.id).toBe(7)
+  })
+
+  /** An exact title still wins outright, whatever its type (`pickBestMatch` rule 1). */
+  it('stops at an exact title even when it is the other type', async () => {
+    const { search, asked } = searchFrom({
+      'Kimi no Na wa Season 2': [{ id: 372058, type: 'movie', title: 'Kimi no Na wa Season 2', voteCount: 9000 }],
+      'Kimi no Na wa': [{ id: 1, type: 'tv', title: 'Something Else', voteCount: 10 }],
+    })
+
+    expect((await findBestMatch('Kimi no Na wa Season 2', 'tv', search))?.id).toBe(372058)
+    expect(asked).toEqual(['Kimi no Na wa Season 2'])
+  })
+
+  it('stops searching at the first right-typed pick', async () => {
+    const { search, asked } = searchFrom({
+      'Mob Psycho 100 II': [{ id: 67075, type: 'tv', title: 'Mob Psycho 100', voteCount: 2000 }],
+    })
+
+    expect((await findBestMatch('Mob Psycho 100 II', 'tv', search))?.id).toBe(67075)
+    expect(asked).toHaveLength(1)
+  })
+
+  it('returns null when no term finds anything', async () => {
+    const { search } = searchFrom({})
+
+    expect(await findBestMatch('Nothing Here', 'tv', search)).toBeNull()
   })
 })

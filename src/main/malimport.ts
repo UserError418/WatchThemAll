@@ -351,9 +351,11 @@ function normaliseTitle(title: string): string {
  *    ecstatic votes outscores a classic. How many people bothered to rate it is
  *    the only one of the three that means "this is the well-known one".
  *
- * Media type filters rule 2 rather than gating it, because an anime film and
- * the series it was cut from often share a name and TMDB does not always agree
- * with MAL about which is which. A wrong-typed match beats no match at all.
+ * Media type filters both rules rather than gating them, because an anime
+ * film and the series it was cut from often share a name and TMDB does not
+ * always agree with MAL about which is which. A wrong-typed match beats no
+ * match at all. Among several exact titles the requested type wins: "Mob
+ * Psycho 100" is a series and a film.
  */
 export function pickBestMatch<T extends RankableMatch>(
   term: string,
@@ -362,12 +364,44 @@ export function pickBestMatch<T extends RankableMatch>(
 ): T | null {
   if (results.length === 0) return null
 
-  const wanted = normaliseTitle(term)
-  const exact = results.find((r) => normaliseTitle(r.title) === wanted)
-  if (exact) return exact
+  const exact = results.filter((r) => isExactMatch(term, r))
+  if (exact.length > 0) return exact.find((r) => r.type === type) ?? exact[0]!
 
   const sameType = results.filter((r) => r.type === type)
   const pool = sameType.length > 0 ? sameType : results
 
   return pool.reduce((best, r) => ((r.voteCount ?? 0) > (best.voteCount ?? 0) ? r : best))
+}
+
+function isExactMatch(term: string, result: RankableMatch): boolean {
+  return normaliseTitle(result.title) === normaliseTitle(term)
+}
+
+/**
+ * Resolve one MAL title: try each of its `searchVariants` in turn and pick
+ * the result it meant. The whole resolver apart from the network, shared by
+ * the desktop and the phone so the two cannot resolve a list differently.
+ *
+ * Stops at the first term whose pick is the requested type or an exact title.
+ * A wrong-typed pick that is only the best of a bad lot is held back while
+ * the shorter terms are tried. The full title often finds *only* a film cut
+ * from the series: "Shingeki no Kyojin Season 3" returns a recap film and
+ * nothing else, while "Shingeki no Kyojin" finds the series. Stopping at the
+ * first term that found anything filed that film, and two more like it, as
+ * the anime on one real library. A wrong-typed pick still wins when no term
+ * finds anything better (see `pickBestMatch`).
+ */
+export async function findBestMatch<T extends RankableMatch>(
+  title: string,
+  type: 'tv' | 'movie',
+  search: (term: string) => Promise<readonly T[]>,
+): Promise<T | null> {
+  let fallback: T | null = null
+  for (const term of searchVariants(title)) {
+    const best = pickBestMatch(term, type, await search(term))
+    if (!best) continue
+    if (best.type === type || isExactMatch(term, best)) return best
+    fallback ??= best
+  }
+  return fallback
 }

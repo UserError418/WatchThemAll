@@ -38,6 +38,12 @@ export interface ImportDecisions {
 /** Enough of a TMDB match to build an entry. Null when nothing matched. */
 export interface ResolvedTitle {
   tmdbId: number
+  /**
+   * What TMDB files the match as, which is not always what MAL said: a MAL
+   * "TV" entry can resolve to a film. A TMDB id means nothing without its own
+   * type, so the entries built from a match use this one.
+   */
+  type: MediaType
   imdbId: string | null
   title: string
   posterPath: string | null
@@ -102,12 +108,15 @@ export async function applyMalImport(
   const trackers = [...store.trackers]
   const ratings = [...store.ratings]
 
-  const haveWatchlist = new Set(watchlist.map((w) => w.tmdbId))
-  const haveWatched = new Set(watched.map((w) => w.tmdbId))
+  // By type and id: TMDB numbers films and series separately, so a film can
+  // share an anime's id.
+  const titleKey = (t: { type: MediaType; tmdbId: number }): string => `${t.type}:${t.tmdbId}`
+  const haveWatchlist = new Set(watchlist.map(titleKey))
+  const haveWatched = new Set(watched.map(titleKey))
   const haveTracker = new Set(trackers.map((t) => t.tmdbId))
 
   /** Every MAL score that resolved to a title, collected before any is applied. */
-  const scored = new Map<number, ScoredTitle>()
+  const scored = new Map<string, ScoredTitle>()
 
   let done = 0
   for (const entry of selected) {
@@ -158,12 +167,12 @@ export async function applyMalImport(
       continue
     }
 
-    if (target === 'watched' && !haveWatched.has(match.tmdbId)) {
-      haveWatched.add(match.tmdbId)
+    if (target === 'watched' && !haveWatched.has(titleKey(match))) {
+      haveWatched.add(titleKey(match))
       watched.push(stamp({
         id: newId(),
         tmdbId: match.tmdbId,
-        type,
+        type: match.type,
         season: null,
         title: match.title,
         posterPath: match.posterPath,
@@ -177,12 +186,12 @@ export async function applyMalImport(
       summary.watched += 1
     }
 
-    if (target === 'watchlist' && !haveWatchlist.has(match.tmdbId)) {
-      haveWatchlist.add(match.tmdbId)
+    if (target === 'watchlist' && !haveWatchlist.has(titleKey(match))) {
+      haveWatchlist.add(titleKey(match))
       watchlist.push(stamp({
         id: newId(),
         tmdbId: match.tmdbId,
-        type,
+        type: match.type,
         title: match.title,
         posterPath: match.posterPath,
         rating: match.rating ?? 0,
@@ -196,8 +205,8 @@ export async function applyMalImport(
          * relative. Guessing a season number from the title would be worse
          * than being consistently wrong in a way the user can correct.
          */
-        lastSeason: type === 'tv' ? 1 : null,
-        lastEpisode: type === 'tv' ? Math.max(1, entry.watchedEpisodes) : null,
+        lastSeason: match.type === 'tv' ? 1 : null,
+        lastEpisode: match.type === 'tv' ? Math.max(1, entry.watchedEpisodes) : null,
         watchedEpisodes: [],
         episodeMarks: {},
         genreIds: match.genreIds,
@@ -208,7 +217,7 @@ export async function applyMalImport(
       summary.watchlist += 1
     }
 
-    if (target === 'releases' && type === 'tv' && !haveTracker.has(match.tmdbId)) {
+    if (target === 'releases' && match.type === 'tv' && !haveTracker.has(match.tmdbId)) {
       haveTracker.add(match.tmdbId)
       trackers.push(stamp({
         id: newId(),
@@ -227,9 +236,9 @@ export async function applyMalImport(
     }
 
     if (decisions.applyScores) {
-      const title = scored.get(match.tmdbId) ?? { match, type, scores: [] }
+      const title = scored.get(titleKey(match)) ?? { match, scores: [] }
       title.scores.push(entry.score)
-      scored.set(match.tmdbId, title)
+      scored.set(titleKey(match), title)
     }
   }
 
@@ -250,7 +259,6 @@ export type { WatchedEntry }
 /** One TMDB title and every MAL score that resolved to it. */
 interface ScoredTitle {
   match: ResolvedTitle
-  type: MediaType
   scores: number[]
 }
 
@@ -328,7 +336,8 @@ function applyScore(
   const value = titleScore(title.scores)
   if (value === null) return { created: false, refined: 0 }
 
-  const { match, type } = title
+  const { match } = title
+  const { type } = match
   const onTitle = (r: TitleRating): boolean => r.tmdbId === match.tmdbId && r.type === type
 
   if (!ratings.some(onTitle)) {

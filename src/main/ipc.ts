@@ -37,7 +37,7 @@ import type { PlayerBounds } from './playerview'
 import { lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
 import type { ScanService } from './scanservice'
-import { DEFAULT_SELECTED, DEFAULT_TARGETS, parseMalExport, pickBestMatch, searchVariants, STATUS_LABELS } from './malimport'
+import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
 import { forYouPlan, forYouRow, type ForYouNetwork } from './foryou'
@@ -458,30 +458,21 @@ export function registerIpc(deps: IpcDeps): void {
       decisions,
       /**
        * The resolver. Injected so the assembly logic is testable without a
-       * network.
-       *
-       * Tries `searchVariants` in order and takes the first term that finds
-       * anything, then `pickBestMatch` to decide which of that term's results
-       * was meant. Both exist because MAL's titles and TMDB's disagree
-       * systematically rather than randomly — each carries the measurement
-       * that justifies it.
+       * network. `findBestMatch` is the whole of it apart from the search
+       * itself, shared with the phone.
        */
       async (title, type) => {
-        for (const term of searchVariants(title)) {
-          const found = await tmdb.search(term, 1)
-          const best = pickBestMatch(term, type, found.items)
-          if (best) {
-            return {
-              tmdbId: best.tmdbId,
-              imdbId: best.imdbId ?? null,
-              title: best.title,
-              posterPath: best.posterPath,
-              genreIds: best.genreIds,
-              rating: best.rating,
-            }
-          }
+        const best = await findBestMatch(title, type, async (term) => (await tmdb.search(term, 1)).items)
+        if (!best) return null
+        return {
+          tmdbId: best.tmdbId,
+          type: best.type,
+          imdbId: best.imdbId ?? null,
+          title: best.title,
+          posterPath: best.posterPath,
+          genreIds: best.genreIds,
+          rating: best.rating,
         }
-        return null
       },
       (done, total) => win?.webContents.send(EV.malProgress, { done, total }),
     )

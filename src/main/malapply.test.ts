@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { applyMalImport, type ImportDecisions, type ResolvedTitle } from './malapply'
 import { DEFAULT_TARGETS, type MalEntry } from './malimport'
 import { emptyStore } from './migrate'
-import type { StoreShape } from '@shared/types'
+import type { MediaType, StoreShape } from '@shared/types'
 import { stamp } from '@shared/store/core'
 
 function entry(over: Partial<MalEntry> = {}): MalEntry {
@@ -37,8 +37,9 @@ function fakeId(title: string): number {
 }
 
 const resolveAll = vi.fn(
-  async (title: string): Promise<ResolvedTitle> => ({
+  async (title: string, type: MediaType = 'tv'): Promise<ResolvedTitle> => ({
     tmdbId: fakeId(title),
+    type,
     imdbId: `tt${fakeId(title)}`,
     title,
     posterPath: '/p.jpg',
@@ -130,6 +131,7 @@ describe('applyMalImport', () => {
       .mockRejectedValueOnce(new Error('network'))
       .mockResolvedValue({
         tmdbId: 5,
+        type: 'tv',
         imdbId: null,
         title: 'ok',
         posterPath: null,
@@ -369,7 +371,7 @@ describe('applyMalImport', () => {
    */
   describe('several MAL entries for one title', () => {
     const sameShow = async (): Promise<ResolvedTitle> => ({
-      tmdbId: 42, imdbId: 'tt42', title: 'Shingeki', posterPath: null, genreIds: [16], rating: 8,
+      tmdbId: 42, type: 'tv', imdbId: 'tt42', title: 'Shingeki', posterPath: null, genreIds: [16], rating: 8,
     })
     const seasons = [
       entry({ malId: 1, title: 'Shingeki no Kyojin', score: 9 }),
@@ -407,6 +409,70 @@ describe('applyMalImport', () => {
       // (10 + 7) / 2 = 8.5 → 9, which agrees with the like it refines.
       expect(store.ratings[0]).toMatchObject({ value: 9, coarse: false })
       expect(summary.refined).toBe(1)
+    })
+  })
+
+  /**
+   * A MAL "TV" entry can resolve to a film. The id is a film's id, so filing it
+   * as a series points at a different show or at nothing (a /tv/ lookup 404s).
+   */
+  describe('a MAL entry that resolves to the other media type', () => {
+    const film = async (title: string): Promise<ResolvedTitle> => ({
+      tmdbId: 431572, type: 'movie', imdbId: 'tt6342440', title, posterPath: null, genreIds: [16], rating: 6.6,
+    })
+
+    it('files the match under the type TMDB gives it', async () => {
+      const { store } = await applyMalImport(
+        emptyStore(),
+        [
+          entry({ malId: 1, status: 'completed', score: 9 }),
+          entry({ malId: 2, status: 'watching' }),
+          entry({ malId: 3, status: 'planToWatch' }),
+        ],
+        decisions(),
+        film,
+      )
+
+      expect(store.watched[0]).toMatchObject({ tmdbId: 431572, type: 'movie' })
+      expect(store.watchlist[0]).toMatchObject({ type: 'movie', lastSeason: null, lastEpisode: null })
+      // Films have no episodes to track.
+      expect(store.trackers).toHaveLength(0)
+      expect(store.ratings[0]).toMatchObject({ key: 'movie:tt6342440', type: 'movie', value: 9 })
+    })
+
+    /**
+     * The season-split pass (1.5.8) already re-keyed mistyped MAL imports from
+     * tv:X to movie:X. A re-import has to find that rating, not create a new
+     * tv:X beside it.
+     */
+    it('refines the rating filed under the film', async () => {
+      const repaired = stamp({ key: 'movie:431572', tmdbId: 431572, type: 'movie' as const, season: null,
+        value: 8 as const, coarse: true, rating: 'like' as const, genreIds: [], at: 1 }, 1)
+      const { store, summary } = await applyMalImport(
+        { ...emptyStore(), ratings: [repaired] },
+        [entry({ score: 9 })],
+        decisions(),
+        film,
+      )
+
+      expect(store.ratings).toHaveLength(1)
+      expect(store.ratings[0]).toMatchObject({ key: 'movie:431572', value: 9, coarse: false })
+      expect(summary).toMatchObject({ ratings: 0, refined: 1 })
+    })
+
+    it('keeps a series and a film that share an id apart', async () => {
+      const either = async (title: string): Promise<ResolvedTitle> => ({
+        tmdbId: 99, type: title === 'the film' ? 'movie' : 'tv', imdbId: null, title, posterPath: null, genreIds: [], rating: 7,
+      })
+      const { store } = await applyMalImport(
+        emptyStore(),
+        [entry({ malId: 1, title: 'the series', score: 9 }), entry({ malId: 2, title: 'the film', score: 3 })],
+        decisions(),
+        either,
+      )
+
+      expect(store.watched.map((w) => w.type).sort()).toEqual(['movie', 'tv'])
+      expect(store.ratings.map((r) => [r.type, r.value]).sort()).toEqual([['movie', 3], ['tv', 9]])
     })
   })
 

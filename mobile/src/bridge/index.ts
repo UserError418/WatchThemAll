@@ -96,9 +96,8 @@ import {
   DEFAULT_SELECTED,
   DEFAULT_TARGETS,
   STATUS_LABELS,
+  findBestMatch,
   parseMalExport,
-  pickBestMatch,
-  searchVariants,
 } from '@main/malimport'
 import type { MalEntry } from '@main/malimport'
 import { applyMalImport } from '@main/malapply'
@@ -1324,27 +1323,24 @@ export async function createBridge(): Promise<WtaApi> {
          *
          * The variant/ranking logic is imported rather than reimplemented —
          * it is what took the match rate from 9/15 to 60/60 and it has nothing
-         * platform-specific in it.
+         * platform-specific in it. `findBestMatch` is the same function the
+         * desktop resolves with.
          */
         const resolveTitle = async (
           title: string,
           type: MediaType,
         ): Promise<ResolvedTitle | null> => {
-          for (const variant of searchVariants(title)) {
-            const results = await tmdb.search(variant, 1)
-            const best = pickBestMatch(variant, type, results.items)
-            if (best) {
-              return {
-                tmdbId: best.tmdbId,
-                imdbId: best.imdbId ?? null,
-                title: best.title,
-                posterPath: best.posterPath ?? null,
-                genreIds: best.genreIds ?? [],
-                rating: best.rating ?? 0,
-              }
-            }
+          const best = await findBestMatch(title, type, async (term) => (await tmdb.search(term, 1)).items)
+          if (!best) return null
+          return {
+            tmdbId: best.tmdbId,
+            type: best.type,
+            imdbId: best.imdbId ?? null,
+            title: best.title,
+            posterPath: best.posterPath ?? null,
+            genreIds: best.genreIds ?? [],
+            rating: best.rating ?? 0,
           }
-          return null
         }
 
         const { store: next, summary } = await applyMalImport(
