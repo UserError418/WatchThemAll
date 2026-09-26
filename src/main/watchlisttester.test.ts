@@ -110,6 +110,12 @@ describe('testingOrder', () => {
     expect(order.map((e) => e.tmdbId)).toEqual([3, 2, 1])
   })
 
+  it('leaves out entries kept only for their ticks', () => {
+    const listed = entry({ tmdbId: 1 })
+    const unlisted = entry({ tmdbId: 2, listed: false, addedAt: NOW - DAY })
+    expect(testingOrder([unlisted, listed], [], [], () => null, NOW).map((e) => e.tmdbId)).toEqual([1])
+  })
+
   it('does not let an old addition jump the queue', () => {
     const started = entry({ tmdbId: 1, episodeMarks: { '1:3': { watched: true, at: NOW - DAY } } })
     const old = entry({ tmdbId: 2, addedAt: NOW - NEW_ENTRY_WINDOW_MS - 1 })

@@ -10,6 +10,7 @@
 import { app, BrowserWindow, ipcMain, Notification, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, TitleRef } from '@shared/ipc'
 import { Store } from './store'
@@ -248,9 +249,12 @@ const watchlistTester = createWatchlistTester({
  */
 let watchlistIds = ''
 store.subscribe(() => {
+  // Listed only: ticking an episode of an unlisted title changes nothing
+  // the tester works on, and listing one is exactly a new addition.
   const ids = store
     .read()
-    .watchlist.map((entry) => entry.id)
+    .watchlist.filter(isListed)
+    .map((entry) => entry.id)
     .sort()
     .join(',')
   if (ids === watchlistIds) return

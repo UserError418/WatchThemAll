@@ -21,6 +21,7 @@ import type {
   WatchlistEntry,
 } from '@shared/types'
 import { emptyStore } from './migrate'
+import { isListed } from '@shared/listed'
 import { stamp } from '@shared/store/core'
 
 /** TMDB path fragments are stored bare; the shared format carries full URLs. */
@@ -110,7 +111,9 @@ export function exportStore(store: StoreShape): SyncPayload {
     version: 1,
     exportedAt: new Date().toISOString(),
     data: {
-      vidsrc_bookmarks: store.watchlist.map((w) => ({
+      // Listed only. The other apps have no notion of an entry kept for its
+      // ticks, and would show every one of them as a bookmark.
+      vidsrc_bookmarks: store.watchlist.filter(isListed).map((w) => ({
         bookmarkId: w.id,
         name: w.title,
         imdb: w.imdbId,

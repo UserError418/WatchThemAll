@@ -26,6 +26,7 @@ import type {
   WatchlistEntry,
 } from '@shared/types'
 import { resumeKey, type SourceSortKey } from '@shared/types'
+import { isListed } from '@shared/listed'
 import { ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 import { DEFAULT_SETTINGS } from '@shared/store/core'
@@ -230,18 +231,56 @@ class Library {
 
   /* ── Watchlist ──────────────────────────────────────────────────────── */
 
-  isInWatchlist(tmdbId: number): boolean {
-    return this.watchlist.some((w) => w.tmdbId === tmdbId)
+  /**
+   * The user's watchlist: every entry except the unlisted ones kept only for
+   * their ticks. What the Watchlist tab, its count and everything built on
+   * "what am I watching" read. See `WatchlistEntry.listed`.
+   */
+  get listedWatchlist(): WatchlistEntry[] {
+    return this.watchlist.filter(isListed)
   }
 
+  isInWatchlist(tmdbId: number): boolean {
+    return this.watchlist.some((w) => w.tmdbId === tmdbId && isListed(w))
+  }
+
+  /** The title's entry, listed or not — where its ticks, position and source live. */
   watchlistEntry(tmdbId: number): WatchlistEntry | undefined {
     return this.watchlist.find((w) => w.tmdbId === tmdbId)
   }
 
+  /**
+   * Put a title on the watchlist, or list the unlisted entry it already has.
+   *
+   * Listing keeps everything the entry recorded — the ticks are the reason it
+   * existed — and dates the addition now, because that is when the user added
+   * it: the Watchlist tab and the background tests both treat a recent
+   * addition as the one to get to first.
+   */
   addToWatchlist(media: MediaSummary | MediaDetail): WatchlistEntry {
     const existing = this.watchlistEntry(media.tmdbId)
-    if (existing) return existing
+    if (!existing) return this.createEntry(media, true)
+    if (isListed(existing)) return existing
 
+    delete existing.listed
+    existing.addedAt = Date.now()
+    void this.persist({ watchlist: this.watchlist })
+    return existing
+  }
+
+  /**
+   * The title's entry, creating an unlisted one if it has none.
+   *
+   * For recording something about a title — an episode ticked, a season
+   * marked, a source chosen — without putting it on the watchlist. Before
+   * this, every one of those added the title, so rating a series (which marks
+   * its season watched first) filled the watchlist with things already seen.
+   */
+  entryFor(media: MediaSummary | MediaDetail): WatchlistEntry {
+    return this.watchlistEntry(media.tmdbId) ?? this.createEntry(media, false)
+  }
+
+  private createEntry(media: MediaSummary | MediaDetail, listed: boolean): WatchlistEntry {
     const entry: WatchlistEntry = {
       id: newId(),
       tmdbId: media.tmdbId,
@@ -262,6 +301,9 @@ class Library {
       episodeCount: 'episodeCount' in media ? media.episodeCount : null,
       addedAt: Date.now(),
       providerId: this.settings.defaultProviderId,
+      // Only written when false, so a listed entry is exactly what it was
+      // before the field existed — and what an older build expects to read.
+      ...(listed ? {} : { listed: false }),
     }
     this.watchlist = [entry, ...this.watchlist]
     void this.persist({ watchlist: this.watchlist })
@@ -730,12 +772,12 @@ class Library {
    * every time they change show, which is why the original's per-bookmark
    * `schemaId` is worth keeping.
    *
-   * Adds the title to the watchlist if it is not already there — there is
-   * nowhere else to store the choice, and choosing a source is a strong enough
-   * signal of intent to watch.
+   * Stored on the title's entry, which is created unlisted if there is none:
+   * choosing a source is not asking for the title on the watchlist — only
+   * pressing play is (the owner, 2026-09-26).
    */
   setEntryProvider(media: MediaSummary | MediaDetail, providerId: string | null): void {
-    const entry = this.watchlistEntry(media.tmdbId) ?? this.addToWatchlist(media)
+    const entry = this.entryFor(media)
     entry.providerId = providerId
     void this.persist({ watchlist: this.watchlist })
   }

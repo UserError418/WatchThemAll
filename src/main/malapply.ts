@@ -13,6 +13,7 @@
 import type { MediaType, StoreShape, TitleRating, WatchedEntry, WatchlistEntry, ReleaseTracker } from '@shared/types'
 import type { ImportTarget, MalEntry, MalStatus } from './malimport'
 import { mediaTypeFor, ratingFromScore } from './malimport'
+import { isListed } from '@shared/listed'
 import { stamp } from '@shared/store/core'
 
 /** What the user chose in the preview dialog. */
@@ -137,6 +138,8 @@ export async function applyMalImport(
       summary.watched += 1
       continue
     }
+    // Held as a const: `match` is a `let`, and a callback loses its narrowing.
+    const resolvedId = match.tmdbId
 
     if (target === 'watched' && !haveWatched.has(match.tmdbId)) {
       haveWatched.add(match.tmdbId)
@@ -155,6 +158,19 @@ export async function applyMalImport(
         malId: entry.malId,
       }))
       summary.watched += 1
+    }
+
+    /**
+     * MAL says they are watching a title they have only ticked episodes of
+     * here: list the entry they already have, keeping its ticks, rather than
+     * skip it as present or add a second one. See `WatchlistEntry.listed`.
+     */
+    const unlisted = watchlist.findIndex((w) => w.tmdbId === resolvedId && !isListed(w))
+    if (target === 'watchlist' && unlisted >= 0) {
+      const listedAgain = { ...watchlist[unlisted]!, addedAt: Date.now() }
+      delete listedAgain.listed
+      watchlist[unlisted] = stamp(listedAgain)
+      summary.watchlist += 1
     }
 
     if (target === 'watchlist' && !haveWatchlist.has(match.tmdbId)) {

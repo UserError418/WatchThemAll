@@ -205,6 +205,22 @@ describe('applyMalImport', () => {
     expect(second.summary.watched).toBe(0)
   })
 
+  it('lists an entry kept only for its ticks when MAL says it is being watched', async () => {
+    const first = await applyMalImport(emptyStore(), [entry({ status: 'watching' })], decisions(), resolveAll)
+    const ticked = { ...first.store.watchlist[0]!, listed: false, watchedEpisodes: ['1:1'] }
+    const second = await applyMalImport(
+      { ...first.store, watchlist: [ticked] },
+      [entry({ status: 'watching' })],
+      decisions(),
+      resolveAll,
+    )
+
+    expect(second.store.watchlist).toHaveLength(1)
+    expect(second.store.watchlist[0]).not.toHaveProperty('listed')
+    expect(second.store.watchlist[0]?.watchedEpisodes).toEqual(['1:1'])
+    expect(second.summary.watchlist).toBe(1)
+  })
+
   it('carries the MAL progress into a watchlist resume position', async () => {
     const { store } = await applyMalImport(
       emptyStore(),

@@ -245,8 +245,9 @@
     if (missing.length === 0) return
 
     // Episode state lives on the watchlist entry, so a title that reached
-    // Watched without ever being in the watchlist needs one to write into.
-    if (!library.isInWatchlist(subject.tmdbId)) library.addToWatchlist(detail ?? subject)
+    // Watched without ever being in the watchlist needs one to write into —
+    // an unlisted one, since opening a title is not adding it.
+    library.entryFor(detail ?? subject)
     library.setSeasonWatched(subject.tmdbId, loaded.season, missing, true)
   })
 
@@ -299,9 +300,10 @@
       return
     }
 
-    // Playing something implies wanting it in the library. Watched is a
-    // separate question, settled on the way out from how long it ran.
-    if (!library.isInWatchlist(playable.tmdbId)) library.addToWatchlist(playable)
+    // Playing something implies wanting it in the library — the one action
+    // that lists a title by itself (the owner, 2026-09-26). Watched is a separate
+    // question, settled on the way out from how long it ran.
+    library.addToWatchlist(playable)
     library.recordWatch(playable, episode?.season ?? null, episode?.episode ?? null)
   }
 
@@ -411,7 +413,9 @@
 
   function toggleSeasonWatched(watched: boolean): void {
     if (!season) return
-    if (!library.isInWatchlist(subject.tmdbId)) library.addToWatchlist(detail ?? subject)
+    // Unlisted if new: marking a season seen — which is also how a series
+    // gets rated — records what was watched, it is not adding to the list.
+    library.entryFor(detail ?? subject)
     library.setSeasonWatched(
       subject.tmdbId,
       selectedSeason,
@@ -723,7 +727,7 @@
                     resumeAt.episode === episode.episode}
                   onplay={(e) => play(e)}
                   ontoggleWatched={(e, watched) => {
-                    if (!library.isInWatchlist(subject.tmdbId)) library.addToWatchlist(detail ?? subject)
+                    library.entryFor(detail ?? subject)
                     library.setWatched(subject.tmdbId, e.season, e.episode, watched)
                   }}
                 />

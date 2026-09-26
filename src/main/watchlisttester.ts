@@ -34,6 +34,7 @@
 import type { HistoryEntry, Provider, ProviderScan, WatchlistEntry } from '@shared/types'
 import type { WatchlistTestStatus } from '@shared/ipc'
 import type { ProbeSubject } from './streamprobe'
+import { isListed } from '@shared/listed'
 import { bandWatchlist, resumeAnchor } from '@shared/watchlistrank'
 import { titleKey } from './outcomes'
 import { isRetestDue, scanEpisode } from './providerscan'
@@ -44,6 +45,7 @@ export const NEW_ENTRY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 /**
  * The order to work through the watchlist in: the Watchlist tab's own order,
  * except that a show added in the last week and never tested jumps the queue.
+ * Listed entries only, as the tab shows them (see `WatchlistEntry.listed`).
  *
  * The tab's order is the user's own sense of what is next — nearly finished,
  * then in progress, then stalled, then not started — so testing in it means
@@ -58,7 +60,9 @@ export function testingOrder(
   filmPercent: (tmdbId: number) => number | null,
   now: number,
 ): WatchlistEntry[] {
-  const tabOrder = bandWatchlist(watchlist, history, filmPercent, now).flatMap((group) =>
+  // Unlisted entries are titles the user ticked episodes of, not ones they
+  // want to watch here; testing them would spend the budget on the wrong list.
+  const tabOrder = bandWatchlist(watchlist.filter(isListed), history, filmPercent, now).flatMap((group) =>
     group.items.map((item) => item.entry),
   )
   const tested = new Set(scans.map((scan) => scan.titleKey))

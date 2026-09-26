@@ -106,7 +106,7 @@
   }
 
   const libraryEntries = $derived<Entry[]>([
-    ...library.watchlist.map((w) => ({
+    ...library.listedWatchlist.map((w) => ({
       id: `w-${w.id}`,
       label: w.title,
       hint:

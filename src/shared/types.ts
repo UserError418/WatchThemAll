@@ -278,6 +278,27 @@ export interface WatchlistEntry {
   rating: number
   addedAt: number
   providerId: string | null
+  /**
+   * False for an entry the user never put on their watchlist, kept only for
+   * what it records: episode ticks, a chosen source. Absent means listed,
+   * which is what every entry written before this existed is. Read it through
+   * `isListed`.
+   *
+   * It exists because those records have nowhere else to live — episode state
+   * is stored on the entry — and creating a listed one for them put every
+   * ticked or rated title on the watchlist. the owner, 2026-09-26: only pressing
+   * play should do that. Pressing play, "+ Watchlist" or a MyAnimeList import
+   * lists the entry; removing it from the watchlist deletes it, ticks and all,
+   * as before.
+   *
+   * What reads unlisted entries on purpose: anything after the title's own
+   * records (ticks, positions, the chosen source, the TMDB score backfill) and
+   * the taste profile, for which a title the user ticked through is a title
+   * they watched. What must not: the Watchlist tab and its count, Continue,
+   * the hero, the command palette, background source tests, the ReelVault
+   * export.
+   */
+  listed?: boolean
 }
 
 /** A series the user wants release notifications for. */

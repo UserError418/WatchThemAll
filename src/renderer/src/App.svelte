@@ -96,7 +96,7 @@
   }
 
   const trackedCount = $derived(library.trackers.length)
-  const watchlistCount = $derived(library.watchlist.length)
+  const watchlistCount = $derived(library.listedWatchlist.length)
   const watchedCount = $derived(library.watched.length)
 
   $effect(() => {

@@ -68,7 +68,7 @@
     }
 
     // 2. Something already in progress.
-    const inProgress = library.watchlist.find(
+    const inProgress = library.listedWatchlist.find(
       (w) => w.type === 'tv' && w.watchedEpisodes.length > 0,
     )
     if (inProgress) {

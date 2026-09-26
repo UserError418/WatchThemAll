@@ -93,6 +93,13 @@ describe('exportStore', () => {
     ])
   })
 
+  it('leaves out entries kept only for their ticks', () => {
+    // The other apps have no unlisted state and would show each as a bookmark.
+    const store = populated()
+    store.watchlist[1] = { ...store.watchlist[1]!, listed: false }
+    expect(exportStore(store).data.vidsrc_bookmarks.map((b) => b.bookmarkId)).toEqual(['bm-1'])
+  })
+
   it('emits bookmarks under the legacy field names', () => {
     const [bookmark] = payload.data.vidsrc_bookmarks
     expect(bookmark).toMatchObject({
