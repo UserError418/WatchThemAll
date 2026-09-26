@@ -31,9 +31,10 @@
  * without a timer or a network. `createWatchlistTester` is the loop around it.
  */
 
-import type { HistoryEntry, Provider, ProviderScan, WatchlistEntry } from '@shared/types'
+import type { EpisodeStub, HistoryEntry, Provider, ProviderScan, WatchlistEntry } from '@shared/types'
 import type { WatchlistTestStatus } from '@shared/ipc'
 import type { ProbeSubject } from './streamprobe'
+import { airedEpisode } from '@shared/aired'
 import { isListed } from '@shared/listed'
 import { bandWatchlist, resumeAnchor } from '@shared/watchlistrank'
 import { titleKey } from './outcomes'
@@ -74,9 +75,16 @@ export function testingOrder(
   ]
 }
 
-/** The episode to probe a series on: where the user is, else S1E1. Null for a film. */
-export function episodeToTest(entry: WatchlistEntry): { season: number; episode: number } | null {
-  return scanEpisode(entry.type, entry.type === 'tv' ? resumeAnchor(entry) : null)
+/**
+ * The episode to probe a series on: where the user is, else S1E1, but never
+ * past the last one that has aired (`aired.ts`). Null for a film.
+ */
+export function episodeToTest(
+  entry: WatchlistEntry,
+  lastAired: TitleFacts['lastAired'],
+): { season: number; episode: number } | null {
+  const wanted = scanEpisode(entry.type, entry.type === 'tv' ? resumeAnchor(entry) : null)
+  return wanted && airedEpisode(wanted, lastAired)
 }
 
 export interface PlannedTest {
@@ -139,6 +147,8 @@ export interface TitleFacts {
   /** False for a title that has not come out yet, or whose date TMDB does not know. */
   released: boolean
   imdbId: string | null
+  /** A series' latest aired episode, which a test must not go past. Null for a film. */
+  lastAired: EpisodeStub | null
 }
 
 export interface WatchlistTesterOptions {
@@ -259,7 +269,7 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
       }
 
       publish('testing', { title: plan.entry.title, providerName: plan.provider.name })
-      const episode = episodeToTest(plan.entry)
+      const episode = episodeToTest(plan.entry, facts.lastAired)
       const result = await options.probeOne(
         plan.titleKey,
         {

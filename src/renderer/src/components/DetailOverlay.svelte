@@ -23,6 +23,7 @@
   import { resumeAnchor } from '@shared/watchlistrank'
   import Score from './Score.svelte'
   import { seasonScore } from '@shared/score'
+  import { notOutYet } from '@shared/aired'
 
   interface Props {
     media: MediaSummary
@@ -574,6 +575,7 @@
               episode={subject.type === 'movie'
                 ? null
                 : { season: resumeAt.season, episode: resumeAt.episode }}
+              notOut={notOutYet(detail?.releaseDate, Date.now())}
               onselect={chooseProvider}
             />
             <button

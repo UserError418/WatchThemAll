@@ -226,7 +226,11 @@ const watchlistTester = createWatchlistTester({
     try {
       const found = await tmdb.detail(entry.tmdbId, entry.type)
       const date = found.releaseDate ? Date.parse(found.releaseDate) : Number.NaN
-      return { released: Number.isFinite(date) && date <= Date.now(), imdbId: found.imdbId }
+      return {
+        released: Number.isFinite(date) && date <= Date.now(),
+        imdbId: found.imdbId,
+        lastAired: found.lastEpisode,
+      }
     } catch {
       return null
     }

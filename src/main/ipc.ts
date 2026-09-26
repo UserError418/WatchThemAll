@@ -37,6 +37,7 @@ import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
 import { lastPlayedAt, lastWorkingForTitle, outcomesForTitle, titleKey } from './outcomes'
 import { freshScan, pruneScans, recordScan, scanEpisode } from './providerscan'
+import { airedEpisode, notOutYet } from '@shared/aired'
 import type { ScanService } from './scanservice'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
@@ -231,8 +232,20 @@ export function registerIpc(deps: IpcDeps): void {
       episode: { season: number; episode: number } | null,
     ): Promise<ProviderScan> => {
       const key = titleKey(media)
+      /*
+       * Only what has come out can be tested — see `aired.ts`. The detail view
+       * has usually just fetched these facts, so the lookup is a cache hit. A
+       * failed one tests what was asked for, as before: a scan must not stop
+       * working because TMDB is down.
+       */
+      const facts = await tmdb.detail(media.tmdbId, media.type).catch(() => null)
+      if (facts && notOutYet(facts.releaseDate, Date.now())) {
+        // Nothing stored: an empty result is not a measurement to keep.
+        return { titleKey: key, at: Date.now(), verdicts: {} }
+      }
       // Never probe a TV title without an episode — see `scanEpisode`.
-      const target = scanEpisode(media.type, episode)
+      const wanted = scanEpisode(media.type, episode)
+      const target = wanted && facts ? airedEpisode(wanted, facts.lastEpisode) : wanted
       const scan = await deps.scan.run(key, {
         imdbId: media.imdbId ?? '',
         tmdbId: media.tmdbId,

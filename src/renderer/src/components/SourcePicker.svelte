@@ -82,10 +82,15 @@
      * as a fact about the show.
      */
     episode?: { season: number; episode: number } | null
+    /**
+     * The title has not come out yet, so there is nothing to test: every
+     * source would come back red. Says so instead of offering the test.
+     */
+    notOut?: boolean
     onselect: (providerId: string | null) => void
   }
 
-  const { selected, media, episode = null, onselect }: Props = $props()
+  const { selected, media, episode = null, notOut = false, onselect }: Props = $props()
 
   let open = $state(false)
   let sourceState = $state<TitleProviderState>({
@@ -304,9 +309,11 @@
           <span class="hint">Best available</span>
         </button>
         {#if enabled.length > 0}
-          <button class="scan" class:running={scanning} onclick={runScan}>
+          <button class="scan" class:running={scanning} onclick={runScan} disabled={notOut && !scanning}>
             <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
-            {#if scanLabel}
+            {#if notOut && !scanning}
+              <span class="hint">Not out yet</span>
+            {:else if scanLabel}
               <span class="hint">{scanLabel}</span>
             {:else if scanSummary}
               <span class="hint">{scanSummary}</span>
@@ -506,6 +513,13 @@
 
   .scan.running {
     color: var(--accent);
+  }
+
+  /* Not out yet: still readable, since the hint is the point, but no hover. */
+  .scan:disabled {
+    cursor: default;
+    background: transparent;
+    color: var(--text-tertiary);
   }
 
   .scan .name {

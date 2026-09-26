@@ -125,15 +125,28 @@ describe('testingOrder', () => {
 
 describe('episodeToTest', () => {
   it('tests a series on the episode the user is on', () => {
-    expect(episodeToTest(entry({ tmdbId: 1, lastSeason: 3, lastEpisode: 5 }))).toEqual({ season: 3, episode: 5 })
+    expect(episodeToTest(entry({ tmdbId: 1, lastSeason: 3, lastEpisode: 5 }), null)).toEqual({ season: 3, episode: 5 })
   })
 
   it('falls back to S1E1 for a show just added', () => {
-    expect(episodeToTest(entry({ tmdbId: 1 }))).toEqual({ season: 1, episode: 1 })
+    expect(episodeToTest(entry({ tmdbId: 1 }), null)).toEqual({ season: 1, episode: 1 })
   })
 
   it('has no episode for a film', () => {
-    expect(episodeToTest(entry({ tmdbId: 1, type: 'movie' }))).toBeNull()
+    expect(episodeToTest(entry({ tmdbId: 1, type: 'movie' }), null)).toBeNull()
+  })
+
+  it('never tests past the last aired episode', () => {
+    // Finished the latest season: where the user is, is a season still to come.
+    const finished = entry({ tmdbId: 1, lastSeason: 3, lastEpisode: 1 })
+    const lastAired = { season: 2, episode: 12, name: 'Finale', airDate: '2026-06-01' }
+    expect(episodeToTest(finished, lastAired)).toEqual({ season: 2, episode: 12 })
+  })
+
+  it('keeps an aired episode the user is on', () => {
+    const midway = entry({ tmdbId: 1, lastSeason: 2, lastEpisode: 4 })
+    const lastAired = { season: 2, episode: 12, name: 'Finale', airDate: '2026-06-01' }
+    expect(episodeToTest(midway, lastAired)).toEqual({ season: 2, episode: 4 })
   })
 })
 
@@ -168,7 +181,7 @@ describe('the tester loop', () => {
       scans: () => saved,
       filmPercent: () => null,
       providers: () => [provider('a')],
-      lookUp: async () => ({ released: true, imdbId: 'tt1' }),
+      lookUp: async () => ({ released: true, imdbId: 'tt1', lastAired: null }),
       probeOne,
       pausedFor: () => null,
       save: (result) => saved.push(result),
@@ -207,7 +220,7 @@ describe('the tester loop', () => {
   })
 
   it('never tests an unreleased title', async () => {
-    const { tester, probeOne, statuses } = harness({ lookUp: async () => ({ released: false, imdbId: 'tt1' }) })
+    const { tester, probeOne, statuses } = harness({ lookUp: async () => ({ released: false, imdbId: 'tt1', lastAired: null }) })
     tester.start()
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(probeOne).not.toHaveBeenCalled()

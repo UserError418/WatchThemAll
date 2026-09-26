@@ -52,6 +52,7 @@ import type {
 } from '@shared/ipc'
 
 import * as tmdb from '@main/tmdb'
+import { airedEpisode, notOutYet } from '@shared/aired'
 import * as search from '@main/search'
 import BUNDLED_CATALOG from '@main/providers.json'
 import {
@@ -1038,8 +1039,13 @@ export async function createBridge(): Promise<WtaApi> {
     episode?: { season: number; episode: number } | null,
   ): Promise<ProviderScan> => {
     const key = titleKey(media)
+    // Only what has come out, as on the desktop — see `aired.ts` and the
+    // scan handler in `src/main/ipc.ts`.
+    const facts = await tmdb.detail(media.tmdbId, media.type).catch(() => null)
+    if (facts && notOutYet(facts.releaseDate, Date.now())) return { titleKey: key, at: Date.now(), verdicts: {} }
     // Never probe a TV title without an episode — see `scanEpisode`.
-    const target = scanEpisode(media.type, episode)
+    const wanted = scanEpisode(media.type, episode)
+    const target = wanted && facts ? airedEpisode(wanted, facts.lastEpisode) : wanted
     const result = await scanRunner.run(key, {
       imdbId: media.imdbId,
       tmdbId: media.tmdbId,
