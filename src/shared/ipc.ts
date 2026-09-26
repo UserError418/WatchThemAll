@@ -175,7 +175,7 @@ export const EV = {
    * mounted in a WebContentsView stacked above the video, because a window's
    * own page can only ever paint beneath its child views.
    */
-  chromeOverlayHeight: 'chrome:overlay-height',
+  chromeOverlayArea: 'chrome:overlay-area',
   chromeBack: 'chrome:back',
   /**
    * The skip-intro offer, and the view that draws it.
@@ -987,15 +987,28 @@ export interface WtaApi {
  * video. Every entry is something the app's own chrome could already do — the
  * overlay replaced that chrome, it did not gain privileges.
  */
+/**
+ * The part of the picture the chrome overlay covers, in CSS pixels.
+ *
+ * Always pinned to the top edge. `width: null` spans the whole picture, which
+ * is what the bar needs; a number is that wide and centred, which is what the
+ * countdown needs while the bar has been sent away — a full-width strip would
+ * block the very controls of the embed the user hid the bar to reach.
+ */
+export interface OverlayArea {
+  height: number
+  width: number | null
+}
+
 export interface WtaChromeApi {
   /**
-   * Resize the overlay view to exactly this many CSS pixels tall.
+   * Resize the overlay view to exactly the area it draws.
    *
    * Load-bearing rather than cosmetic: the view swallows every mouse event
    * inside its bounds, so an overlay larger than what it draws makes that much
    * of the video unclickable.
    */
-  setOverlayHeight(height: number): void
+  setOverlayArea(area: OverlayArea): void
   back(): void
   goTo(season: number, episode: number): void
   switchProvider(providerId: string): void

@@ -32,7 +32,7 @@
  *
  * ## The four members that mean nothing here
  *
- * `setOverlayHeight` and `setSkipSize` size a native view so it stops
+ * `setOverlayArea` and `setSkipSize` size a native view so it stops
  * swallowing clicks outside what it draws. A DOM overlay has no such problem:
  * `mobile.css` gives the host `pointer-events: none` and its children `auto`,
  * so the picture below is reachable everywhere the chrome is not painted.
@@ -98,7 +98,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
      * makes unclickable. Here the overlay is a DOM node that only intercepts
      * taps where it actually paints.
      */
-    setOverlayHeight: () => {},
+    setOverlayArea: () => {},
     setSkipSize: () => {},
 
     back: () => deps.close(),

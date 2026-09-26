@@ -39,7 +39,7 @@
 import { WebContentsView, BrowserWindow, ipcMain, webFrameMain, type Session } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
-import type { PlayRequest, PlayerSuggestion } from '@shared/ipc'
+import type { OverlayArea, PlayRequest, PlayerSuggestion } from '@shared/ipc'
 import { applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { pressPlay as pressPlayIn } from './pressplay'
@@ -1614,7 +1614,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       width: Math.max(1, Math.round(next.width)),
       height: Math.max(1, Math.round(next.height)),
     })
-    placeOverlay(overlayHeight)
+    placeOverlay(overlayArea)
     placeSkip()
   }
 
@@ -1677,7 +1677,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     announceSuggestion(null)
 
     if (overlay !== null) {
-      ipcMain.removeListener(EV.chromeOverlayHeight, onOverlayHeight)
+      ipcMain.removeListener(EV.chromeOverlayArea, onOverlayArea)
       ipcMain.removeListener(EV.chromeBack, onBack)
       if (!win.isDestroyed()) win.contentView.removeChildView(overlay)
       /**
@@ -1824,25 +1824,29 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     })
   }
 
-  /** Lay the overlay across the top of the video's slot, `height` tall. */
-  const placeOverlay = (height: number): void => {
+  /**
+   * Lay the overlay along the top of the video's slot: across all of it, or
+   * centred when the chrome asked for a width (see `OverlayArea`).
+   */
+  const placeOverlay = (area: OverlayArea): void => {
     if (overlay === null || closed || win.isDestroyed()) return
     const slot = view.getBounds()
+    const width = area.width === null ? slot.width : Math.min(Math.round(area.width), slot.width)
     overlay.setBounds({
-      x: slot.x,
+      x: slot.x + Math.round((slot.width - width) / 2),
       y: slot.y,
-      width: slot.width,
-      height: Math.max(0, Math.min(Math.round(height), slot.height)),
+      width,
+      height: Math.max(0, Math.min(Math.round(area.height), slot.height)),
     })
   }
 
-  let overlayHeight = 56
-  const onOverlayHeight = (event: Electron.IpcMainEvent, height: number): void => {
-    // Scoped by sender: more than one player can exist during a switch, and a
-    // height from somebody else's overlay would resize this one.
+  let overlayArea: OverlayArea = { height: 56, width: null }
+  const onOverlayArea = (event: Electron.IpcMainEvent, area: OverlayArea): void => {
+    // Scoped by sender: more than one player can exist during a switch, and an
+    // area from somebody else's overlay would resize this one.
     if (overlay === null || event.sender !== overlay.webContents) return
-    overlayHeight = height
-    placeOverlay(height)
+    overlayArea = area
+    placeOverlay(area)
   }
   const onBack = (event: Electron.IpcMainEvent): void => {
     if (overlay === null || event.sender !== overlay.webContents) return
@@ -1852,7 +1856,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     event: Electron.IpcMainEvent,
     size: { width: number; height: number },
   ): void => {
-    // Scoped by sender for the same reason as the overlay height: more than
+    // Scoped by sender for the same reason as the overlay area: more than
     // one player exists during a switch, and a size from somebody else's view
     // would move this one.
     if (skipView === null || event.sender !== skipView.webContents) return
@@ -1867,7 +1871,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     announceSkip(null)
   }
   if (overlay !== null) {
-    ipcMain.on(EV.chromeOverlayHeight, onOverlayHeight)
+    ipcMain.on(EV.chromeOverlayArea, onOverlayArea)
     ipcMain.on(EV.chromeBack, onBack)
   }
   if (skipView !== null) {

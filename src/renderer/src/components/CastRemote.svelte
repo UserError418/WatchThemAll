@@ -15,7 +15,7 @@
    * makes covering it the correct answer rather than a cosmetic one.
    *
    * On the desktop that is load-bearing rather than figurative: the chrome is a
-   * real `WebContentsView` sized by `setOverlayHeight`, and a view swallows
+   * real `WebContentsView` sized by `setOverlayArea`, and a view swallows
    * every mouse event inside its bounds. The caller reports a height large
    * enough to be clamped to the whole slot while this is mounted — the same
    * mechanism that makes the bar 56px tall, used at its limit.

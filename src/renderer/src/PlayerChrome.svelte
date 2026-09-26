@@ -10,11 +10,12 @@
    * That freedom comes with one obligation, and it shapes everything here:
    * **a view swallows every mouse event inside its bounds.** Whatever this
    * document covers is unclickable in the video underneath. So the overlay is
-   * sized to exactly what it draws — `reportHeight` is not a nicety, it is what
+   * sized to exactly what it draws — `setOverlayArea` is not a nicety, it is what
    * keeps the rest of the picture usable.
    */
 
   import type {
+    OverlayArea,
     PlayerContext,
     PlayerSuggestion,
     ProbeVerdict,
@@ -77,6 +78,26 @@
    */
   const HOT_ZONE_PX = 40
 
+  /**
+   * How long the Hide button keeps the chrome away.
+   *
+   * The bar sits over the top of the picture, and embeds put their own
+   * controls there too — a title, a settings cog, a server switcher. Waiting
+   * out the auto-hide does not help, because reaching for those controls is
+   * exactly what summons the bar back over them. So Hide is a promise the
+   * pointer cannot break: for this long nothing but the countdown is drawn,
+   * and nothing but the countdown takes a click.
+   */
+  const SEND_AWAY_MS = 5_000
+
+  /**
+   * The countdown pill shown while the chrome is away, which is also the size
+   * of the view: fixed rather than measured, because a view is sized to what
+   * its document asked for and a document in a view that has not grown yet
+   * has nothing to measure. Wide enough for "Controls back in 5s".
+   */
+  const AWAY_PILL = { width: 176, height: 30, top: 8 }
+
   interface Props {
     /**
      * Touch input, no pointer — the Android build.
@@ -105,6 +126,46 @@
   let panel = $state<'none' | 'episodes' | 'sources' | 'cast'>('none')
   let barVisible = $state(true)
   let hoveringChrome = $state(false)
+
+  /**
+   * When the chrome comes back after Hide, or null while it has not been sent
+   * away. While this is set nothing may show the bar — not the pointer, not
+   * the hot zone, not a failing source — except the countdown itself, clicked.
+   */
+  let awayUntil = $state<number | null>(null)
+  /** The clock the countdown reads, ticked only while the chrome is away. */
+  let awayNow = $state(0)
+  const awaySeconds = $derived(
+    awayUntil === null ? 0 : Math.max(1, Math.ceil((awayUntil - awayNow) / 1000)),
+  )
+
+  function sendAway(): void {
+    // Cleared by hand: the chrome leaves the DOM under the pointer, so no
+    // `mouseleave` arrives, and a stale hover would hold the bar open for good
+    // once it returned.
+    hoveringChrome = false
+    barVisible = false
+    awayNow = Date.now()
+    awayUntil = awayNow + SEND_AWAY_MS
+  }
+
+  /** Back early, or on time. Back as if summoned: it hides again on its own. */
+  function comeBack(): void {
+    awayUntil = null
+    barVisible = true
+  }
+
+  $effect(() => {
+    if (awayUntil === null) return
+    const until = awayUntil
+    // A quarter-second tick rather than one per second, so the number turns
+    // over within a beat of the real second rather than up to a second late.
+    const tick = setInterval(() => {
+      awayNow = Date.now()
+      if (awayNow >= until) comeBack()
+    }, 250)
+    return () => clearInterval(tick)
+  })
 
   /**
    * What each source has actually done with this title.
@@ -640,7 +701,7 @@
    */
   $effect(() =>
     api?.onPointerTop((nearTop) => {
-      if (nearTop) barVisible = true
+      if (nearTop && awayUntil === null) barVisible = true
     }),
   )
 
@@ -653,7 +714,9 @@
    * somebody was aiming at them.
    */
   $effect(() => {
-    if (suggestion) barVisible = true
+    // Not while sent away: the offer waits for the bar, and an auto-switch
+    // goes ahead on its own either way.
+    if (suggestion && awayUntil === null) barVisible = true
   })
 
   $effect(() => {
@@ -700,14 +763,6 @@
   )
 
   /**
-   * How much of the window this overlay may cover.
-   *
-   * Everything it draws, and — when it draws nothing — the strip it needs to
-   * notice the pointer coming back. A view swallows every click inside its
-   * bounds, so this is the number that decides how much of the picture stays
-   * the user's.
-   */
-  /**
    * Larger than any window, because the remote takes the whole slot.
    *
    * `placeOverlay` clamps whatever arrives to the video view's own bounds, so
@@ -716,14 +771,27 @@
    */
   const WHOLE_SLOT = 10_000
 
-  const neededHeight = $derived(
+  /**
+   * How much of the window this overlay may cover.
+   *
+   * Everything it draws, and — when it draws nothing — the strip it needs to
+   * notice the pointer coming back. A view swallows every click inside its
+   * bounds, so this is the number that decides how much of the picture stays
+   * the user's.
+   */
+  const neededArea: OverlayArea = $derived(
     showRemote
-      ? WHOLE_SLOT
-      : (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
+      ? { height: WHOLE_SLOT, width: null }
+      : awayUntil !== null
+        ? { height: AWAY_PILL.top + AWAY_PILL.height, width: AWAY_PILL.width }
+        : {
+            height: (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
+            width: null,
+          },
   )
 
   $effect(() => {
-    api?.setOverlayHeight(neededHeight)
+    api?.setOverlayArea(neededArea)
   })
 
   /* ── Episodes ─────────────────────────────────────────────────────────── */
@@ -936,6 +1004,20 @@
     onvolume={(level) => void setReceiverVolume(level)}
     onmute={() => void setReceiverMuted(!(castStatus?.muted ?? false))}
   />
+{:else if awayUntil !== null}
+  <!--
+    All that is left of the chrome while it is away, in a view exactly this
+    size. A button, because the view takes clicks here anyway: better that
+    they bring the bar back than land nowhere.
+  -->
+  <button
+    class="away"
+    style="width: {AWAY_PILL.width}px; height: {AWAY_PILL.height}px; margin-top: {AWAY_PILL.top}px"
+    title="Show the controls now"
+    onclick={comeBack}
+  >
+    Controls back in {awaySeconds}s
+  </button>
 {:else if !barVisible && !touch}
   <!--
     The invisible strip along the top edge. `onmousemove` as well as
@@ -968,6 +1050,13 @@
       <span class="spacer"></span>
 
       <button class="ghost" title="Reload this source" onclick={() => void api.reload()}>↻</button>
+
+      <!-- Not on a phone: the bar never hides there, so it has no way back. -->
+      {#if !touch}
+        <button class="ghost" title="Hide these controls for 5 seconds" onclick={sendAway}>
+          Hide
+        </button>
+      {/if}
 
       {#if context?.type === 'tv'}
         <button class="ghost" class:active={panel === 'episodes'} onclick={openEpisodes}>
@@ -1200,7 +1289,7 @@
     playing. The remote's `stuck` phase already gives the same advice for the
     case that matters, with the source picker one button away.
   -->
-  {#if suggestion && !showRemote}
+  {#if suggestion && !showRemote && awayUntil === null}
     <div class="suggestion" role="alert">
       <span class="reason">{suggestion.reason}.</span>
       <!--
@@ -1238,6 +1327,25 @@
   */
   .hotzone {
     width: 100%;
+  }
+
+  /* Dark and small: it must read over any frame without becoming the thing
+     that is in the way. */
+  .away {
+    display: block;
+    box-sizing: border-box;
+    padding: 0 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 15px;
+    background: rgba(12, 12, 16, 0.78);
+    color: #e9e9ee;
+    cursor: pointer;
+    font:
+      500 13px/1 Inter,
+      system-ui,
+      sans-serif;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .offer-slot {

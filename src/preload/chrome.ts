@@ -15,6 +15,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EV } from '@shared/ipc'
 import type {
+  OverlayArea,
   PlayerContext,
   PlayerSuggestion,
   SkipOffer,
@@ -57,8 +58,11 @@ const api: WtaChromeApi = {
     setMuted: (muted: boolean) => ipcRenderer.invoke(CH.castSetMuted, muted),
   },
 
-  setOverlayHeight: (height: number): void => {
-    ipcRenderer.send(EV.chromeOverlayHeight, Math.max(0, Math.round(height)))
+  setOverlayArea: ({ height, width }: OverlayArea): void => {
+    ipcRenderer.send(EV.chromeOverlayArea, {
+      height: Math.max(0, Math.round(height)),
+      width: width === null ? null : Math.max(0, Math.round(width)),
+    })
   },
 
   /** Leave the player. */
@@ -148,7 +152,7 @@ const api: WtaChromeApi = {
   /**
    * Report the button's measured size.
    *
-   * The same obligation as `setOverlayHeight` and for the same reason: this
+   * The same obligation as `setOverlayArea` and for the same reason: this
    * view swallows every mouse event inside its bounds, so it is sized to the
    * button and not one pixel more.
    */
