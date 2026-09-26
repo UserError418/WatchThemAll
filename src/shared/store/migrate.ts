@@ -23,6 +23,7 @@ import { isLegacyRating, isRatingValue, legacyRatingOf, valueOfLegacy } from '..
 import { SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
 import { DEFAULT_SETTINGS, emptyDocument } from './core'
+import { withOneTrackerPerSeries } from './trackers'
 import { normalizeSourceOrder } from '../scanrank'
 import { QUALITY_CLASSES } from '../streamquality'
 
@@ -117,8 +118,11 @@ export function migrate(input: unknown, now = Date.now()): StoreDocument {
     Record<string, unknown>
 
   const version = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
-  const doc = version >= 1 ? fromTyped(raw, now) : fromLegacy(raw, now)
+  const migrated = version >= 1 ? fromTyped(raw, now) : fromLegacy(raw, now)
 
+  // A repair rather than a shape change, and here because this runs on every
+  // load and every pull: see `trackers.ts`.
+  const doc = withOneTrackerPerSeries(migrated, now)
   doc.schemaVersion = SCHEMA_VERSION
   return doc
 }

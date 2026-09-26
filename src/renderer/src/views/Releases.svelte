@@ -56,6 +56,7 @@
   import { stagger } from '../lib/motion'
   import { fly } from 'svelte/transition'
   import Score from '../components/Score.svelte'
+  import { survivingTrackers } from '@shared/store/trackers'
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -78,16 +79,26 @@
   const seen = (tmdbId: number, season: number, episode: number): boolean =>
     library.isWatched(tmdbId, season, episode)
 
-  const timeline = $derived(buildTimeline(library.trackers, { now, windowDays }))
+  /**
+   * One tracker per series, whatever the store holds.
+   *
+   * The store repairs duplicates on load and after every sync
+   * (`store/trackers.ts`), so this should never remove anything. It is here
+   * because a duplicate reaching this view does not degrade it, it stops it
+   * rendering at all — the rows below are keyed by series and episode.
+   */
+  const trackers = $derived(survivingTrackers(library.trackers))
+
+  const timeline = $derived(buildTimeline(trackers, { now, windowDays }))
   const upcomingCount = $derived(countEpisodes(timeline.upcoming))
   const laterCount = $derived(countEpisodes(timeline.later))
   const recentCount = $derived(countEpisodes(timeline.recent))
 
   const soonest = $derived(nextUp(timeline))
-  const week = $derived(weekStrip(library.trackers, now))
+  const week = $derived(weekStrip(trackers, now))
   const weekPeak = $derived(Math.max(1, ...week.map((day) => day.count)))
   const weekTotal = $derived(week.reduce((total, day) => total + day.count, 0))
-  const tracking = $derived(trackerRows(library.trackers, seen, now))
+  const tracking = $derived(trackerRows(trackers, seen, now))
   const behind = $derived(tracking.reduce((total, row) => total + row.unwatched, 0))
 
   /**
@@ -173,7 +184,7 @@
 
   /** The tracker an episode came from, for its run strip. */
   function trackerOf(tmdbId: number): ReleaseTracker | undefined {
-    return library.trackers.find((tracker) => tracker.tmdbId === tmdbId)
+    return trackers.find((tracker) => tracker.tmdbId === tmdbId)
   }
 </script>
 
@@ -330,7 +341,7 @@
         <!-- "a notification", not "a desktop notification": this renderer is
              also the Android app, where the same sentence was describing a
              platform the reader is not on. -->
-        {library.trackers.length} series tracked. New episodes raise a notification when they air.
+        {trackers.length} series tracked. New episodes raise a notification when they air.
       </p>
     </div>
     <div class="tools">
@@ -351,7 +362,7 @@
         />
         Notifications
       </label>
-      <button class="check" onclick={checkNow} disabled={checking || library.trackers.length === 0}>
+      <button class="check" onclick={checkNow} disabled={checking || trackers.length === 0}>
         {checking ? 'Checking…' : '↻ Check now'}
       </button>
       {#if checkResult}
@@ -360,7 +371,7 @@
     </div>
   </header>
 
-  {#if library.trackers.length === 0}
+  {#if trackers.length === 0}
     <p class="state">
       Nothing tracked yet. Open any series and choose <strong>Track Releases</strong> to be told when
       its next episode airs.

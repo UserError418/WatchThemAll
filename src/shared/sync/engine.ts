@@ -28,6 +28,7 @@
 
 import { mergeDocuments } from '../store/merge'
 import { migrate } from '../store/migrate'
+import { withOneTrackerPerSeries } from '../store/trackers'
 import type { StoreDocument } from '../store/document'
 import type { SyncBackend } from './types'
 
@@ -79,7 +80,9 @@ export async function syncOnce(
    * disk that way. Migrating here also means the push below carries the
    * current shape back up, so the remote heals rather than staying behind.
    */
-  const merged = mergeDocuments(local, migrate(remote.document, now))
+  // Repaired after the merge as well as in `migrate`: two documents that each
+  // track a series once can still merge into one that tracks it twice.
+  const merged = withOneTrackerPerSeries(mergeDocuments(local, migrate(remote.document, now)), now)
 
   /**
    * Compare against both sides to decide whether anything actually moved.
