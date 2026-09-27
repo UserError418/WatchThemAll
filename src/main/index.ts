@@ -49,7 +49,7 @@ import {
 } from './providerscan'
 import { createScanService } from './scanservice'
 import { createWatchlistTester } from './watchlisttester'
-import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from './resume'
+import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
 import {
   readCache,
   refreshCatalog,
@@ -483,6 +483,9 @@ function settleProgress(
   })
 }
 
+/** What this device last wrote per title; see `WrittenPositions`. */
+const writtenPositions = new WrittenPositions()
+
 /**
  * Write down where this was left, forget it if it is finished, or leave the
  * memory alone when this reading has nothing to say.
@@ -501,8 +504,10 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
   if (action === 'keep') return
   if (action === 'forget') {
     points.remove(key)
+    writtenPositions.forget(key)
     return
   }
+  if (!writtenPositions.isChange(key, position!.seconds, position!.duration)) return
 
   points.put({
     key,

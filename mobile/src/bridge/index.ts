@@ -87,7 +87,7 @@ import { castabilities } from '@shared/castability'
 import { checkAll } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
-import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor } from '@main/resume'
+import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from '@main/resume'
 import { createCastBridge } from './cast'
 import { App as CapacitorApp } from '@capacitor/app'
 import { ScreenOrientation } from '@capacitor/screen-orientation'
@@ -679,6 +679,9 @@ export async function createBridge(): Promise<WtaApi> {
    * on every switch and it cost real progress, because switching source three
    * times split one viewing into three stretches, none long enough to count.
    */
+  /** What this device last wrote per title; see `WrittenPositions`. */
+  const writtenPositions = new WrittenPositions()
+
   const rememberPosition = (req: PlayRequest): void => {
     const reading = progress?.reading ?? null
     const context = contextFor(req, reading)
@@ -694,8 +697,10 @@ export async function createBridge(): Promise<WtaApi> {
     if (action === 'keep') return
     if (action === 'forget') {
       points.remove(resumeKey(context))
+      writtenPositions.forget(resumeKey(context))
       return
     }
+    if (!writtenPositions.isChange(resumeKey(context), reading!.seconds, reading!.duration ?? 0)) return
 
     points.put({
       key: resumeKey(context),

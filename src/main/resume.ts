@@ -240,3 +240,36 @@ export function isWatchedEnough(args: {
   // Nothing known about how long it is, so a fixed floor is all that is left.
   return playedMs >= fallbackMs
 }
+
+/**
+ * What this device last wrote for each resume key, so an unchanged reading is
+ * not written again.
+ *
+ * A paused video reports the same position every time it is asked, and the
+ * desktop asks every thirty seconds. Writing it again changes nothing here,
+ * but every write stamps the record as new, and resume points sync
+ * last-write-wins. So a desktop left paused at 10:00 kept announcing 10:00 as
+ * the latest word while the phone carried on to 25:00, and the phone's
+ * progress lost. Each repeat was also a disk write, a library reload and a
+ * sync.
+ *
+ * Compared against what *this device* wrote, not against the stored record,
+ * because the stored record may be the other device's newer position, which
+ * is exactly the one to leave alone.
+ */
+export class WrittenPositions {
+  private readonly last = new Map<string, string>()
+
+  /** True, and remembered, when this differs from what was last written for `key`. */
+  isChange(key: string, seconds: number, duration: number): boolean {
+    const reading = `${seconds}/${duration}`
+    if (this.last.get(key) === reading) return false
+    this.last.set(key, reading)
+    return true
+  }
+
+  /** The point was removed, so the next reading for `key` is new again. */
+  forget(key: string): void {
+    this.last.delete(key)
+  }
+}

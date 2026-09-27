@@ -6,6 +6,7 @@ import {
   resumeKey,
   shouldSeek,
   shouldStorePosition,
+  WrittenPositions,
 } from './resume'
 
 describe('resumeKey', () => {
@@ -188,5 +189,34 @@ describe('isWatchedEnough', () => {
     // nothing" would mark everything watched on sight, which is the bug the
     // threshold exists to prevent.
     expect(isWatchedEnough({ ...base, seconds: 5, duration: 0 })).toBe(false)
+  })
+})
+
+describe('WrittenPositions', () => {
+  it('lets the first reading through and stops the same one repeating', () => {
+    const written = new WrittenPositions()
+    expect(written.isChange('tv:1:1:1', 600, 3600)).toBe(true)
+    // A paused video: the same reading, thirty seconds later.
+    expect(written.isChange('tv:1:1:1', 600, 3600)).toBe(false)
+  })
+
+  it('lets a moved position through', () => {
+    const written = new WrittenPositions()
+    written.isChange('tv:1:1:1', 600, 3600)
+    expect(written.isChange('tv:1:1:1', 630, 3600)).toBe(true)
+    expect(written.isChange('tv:1:1:1', 630, 3500)).toBe(true)
+  })
+
+  it('keeps each title to itself', () => {
+    const written = new WrittenPositions()
+    written.isChange('tv:1:1:1', 600, 3600)
+    expect(written.isChange('tv:1:1:2', 600, 3600)).toBe(true)
+  })
+
+  it('treats a reading after a removal as new', () => {
+    const written = new WrittenPositions()
+    written.isChange('movie:9', 600, 3600)
+    written.forget('movie:9')
+    expect(written.isChange('movie:9', 600, 3600)).toBe(true)
   })
 })
