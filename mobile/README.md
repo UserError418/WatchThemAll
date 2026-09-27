@@ -215,13 +215,17 @@ so VidSrc shows no quality on the phone while the desktop reads its ladder.
 Videasy (fMP4 init segment), VidFlix and 111Movies (first TS segment) read the
 same on both.
 
-### The chrome bar does not auto-hide
+### The chrome bar hides only while our controls have the film
 
 On desktop it fades and returns when the pointer nears the top edge. A phone has
 no pointer and a tap inside a cross-origin iframe is invisible, so an auto-hiding
-bar would hide once and never come back. `PlayerChrome`'s `touch` prop pins it
-open; the bar itself is the desktop's component, mounted by
-`bridge/chromeoverlay.ts`.
+bar would hide once and never come back. Since 2.0.0 our own controls
+(`PlayerOverlay`, mounted by `bridge/overlayhost.ts`) cover the picture and do
+see the taps, so while they have the film the bar hides and returns with them
+(`bridge/overlayhub.ts` carries what they tell each other). Whenever they do
+not (a source still starting, or its own page shown), `PlayerChrome`'s `touch`
+prop pins the bar open as before; the bar is the desktop's component, mounted
+by `bridge/chromeoverlay.ts`.
 
 ## The provider catalogue
 
