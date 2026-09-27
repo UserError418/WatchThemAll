@@ -37,7 +37,7 @@
   import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
   import type { Episode, StreamDelivery } from '@shared/types'
-  import { airDate, clock, hasAired, runtime } from './lib/format'
+  import { airDate, clock, episodeCode, hasAired, runtime } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
   import {
     nextEpisode,
@@ -1046,7 +1046,7 @@
   const positionLabel = $derived(
     context === null || context.season === null || context.episode === null
       ? ''
-      : `S${String(context.season).padStart(2, '0')}E${String(context.episode).padStart(2, '0')}`,
+      : episodeCode(context.season, context.episode),
   )
 
   /* ── The remote ───────────────────────────────────────────────────────────
@@ -1146,7 +1146,7 @@
     const token = ++switchToken
 
     remotePhase = 'switching'
-    remoteNote = `Loading S${String(step.season).padStart(2, '0')}E${String(step.episode).padStart(2, '0')} here first — the television is fed from this window.`
+    remoteNote = `Loading ${episodeCode(step.season, step.episode)} here first — the television is fed from this window.`
     api.goTo(step.season, step.episode)
 
     // Nothing is captured for a beat after a navigation; asking immediately
