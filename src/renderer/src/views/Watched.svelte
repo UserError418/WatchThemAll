@@ -1336,10 +1336,16 @@
       width: 96px;
     }
 
-    /* At 96px a logo is too small to read; the name sits right beside it. */
-    .cover-scrim,
+    /*
+      The phone's cover is half the width, so the logo takes a larger share of
+      it and sits closer to the corner: at the desktop's proportions it came
+      out about 60px wide, too small to tell one from another at a glance,
+      which is the point of it.
+    */
     .cover img.cover-logo {
-      display: none;
+      inset: auto auto 4px 5px;
+      max-width: 82%;
+      max-height: 52%;
     }
 
   }
