@@ -30,6 +30,9 @@ ones you point it at and keeps the part that matters: your library.
   part-way through. Genre rows follow what you actually watch.
 - **Resume where you stopped**, at the real position in the episode, including
   when you switch provider mid-show.
+- **Keep watching while you browse.** Back shrinks the player into a corner
+  of the window, or a strip above the tabs on a phone, with play/pause,
+  expand and close.
 - **Release tracking.** Follow a series for a countdown in the app and a
   notification on the day.
 - **Providers you control.** Enable, disable and reorder them. Automatic mode
