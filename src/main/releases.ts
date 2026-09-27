@@ -173,25 +173,76 @@ export async function checkTracker(tracker: ReleaseTracker): Promise<ReleaseNoti
   return { tracker, episode: latest, kind }
 }
 
-/** Check every tracker in sequence. Returns whatever the user should hear about. */
+/**
+ * What a check writes on a tracker. Everything else on the record belongs to
+ * the user or to sync, and is taken from the stored tracker at write time.
+ */
+const CHECKED_FIELDS = [
+  'tmdbId',
+  'title',
+  'posterPath',
+  'status',
+  'nextEpisode',
+  'lastNotified',
+  'schedule',
+  'lastChecked',
+] as const satisfies ReadonlyArray<keyof ReleaseTracker>
+
+/** The sweep in progress, so a second one joins it rather than running alongside. */
+let running: Promise<ReleaseNotice[]> | null = null
+
+/**
+ * Check every tracker in sequence. Returns whatever the user should hear about.
+ *
+ * One sweep at a time. The hourly timer and "Check now" could overlap, and
+ * both would announce the same new episode. A sweep asked for while one runs
+ * waits for it and returns nothing, because the running one announces.
+ */
 export async function checkAll(store: SweepableStore): Promise<ReleaseNotice[]> {
-  const data: StoreShape = store.read()
+  if (running) {
+    await running.catch(() => {})
+    return []
+  }
+  running = sweep(store)
+  try {
+    return await running
+  } finally {
+    running = null
+  }
+}
+
+async function sweep(store: SweepableStore): Promise<ReleaseNotice[]> {
+  const liveTracker = (id: string): ReleaseTracker | undefined =>
+    store.read().trackers.find((tracker) => tracker.id === id)
   const notices: ReleaseNotice[] = []
 
-  for (const tracker of data.trackers) {
+  for (const { id } of store.read().trackers) {
+    const before = liveTracker(id)
+    if (!before) continue
+
+    // Checked on a copy, and only the checked fields are written back onto
+    // the tracker as it stands *after* the check. The sweep used to change the
+    // records it read at the start and `put` them back, and `put` revives a
+    // deleted record. So a series untracked while TMDB answered (or removed by
+    // a sync that landed mid-sweep) came back, synced out as tracked again,
+    // and could raise a notification for a series the user had just dropped.
+    const checked: ReleaseTracker = { ...before }
+    let notice: ReleaseNotice | null = null
     try {
-      const notice = await checkTracker(tracker)
-      if (notice) notices.push(notice)
+      notice = await checkTracker(checked)
     } catch (err) {
       // One unreachable series must not stop the rest of the sweep.
-      console.error(`[releases] check failed for "${tracker.title}":`, err)
-      tracker.lastChecked = Date.now()
+      console.error(`[releases] check failed for "${checked.title}":`, err)
+      checked.lastChecked = Date.now()
     }
-    // Written per tracker rather than as one array at the end: `checkTracker`
-    // mutates in place, so the store would otherwise never learn that anything
-    // changed and could not stamp it. A sweep of forty series is forty writes,
-    // which the store's own coalescing turns back into one.
-    store.collection('trackers').put(tracker)
+
+    const after = liveTracker(id)
+    if (after) {
+      const update: Partial<ReleaseTracker> = {}
+      for (const field of CHECKED_FIELDS) Object.assign(update, { [field]: checked[field] })
+      store.collection('trackers').put({ ...after, ...update })
+      if (notice) notices.push(notice)
+    }
     await new Promise((resolve) => setTimeout(resolve, REQUEST_SPACING_MS))
   }
 
