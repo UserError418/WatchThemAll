@@ -462,7 +462,7 @@
                         facts.backdropPath,
                         'w780',
                       )} 780w"
-                      sizes="192px"
+                      sizes="(max-width: 760px) 96px, 192px"
                       alt=""
                       loading="lazy"
                       decoding="async"

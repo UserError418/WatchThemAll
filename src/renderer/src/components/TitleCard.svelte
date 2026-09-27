@@ -289,6 +289,7 @@
               class:loaded={logoLoaded}
               src={logo}
               alt=""
+              loading="lazy"
               decoding="async"
               onload={() => (logoLoaded = true)}
             />
