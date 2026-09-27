@@ -60,11 +60,13 @@
   }
 
   /* Over a poster there is no telling what is underneath, so the chip brings
-     its own contrast rather than hoping. */
+     its own contrast rather than hoping. A shade denser rather than blurred:
+     every card on Browse carries one, and each backdrop-filter is its own
+     render surface re-read on every frame a row scrolls, for a 4px blur under
+     72% black that nobody could see on a chip this size. */
   .on-artwork {
     padding: 3px 6px;
     border-radius: 999px;
-    background: rgba(0, 0, 0, 0.72);
-    backdrop-filter: blur(4px);
+    background: rgba(0, 0, 0, 0.78);
   }
 </style>
