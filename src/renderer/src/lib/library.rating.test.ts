@@ -127,3 +127,34 @@ describe('clearRating', () => {
     expect(write).not.toHaveBeenCalled()
   })
 })
+
+describe('ratingForEntry', () => {
+  const seasonFour: TitleRating = { ...converted, key: 'tv:tt0903747:s4', season: 4, value: 7, coarse: false }
+
+  /**
+   * The reported bug, as a test. The Watched tab listed a season the user had
+   * just rated under "Unrated", because it asked for the *series* opinion while
+   * the card's own buttons set the *season* one. Both calls were well-typed;
+   * they disagreed about an argument one of them left out.
+   */
+  it('uses the entry own scope, so a rated season is not listed as unrated', () => {
+    library.ratings = [converted, seasonFour]
+    expect(library.ratingForEntry({ tmdbId: 1396, season: 4 })).toBe(7)
+  })
+
+  it('uses the whole title for a film', () => {
+    library.ratings = [converted, seasonFour]
+    expect(library.ratingForEntry({ tmdbId: 1396, season: null })).toBe(8)
+  })
+
+  it('reports no opinion for a season nobody has rated', () => {
+    library.ratings = [converted, seasonFour]
+    expect(library.ratingForEntry({ tmdbId: 1396, season: 9 })).toBeNull()
+  })
+
+  /** The index follows the list: a rating made after the last read is found. */
+  it('sees a rating made through `rate`', () => {
+    library.rate(media, 6, 2)
+    expect(library.ratingForEntry({ tmdbId: 1396, season: 2 })).toBe(6)
+  })
+})

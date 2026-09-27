@@ -37,7 +37,7 @@
  * a smaller wrong than a control that silently ignores the user.
  */
 
-import type { LegacyRating, RatingValue, TitleRating, WatchedEntry } from './types'
+import type { LegacyRating, RatingValue, TitleRating } from './types'
 
 /* ── The scale ──────────────────────────────────────────────────────────── */
 
@@ -119,35 +119,24 @@ export function ratingBand(value: RatingValue): RatingBand {
 /* ── Scope ──────────────────────────────────────────────────────────────── */
 
 /** Ratings carry `season: null` for a whole title; `undefined` is pre-1.5.7. */
-type Scoped = Pick<TitleRating, 'tmdbId' | 'value'> & { season?: number | null }
+type Scoped = Pick<TitleRating, 'tmdbId'> & { season?: number | null }
+
+/** One key per rating scope: a whole title, or one of its seasons. */
+export function ratingScope(tmdbId: number, season: number | null | undefined): string {
+  return `${tmdbId}:${season ?? null}`
+}
 
 /**
- * The rating held at exactly this scope, or null.
+ * Every rating by its scope, so reading the one at exactly a scope is a `get`.
  *
  * Deliberately not a fallback: asking about season 3 does *not* return the
  * series rating. A season nobody has rated is unrated, and answering with the
  * series' opinion would make every season of a liked show look individually
  * liked — which is the whole distinction the season scope exists to draw.
- */
-export function ratingForScope(
-  ratings: readonly Scoped[],
-  tmdbId: number,
-  season: number | null,
-): RatingValue | null {
-  return ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)?.value ?? null
-}
-
-/**
- * The rating that applies to a watched entry, at the entry's own scope.
  *
- * A watched entry already knows what it is about — a season, or a whole title —
- * so the scope should never be passed separately. Every place that wanted "the
- * rating on this card" and reached for `ratingForScope` with its own idea of
- * the season is a place that could get it wrong.
+ * Built back to front so that if a synced list ever holds two records at one
+ * scope, the earlier one — the newer, since `rate` prepends — is the one kept.
  */
-export function ratingForEntry(
-  ratings: readonly Scoped[],
-  entry: Pick<WatchedEntry, 'tmdbId' | 'season'>,
-): RatingValue | null {
-  return ratingForScope(ratings, entry.tmdbId, entry.season ?? null)
+export function indexRatings<T extends Scoped>(ratings: readonly T[]): ReadonlyMap<string, T> {
+  return new Map([...ratings].reverse().map((r) => [ratingScope(r.tmdbId, r.season), r]))
 }

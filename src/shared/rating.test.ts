@@ -4,9 +4,9 @@ import {
   LEGACY_LIKE_VALUE,
   isRatingValue,
   legacyRatingOf,
+  indexRatings,
   ratingBand,
-  ratingForEntry,
-  ratingForScope,
+  ratingScope,
   valueOfLegacy,
 } from './rating'
 import type { RatingValue } from './types'
@@ -76,15 +76,19 @@ describe('ratingBand', () => {
   })
 })
 
-describe('ratingForScope', () => {
+describe('indexRatings', () => {
+  type Rated = { tmdbId: number; season?: number | null; value: RatingValue }
+  const valueAt = (ratings: Rated[], tmdbId: number, season: number | null): RatingValue | null =>
+    indexRatings(ratings).get(ratingScope(tmdbId, season))?.value ?? null
+
   it('finds a whole-title opinion', () => {
-    expect(ratingForScope(RATINGS, 1396, null)).toBe(9)
+    expect(valueAt(RATINGS, 1396, null)).toBe(9)
   })
 
   it('finds the opinion for one season without catching its neighbours', () => {
-    expect(ratingForScope(RATINGS, 2316, 3)).toBe(4)
-    expect(ratingForScope(RATINGS, 2316, 4)).toBe(7)
-    expect(ratingForScope(RATINGS, 2316, 5)).toBeNull()
+    expect(valueAt(RATINGS, 2316, 3)).toBe(4)
+    expect(valueAt(RATINGS, 2316, 4)).toBe(7)
+    expect(valueAt(RATINGS, 2316, 5)).toBeNull()
   })
 
   /**
@@ -93,12 +97,12 @@ describe('ratingForScope', () => {
    * and the Unrated tab would then have nothing left to show.
    */
   it('does not answer a season question with the series opinion', () => {
-    expect(ratingForScope(RATINGS, 1396, 2)).toBeNull()
+    expect(valueAt(RATINGS, 1396, 2)).toBeNull()
   })
 
   /** And not the other way round either: a rated season leaves the series unrated. */
   it('does not answer a series question with a season opinion', () => {
-    expect(ratingForScope(RATINGS, 2316, null)).toBeNull()
+    expect(valueAt(RATINGS, 2316, null)).toBeNull()
   })
 
   /**
@@ -107,32 +111,20 @@ describe('ratingForScope', () => {
    * either way, and refusing to read it back makes the buttons look broken.
    */
   it('reads back a rating on an unresolved title', () => {
-    expect(ratingForScope([{ tmdbId: 0, season: null, value: 8 }], 0, null)).toBe(8)
+    expect(valueAt([{ tmdbId: 0, season: null, value: 8 }], 0, null)).toBe(8)
   })
 
   /** Ratings written before 1.5.7 have no season field at all. */
   it('treats a missing season as the whole title', () => {
-    expect(ratingForScope([{ tmdbId: 7, value: 8 }], 7, null)).toBe(8)
-  })
-})
-
-describe('ratingForEntry', () => {
-  /**
-   * The reported bug, as a test. The Watched tab listed a season the user had
-   * just rated under "Unrated", because it asked for the *series* opinion while
-   * the card's own buttons set the *season* one. Both calls were well-typed;
-   * they disagreed about an argument one of them left out.
-   */
-  it('uses the entry own scope, so a rated season is not listed as unrated', () => {
-    const entry = { tmdbId: 2316, season: 4 }
-    expect(ratingForEntry(RATINGS, entry)).toBe(7)
+    expect(valueAt([{ tmdbId: 7, value: 8 }], 7, null)).toBe(8)
   })
 
-  it('uses the whole title for a film or a legacy entry', () => {
-    expect(ratingForEntry(RATINGS, { tmdbId: 1396, season: null })).toBe(9)
-  })
-
-  it('reports no opinion for a season nobody has rated', () => {
-    expect(ratingForEntry(RATINGS, { tmdbId: 2316, season: 9 })).toBeNull()
+  /** `rate` prepends, so the first of two records at one scope is the newer. */
+  it('keeps the first record when two share a scope', () => {
+    const twice: Rated[] = [
+      { tmdbId: 7, season: null, value: 9 },
+      { tmdbId: 7, season: null, value: 3 },
+    ]
+    expect(valueAt(twice, 7, null)).toBe(9)
   })
 })

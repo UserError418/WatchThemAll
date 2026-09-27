@@ -27,7 +27,7 @@ import type {
 } from '@shared/types'
 import { resumeKey, type SourceSortKey } from '@shared/types'
 import { isListed } from '@shared/listed'
-import { legacyRatingOf, ratingForEntry, ratingForScope } from '@shared/rating'
+import { indexRatings, legacyRatingOf, ratingScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 import { DEFAULT_SETTINGS } from '@shared/store/core'
 
@@ -101,8 +101,16 @@ class Library {
   resumePoints = $state<ResumePoint[]>([])
   /** Titles the user has already seen. See the Watched tab. */
   watched = $state<WatchedEntry[]>([])
-  /** The user's own 1–10 ratings, which steer the tailored Browse row. */
-  ratings = $state<TitleRating[]>([])
+  /**
+   * The user's own 1–10 ratings, which steer the tailored Browse row.
+   *
+   * Raw rather than deeply reactive: the list is only ever replaced whole, and
+   * the Watched tab reads it once per card, where going through a proxy for
+   * every field of every record was most of that tab's render time.
+   */
+  ratings = $state.raw<TitleRating[]>([])
+  /** `ratings` by scope, so a card's lookup is one `get` instead of a scan. */
+  private ratingIndex = $derived(indexRatings(this.ratings))
   // The store's own defaults rather than a copy: a copy here already lacked a
   // field once, and the renderer would have shown the wrong order until load.
   settings = $state<StoreShape['settings']>({ ...DEFAULT_SETTINGS, sourceOrder: [...DEFAULT_SETTINGS.sourceOrder] })
@@ -1012,7 +1020,7 @@ class Library {
    * a show can be worth watching while one season of it is not.
    */
   ratingFor(tmdbId: number, season: number | null = null): RatingValue | null {
-    return ratingForScope(this.ratings, tmdbId, season)
+    return this.ratingRecord(tmdbId, season)?.value ?? null
   }
 
   /**
@@ -1032,7 +1040,7 @@ class Library {
    * tab came to list seasons the user had just rated under "Unrated".
    */
   ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): RatingValue | null {
-    return ratingForEntry(this.ratings, entry)
+    return this.ratingFor(entry.tmdbId, entry.season ?? null)
   }
 
   /**
@@ -1090,9 +1098,9 @@ class Library {
     void this.persist({ ratings: this.ratings })
   }
 
-  /** The stored record at exactly this scope — the same rule as `ratingForScope`. */
+  /** The stored record at exactly this scope; see `indexRatings` for why never a fallback. */
   private ratingRecord(tmdbId: number, season: number | null): TitleRating | undefined {
-    return this.ratings.find((r) => r.tmdbId === tmdbId && (r.season ?? null) === season)
+    return this.ratingIndex.get(ratingScope(tmdbId, season))
   }
 
   /** Every rating except the one at exactly this scope. */
