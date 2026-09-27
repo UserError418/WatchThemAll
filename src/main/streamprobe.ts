@@ -25,6 +25,7 @@
 import { BrowserWindow, session, type WebContents } from 'electron'
 import type { Provider, StreamDelivery } from '@shared/types'
 import { strongerDelivery, wholeFileDelivery } from '@shared/castability'
+import { isForeignNavigation } from './navguard'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
@@ -533,6 +534,19 @@ async function runProbe(
     documentSeen = true
     base.documentStatus = httpResponseCode
     if (navigatedUrl !== url) base.redirectedTo = navigatedUrl
+  })
+
+  /**
+   * The player's navigation guard, here too (`navguard.ts`). Videasy and VidZee
+   * replace their own page with an advert about ten seconds in, well inside a
+   * test's budget, and a test that watched the advert would call a working
+   * source dead. Framed probes only: unframed, the provider is the main frame,
+   * and nothing here navigates it but the probe.
+   */
+  win.webContents.on('will-frame-navigate', (details) => {
+    const frame = details.frame
+    if (!frameUrl || details.isMainFrame || frame === null || frame.parent !== win.webContents.mainFrame) return
+    if (isForeignNavigation(frame.url, details.url, url)) details.preventDefault()
   })
 
   win.webContents.on('did-fail-load', (_e, errorCode, errorDescription) => {

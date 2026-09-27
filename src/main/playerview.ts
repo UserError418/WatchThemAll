@@ -46,6 +46,7 @@ import { pressPlay as pressPlayIn } from './pressplay'
 import { beginStallWatch, frozenSeconds, observeStall, type StallWatch } from './playbackstall'
 import { checkRuntime } from './runtimecheck'
 import { findIntro } from './skiplookup'
+import { isForeignNavigation } from './navguard'
 import { skipButtonBounds } from './skipplacement'
 import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
 import type { PlayCandidate } from './providers'
@@ -694,6 +695,21 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   contents.on('did-finish-load', sendContext)
   contents.on('did-navigate-in-page', sendContext)
+
+  /**
+   * Keep the provider's page where we put it: `isForeignNavigation`. The
+   * provider's document is the shell's direct child. The shell's own
+   * navigations are ours (every source change is a `loadURL` of the shell),
+   * and the provider's inner frames may go where they like, because what the
+   * user sees is decided by the document that holds them.
+   */
+  contents.on('will-frame-navigate', (details) => {
+    const frame = details.frame
+    if (details.isMainFrame || frame === null || frame.parent !== contents.mainFrame) return
+    if (!isForeignNavigation(frame.url, details.url, currentCandidate()?.url ?? null)) return
+    console.log(`[navguard] kept ${frame.origin} from navigating to ${new URL(details.url).origin}`)
+    details.preventDefault()
+  })
 
   /**
    * The success signal, and the only honest one.
