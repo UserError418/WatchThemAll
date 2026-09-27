@@ -33,6 +33,16 @@ describe('airedEpisode', () => {
 })
 
 describe('notOutYet', () => {
+  // Local times, so these hold in any time zone: a date begins at the user's
+  // midnight, not at UTC's.
+  it('counts a title as out from local midnight of its date', () => {
+    expect(notOutYet('2026-09-27', new Date(2026, 8, 27, 0, 30).getTime())).toBe(false)
+  })
+
+  it('counts it as still to come in the last minutes of the day before', () => {
+    expect(notOutYet('2026-09-27', new Date(2026, 8, 26, 23, 30).getTime())).toBe(true)
+  })
+
   it('holds back a title whose date is still to come', () => {
     expect(notOutYet('2026-10-20', NOW)).toBe(true)
   })

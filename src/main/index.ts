@@ -61,6 +61,7 @@ import { fileCatalogStore } from './catalogcache'
 import { oauthClient } from '@shared/sync/credentials'
 import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
+import { localMidnight } from '@shared/aired'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -232,7 +233,7 @@ const watchlistTester = createWatchlistTester({
   lookUp: async (entry) => {
     try {
       const found = await tmdb.detail(entry.tmdbId, entry.type)
-      const date = found.releaseDate ? Date.parse(found.releaseDate) : Number.NaN
+      const date = found.releaseDate ? localMidnight(found.releaseDate) : Number.NaN
       return {
         released: Number.isFinite(date) && date <= Date.now(),
         imdbId: found.imdbId,

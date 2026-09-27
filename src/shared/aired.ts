@@ -24,8 +24,20 @@ import type { EpisodeStub } from './types'
  */
 export function notOutYet(releaseDate: string | null | undefined, now: number): boolean {
   if (!releaseDate) return false
-  const at = Date.parse(releaseDate)
+  const at = localMidnight(releaseDate)
   return Number.isFinite(at) && at > now
+}
+
+/**
+ * When a TMDB date (`YYYY-MM-DD`) begins where the user is: local midnight.
+ *
+ * The rule the rest of the app follows (`format.ts`, `schedule.ts`,
+ * `releases.ts`). `Date.parse` alone reads a bare date as UTC midnight, which
+ * here made a title "not out yet" for the first hours of its release day
+ * (and, west of UTC, "out" hours early). NaN for anything unparseable.
+ */
+export function localMidnight(date: string): number {
+  return new Date(`${date}T00:00:00`).getTime()
 }
 
 /**
