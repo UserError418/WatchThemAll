@@ -1,62 +1,68 @@
 /**
  * The arithmetic behind the cast remote.
  *
- * Pure, and separate from the component, because two of the three things in
- * here are the kind of off-by-one that renders as a working button doing the
- * wrong thing rather than as an error — stepping to episode 0, or a volume
- * slider that reports 101%.
+ * Pure, and separate from the component, because most of what is in here is
+ * the kind of off-by-one that renders as a working button doing the wrong
+ * thing rather than as an error — a volume slider that reports 101%, or the
+ * wrong television picked for the user.
  *
- * ## What "next episode" means while casting
- *
- * The same thing it means in the player's keyboard shortcuts
- * (`preload/player.ts`), deliberately: episode + 1, rolling into the next
- * season at the end of this one, and back to episode 1 of the previous season
- * going the other way. A second rule for the same gesture is a rule the user
- * has to learn twice.
- *
- * The rollover forward is only offered when the episode list has actually been
- * loaded. Without it there is no way to know the season has ended, and the
- * honest answer to "is there a next episode" is to keep counting — a provider
- * asked for an episode that does not exist fails visibly and recoverably,
- * where refusing to advance on a season whose list simply has not arrived
- * would strand the user on the last episode they could see.
+ * Where ⏮ and ⏭ go is not in here: it is the same rule as auto-next, in
+ * `shared/episodesteps.ts`, so the button and the countdown cannot disagree
+ * about what comes next.
  */
 
-export interface EpisodeStep {
-  season: number
-  episode: number
+import type { CastDevice } from '@shared/ipc'
+
+/**
+ * Which of the remote's two faces is up.
+ *
+ * `choose` is the television and the source being picked, which is what the
+ * cast button opens straight onto (the owner, 2026-09-27: one tap into the
+ * remote, where the source list used to be a panel over the player). It is
+ * also where "Change source" and a source the television refused lead.
+ * `control` is the transport, once something is on the television.
+ */
+export type RemoteMode = 'choose' | 'control'
+
+/** The television used last, as remembered between casts. */
+export interface RememberedDevice {
+  id: string
+  name: string
 }
 
 /**
- * Where the next-episode button goes.
+ * The television to have selected before the user picks one, or null.
  *
- * `knownEpisodes` is how many episodes this season is known to have, or 0 when
- * the list has not loaded. Null is returned only for something with no episode
- * at all — a film — which is also why the button is absent there rather than
- * disabled: there is nothing to explain.
+ * The one used last, when it is on the network, matched by id and then by
+ * name: a Chromecast's name is what its owner set, and survives the id
+ * changing under it. Otherwise the only one there is. With several and no
+ * history, nothing: guessing between two rooms is how a film starts on the
+ * wrong television.
  */
-export function nextEpisode(at: EpisodeStep | null, knownEpisodes = 0): EpisodeStep | null {
-  if (at === null) return null
-  if (knownEpisodes > 0 && at.episode >= knownEpisodes) {
-    return { season: at.season + 1, episode: 1 }
+export function preferredDevice(
+  devices: readonly CastDevice[],
+  last: RememberedDevice | null,
+): string | null {
+  if (last !== null) {
+    const byId = devices.find((d) => d.id === last.id)
+    if (byId) return byId.id
+    const byName = devices.find((d) => d.name === last.name)
+    if (byName) return byName.id
   }
-  return { season: at.season, episode: at.episode + 1 }
+  return devices.length === 1 ? devices[0]!.id : null
 }
 
-/**
- * Where the previous-episode button goes, or null at the very beginning.
- *
- * Stepping back across a season boundary lands on **episode 1** of the earlier
- * season rather than on its last. That is `preload/player.ts`'s existing
- * behaviour and it is a consequence of not knowing how long the previous
- * season is without fetching it — landing on episode 1 is wrong by a known
- * amount, where landing on a guessed episode number is wrong by an unknown one.
- */
-export function previousEpisode(at: EpisodeStep | null): EpisodeStep | null {
-  if (at === null) return null
-  if (at.episode > 1) return { season: at.season, episode: at.episode - 1 }
-  if (at.season > 1) return { season: at.season - 1, episode: 1 }
-  return null
+/** A remembered television read back from storage, or null for anything malformed. */
+export function parseRememberedDevice(raw: string | null): RememberedDevice | null {
+  if (raw === null) return null
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null) return null
+    const { id, name } = value as Record<string, unknown>
+    return typeof id === 'string' && typeof name === 'string' ? { id, name } : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -81,6 +87,9 @@ export function volumePercent(level: number): number {
 /**
  * What the remote is doing, which is not always "playing".
  *
+ * `connecting` is the choose face's only phase: the television is being
+ * reached, after a source was picked and before anything is loaded for it.
+ *
  * `switching` and `beaming` exist because moving the television to another
  * episode is not instant and not reliable: the embed has to load it, the
  * provider has to fetch a stream, and only then can it be sent. Showing the
@@ -91,7 +100,7 @@ export function volumePercent(level: number): number {
  * providers fetch nothing at all until their own play button is pressed, so
  * the remote says exactly that and keeps waiting.
  */
-export type RemotePhase = 'playing' | 'switching' | 'beaming' | 'stuck'
+export type RemotePhase = 'playing' | 'connecting' | 'switching' | 'beaming' | 'stuck'
 
 /** How long to wait for a provider to hand over a stream before saying so. */
 export const STREAM_WAIT_MS = 20_000

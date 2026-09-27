@@ -1,57 +1,58 @@
 import { describe, expect, it } from 'vitest'
 import {
-  nextEpisode,
   nudgeTarget,
-  previousEpisode,
+  parseRememberedDevice,
+  preferredDevice,
   progressFraction,
   seekTarget,
   volumePercent,
 } from './castremote'
 
-describe('nextEpisode', () => {
-  it('steps forward within the season', () => {
-    expect(nextEpisode({ season: 2, episode: 22 }, 24)).toEqual({ season: 2, episode: 23 })
+describe('preferredDevice', () => {
+  const bedroom = { id: 'a1', name: 'Schlafzimmer', selected: false }
+  const lounge = { id: 'b2', name: 'Wohnzimmer', selected: false }
+
+  it('selects the only television there is', () => {
+    expect(preferredDevice([bedroom], null)).toBe('a1')
   })
 
-  it('rolls into the next season at the end of this one', () => {
-    expect(nextEpisode({ season: 2, episode: 24 }, 24)).toEqual({ season: 3, episode: 1 })
+  /** Two rooms and no history: picking one would be a guess. */
+  it('selects nothing among several it has never used', () => {
+    expect(preferredDevice([bedroom, lounge], null)).toBeNull()
   })
 
-  /**
-   * The episode list is loaded asynchronously and may not have arrived. Without
-   * it there is no way to know the season has ended, and refusing to advance
-   * would strand the user on the last episode they happened to be able to see.
-   */
-  it('keeps counting when the season length is not known yet', () => {
-    expect(nextEpisode({ season: 2, episode: 99 }, 0)).toEqual({ season: 2, episode: 100 })
+  it('selects the one used last', () => {
+    expect(preferredDevice([bedroom, lounge], { id: 'b2', name: 'Wohnzimmer' })).toBe('b2')
   })
 
-  it('has nowhere to go for something with no episode', () => {
-    expect(nextEpisode(null)).toBeNull()
+  /** The owner's name for it outlives the id the network hands out. */
+  it('finds the one used last by name when its id has changed', () => {
+    const renumbered = { ...lounge, id: 'c3' }
+    expect(preferredDevice([bedroom, renumbered], { id: 'b2', name: 'Wohnzimmer' })).toBe('c3')
+  })
+
+  it('falls back to the only one when the one used last is not there', () => {
+    expect(preferredDevice([bedroom], { id: 'b2', name: 'Wohnzimmer' })).toBe('a1')
+  })
+
+  it('selects nothing before any television is found', () => {
+    expect(preferredDevice([], { id: 'b2', name: 'Wohnzimmer' })).toBeNull()
   })
 })
 
-describe('previousEpisode', () => {
-  it('steps back within the season', () => {
-    expect(previousEpisode({ season: 2, episode: 22 })).toEqual({ season: 2, episode: 21 })
+describe('parseRememberedDevice', () => {
+  it('reads back what was stored', () => {
+    expect(parseRememberedDevice('{"id":"a1","name":"Schlafzimmer"}')).toEqual({
+      id: 'a1',
+      name: 'Schlafzimmer',
+    })
   })
 
-  /**
-   * Episode 1 of the earlier season, not its last: the length of a season we
-   * are not in is not known without fetching it, and being wrong by a known
-   * amount beats being wrong by a guessed one. Matches the player's own
-   * keyboard shortcut rather than inventing a second rule.
-   */
-  it('steps back across a season boundary to episode 1', () => {
-    expect(previousEpisode({ season: 3, episode: 1 })).toEqual({ season: 2, episode: 1 })
-  })
-
-  it('stops at the very beginning', () => {
-    expect(previousEpisode({ season: 1, episode: 1 })).toBeNull()
-  })
-
-  it('has nowhere to go for something with no episode', () => {
-    expect(previousEpisode(null)).toBeNull()
+  it('answers null for nothing, and for anything malformed', () => {
+    expect(parseRememberedDevice(null)).toBeNull()
+    expect(parseRememberedDevice('not json')).toBeNull()
+    expect(parseRememberedDevice('null')).toBeNull()
+    expect(parseRememberedDevice('{"id":7,"name":"x"}')).toBeNull()
   })
 })
 

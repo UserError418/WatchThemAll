@@ -37,16 +37,17 @@
   } from '@shared/scanrank'
   import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
-  import type { Episode, StreamDelivery } from '@shared/types'
-  import { airDate, clock, episodeCode, hasAired, runtime } from './lib/format'
+  import type { Episode, Season, StreamDelivery } from '@shared/types'
+  import { airDate, episodeCode, hasAired, runtime } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
   import { actionForEvent } from '@shared/playerkeys'
+  import { nextAiredEpisode, previousEpisode, type NextEpisode } from '@shared/episodesteps'
   import {
-    nextEpisode,
     nudgeTarget,
-    previousEpisode,
+    parseRememberedDevice,
+    preferredDevice,
     STREAM_WAIT_MS,
-    type EpisodeStep,
+    type RemoteMode,
     type RemotePhase,
   } from './lib/castremote'
 
@@ -62,8 +63,6 @@
   const SOURCE_PANEL_MAX = 300
   /** `.panel`'s top margin, which sits between the bar and the panel itself. */
   const PANEL_GAP = 6
-  /** Enough for the "Looking for a TV" line, until the panel has been measured. */
-  const CAST_PANEL_FALLBACK = 74
   /** How long the bar stays after the pointer stops asking for it. */
   const HIDE_AFTER_MS = 2_800
 
@@ -141,7 +140,7 @@
   const api = window.wtaChrome
 
   let context = $state<PlayerContext | null>(null)
-  let panel = $state<'none' | 'episodes' | 'sources' | 'cast'>('none')
+  let panel = $state<'none' | 'episodes' | 'sources'>('none')
   let barVisible = $state(true)
   let hoveringChrome = $state(false)
 
@@ -158,9 +157,6 @@
   )
 
   function sendAway(): void {
-    // The cast list is a question held open with a television waiting on it;
-    // hiding the chrome would leave the TV held with nothing to answer.
-    if (castChoosing) void cancelCastChoice()
     // Cleared by hand: the chrome leaves the DOM under the pointer, so no
     // `mouseleave` arrives, and a stale hover would hold the bar open for good
     // once it returned.
@@ -322,24 +318,24 @@
   let castAvailable = $state(false)
   let castDevices = $state<CastDevice[]>([])
   let castStatus = $state<CastStatus | null>(null)
-  /** Set while a beam is in flight, so the panel can say what is happening. */
-  let castBusy = $state(false)
   /** The last failure, in the user's words. Cleared when they try again. */
   let castError = $state<string | null>(null)
-  /** The cast panel's rendered height, bound from the DOM. See `panelHeight`. */
-  let castPanelHeight = $state(0)
 
   /* ── The remote ───────────────────────────────────────────────────────────
    *
-   * A connected television replaces the chrome rather than adding to it. The
-   * picture is elsewhere, this window is muted or blanked, and a 56px bar over
-   * a black rectangle is a control surface for nothing — so while a cast is
-   * running this document draws one thing, full bleed. The rest of the
-   * machinery is further down, beside the episode helpers it uses; these three
-   * are here because the height calculation needs them.
+   * The cast button opens it, and a connected television keeps it up. It
+   * replaces the chrome rather than adding to it: while choosing it is the
+   * list of televisions and sources, and while casting the picture is
+   * elsewhere, this window is muted or blanked, and a 56px bar over a black
+   * rectangle is a control surface for nothing. The rest of the machinery is
+   * further down, beside the episode helpers it uses; these are here because
+   * the height calculation needs them.
    */
 
   const casting = $derived(castStatus?.connected === true)
+
+  /** The cast button was pressed and the remote has not been closed since. */
+  let remoteOpen = $state(false)
 
   /**
    * Stood down on request, while still casting.
@@ -350,16 +346,57 @@
    * state a user comes back to.
    */
   let remoteHidden = $state(false)
-  /** Connected, and waiting for the user to choose a source — see `castFrom`. The remote stays down meanwhile. */
-  let castChoosing = $state(false)
-  const showRemote = $derived(casting && !remoteHidden && !castChoosing)
+  /** Attached, and back at the list: "Change source", or a source that did not cast. */
+  let picking = $state(false)
+  const showRemote = $derived(castAvailable && (remoteOpen || casting) && !remoteHidden)
+  const remoteMode = $derived<RemoteMode>(!casting || picking ? 'choose' : 'control')
+
+  /**
+   * The television a source will be sent to, before one is attached.
+   *
+   * Preselected (`preferredDevice`) so that with one television, or the one
+   * used last, casting is the cast button and then a source: two taps. Nothing
+   * connects until the source is picked, because connecting wakes the set and
+   * puts the receiver's idle screen on it, which reads as a failure for as long
+   * as the choosing takes.
+   */
+  let selectedDevice = $state<string | null>(null)
+
+  /** Per document and not synced: which television is "the" television is a fact about the room. */
+  const LAST_DEVICE_KEY = 'wta.cast.lastDevice'
+
+  function rememberedDevice(): ReturnType<typeof parseRememberedDevice> {
+    try {
+      return parseRememberedDevice(localStorage.getItem(LAST_DEVICE_KEY))
+    } catch {
+      return null
+    }
+  }
+
+  function rememberDevice(device: CastDevice): void {
+    try {
+      localStorage.setItem(LAST_DEVICE_KEY, JSON.stringify({ id: device.id, name: device.name }))
+    } catch {
+      // Not remembering is only one more tap next time.
+    }
+  }
+
+  $effect(() => {
+    const found = castDevices
+    const current = untrack(() => selectedDevice)
+    // A choice the user made stands for as long as that television is there.
+    if (current !== null && found.some((d) => d.id === current)) return
+    selectedDevice = preferredDevice(found, rememberedDevice())
+  })
 
   /* ── Choosing what to cast ────────────────────────────────────────────────
    *
    * Agreed with the owner 2026-09-26: connecting to a television no longer
    * sends whatever happens to be playing. It opens a list — the ordinary
    * source list, narrowed to what can cast — and the user picks. Only then is
-   * the source loaded here, started, and handed over.
+   * the source loaded here, started, and handed over. Since 2026-09-27 that
+   * list is the remote's first face, and picking from it is also what
+   * connects.
    *
    * The reason was the receiver, and then turned out not to be. It was built
    * believing a plain Chromecast refuses HLS; measured the same evening, it
@@ -417,8 +454,80 @@
     }
   }
 
+  /** The cast button, and C: straight into the remote, whatever state it is in. */
+  function openRemote(): void {
+    panel = 'none'
+    remoteHidden = false
+    // Already attached: the remote is the answer, on whichever face it was.
+    if (casting) return
+    // C again closes it, as it closed the panel this replaced.
+    if (remoteOpen) {
+      closeRemote()
+      return
+    }
+    castError = null
+    castFailures = {}
+    castFailureNote = null
+    picking = false
+    remoteOpen = true
+    void refreshSourceState()
+  }
+
+  /** Close without casting: the player, as it was. */
+  function closeRemote(): void {
+    remoteOpen = false
+    picking = false
+    castError = null
+    castFailureNote = null
+    barVisible = true
+  }
+
+  /** Leave the list: back to the transport while attached, else close the remote. */
+  function cancelChoice(): void {
+    if (casting) {
+      picking = false
+      castFailureNote = null
+      castError = null
+      return
+    }
+    closeRemote()
+  }
+
   /**
-   * Cast from one source: load it here, start it, hand it over.
+   * Reach the chosen television. True once attached.
+   *
+   * The remote's phase says so meanwhile, and holds the list still, because
+   * on the desktop this is a TCP connection and a receiver launch, which is a
+   * second or two.
+   */
+  async function connectTo(deviceId: string): Promise<boolean> {
+    const device = castDevices.find((d) => d.id === deviceId)
+    castError = null
+    remotePhase = 'connecting'
+    remoteNote = `Connecting to ${device?.name ?? 'the television'}…`
+    try {
+      const connected = await api.cast.connect(deviceId)
+      if (!connected.ok) {
+        castError = connected.error ?? 'Could not connect to that TV.'
+        return false
+      }
+      if (device) rememberDevice(device)
+      return true
+    } catch (error) {
+      castError = error instanceof Error ? error.message : String(error)
+      return false
+    } finally {
+      castStatus = await api.cast.status()
+      if (remotePhase === 'connecting') {
+        remotePhase = 'playing'
+        remoteNote = ''
+      }
+    }
+  }
+
+  /**
+   * Cast from one source: attach the television if need be, load the source
+   * here, start it, hand it over.
    *
    * The television is fed from this window, so a source not already playing
    * has to be loaded here first. A failure of any kind comes back to the list
@@ -428,9 +537,15 @@
   async function castFrom(providerId: string, providerName: string): Promise<void> {
     if (context === null) return
     const token = ++switchToken
-    castChoosing = false
     castFailureNote = null
-    panel = 'none'
+    castError = null
+
+    if (!casting) {
+      if (selectedDevice === null) return
+      if (!(await connectTo(selectedDevice))) return
+      if (token !== switchToken) return
+    }
+    picking = false
 
     if (providerId !== context.providerId) {
       remotePhase = 'switching'
@@ -445,58 +560,30 @@
     if (result === null || result.ok) return
     castFailures = { ...castFailures, [providerId]: result.reason }
     castFailureNote = `${providerName}: ${result.reason}`
-    castChoosing = true
-    panel = 'cast'
+    remotePhase = 'playing'
+    remoteNote = ''
+    picking = true
     // The attempt was filed as a measurement; the list should reflect it.
     void refreshSourceState()
   }
 
-  /** Close the list without choosing: let the television go rather than leave it held. */
-  async function cancelCastChoice(): Promise<void> {
-    castChoosing = false
-    castFailureNote = null
-    panel = 'none'
-    await stopCasting()
-  }
-
-  /*
-   * Scrubbing, and why the slider does not simply show `castStatus.seconds`.
+  /**
+   * Going small drops a choice nobody finished.
    *
-   * Two moments would fight with the once-a-second poll. While a thumb is being
-   * dragged, every tick would yank it back to where the television still is;
-   * and just after a seek is committed, the television keeps reporting the old
-   * position for a beat, so the thumb would snap back and then jump forward —
-   * which reads as the seek having been ignored, and invites a second one.
-   *
-   * So a locally-held value wins for as long as it is fresh, and the poll takes
-   * over again once the television has caught up.
+   * Back, Escape from the player and Android Back all shrink the player, and
+   * the remote would otherwise wait, unseen, to cover the picture again on the
+   * way back. A running cast is not a choice: it stays, as it always has.
    */
-  const SCRUB_HOLD_MS = 2500
-  let scrubHeld = $state(0)
-  let scrubHeldUntil = $state(0)
-  /** Re-evaluated by the same tick that polls status, so the hold can expire. */
-  let now = $state(Date.now())
+  $effect(() => {
+    if (mini && remoteOpen && !casting) closeRemote()
+  })
 
-  const scrubSeconds = $derived(now < scrubHeldUntil ? scrubHeld : (castStatus?.seconds ?? 0))
-
-  function onScrubInput(value: number): void {
-    scrubHeld = value
-    // Dragging is a stream of `input` events; the hold is refreshed by each so
-    // it only starts expiring once the thumb is let go.
-    scrubHeldUntil = Date.now() + SCRUB_HOLD_MS
-    now = Date.now()
-  }
-
-  async function commitScrub(value: number): Promise<void> {
-    onScrubInput(value)
-    await send('seek', value)
-  }
-
-  /** Jump relative to where the television actually is, clamped to the film. */
-  async function nudge(delta: number): Promise<void> {
-    const duration = castStatus?.duration ?? 0
-    const target = Math.max(0, Math.min(scrubSeconds + delta, duration > 0 ? duration : Infinity))
-    await commitScrub(target)
+  /** "Change source": the list, with the television still attached and still playing. */
+  function changeSource(): void {
+    castFailureNote = null
+    castError = null
+    picking = true
+    void refreshSourceState()
   }
 
   /**
@@ -520,20 +607,19 @@
   })
 
   /**
-   * Poll while connected, and only while connected.
+   * Poll while the remote is up or a television is attached, and only then.
    *
    * The position on the television is the one thing the phone cannot be told
    * about — `RemoteMediaClient` reports it to native code, and pushing every
    * tick across the bridge would cost more than reading it once a second. The
-   * interval is torn down when the panel closes so a backgrounded player is not
-   * waking the bridge forever.
+   * interval is torn down when the remote closes so a backgrounded player is
+   * not waking the bridge forever.
    */
   $effect(() => {
     if (!castAvailable) return
-    if (panel !== 'cast' && !castStatus?.connected) return
+    if (!showRemote && !castStatus?.connected) return
 
     const tick = (): void => {
-      now = Date.now()
       void api?.cast.status().then((next) => (castStatus = next))
     }
     tick()
@@ -541,21 +627,8 @@
     return () => clearInterval(timer)
   })
 
-  function openCast(): void {
-    if (panel === 'cast') {
-      if (castChoosing) {
-        void cancelCastChoice()
-        return
-      }
-      panel = 'none'
-      return
-    }
-    panel = 'cast'
-    castError = null
-  }
-
   /**
-   * Sweep for televisions for as long as the panel is open.
+   * Sweep for televisions while the remote is choosing and nothing is attached.
    *
    * One query is not enough, and asking once was the second reason this button
    * appeared to do nothing. On the desktop `startDiscovery` *is* the mDNS
@@ -564,7 +637,8 @@
    * the empty list from before it ran. Android's is a live scan that fills in
    * over the same sort of interval.
    *
-   * So: ask, read, ask again, until the panel closes. `MIN_SWEEP_MS` is a floor
+   * So: ask, read, ask again, until the remote closes or a television is
+   * attached. `MIN_SWEEP_MS` is a floor
    * rather than a delay — it costs nothing on desktop, where the query already
    * takes longer, and stops the loop spinning on a platform that returns at
    * once.
@@ -572,7 +646,7 @@
   const MIN_SWEEP_MS = 2500
 
   $effect(() => {
-    if (!castAvailable || panel !== 'cast') return
+    if (!showRemote || casting) return
 
     let sweeping = true
 
@@ -584,7 +658,7 @@
           if (!sweeping) return
           castDevices = await api.cast.devices()
         } catch {
-          // A discovery that fails is not worth a message: the panel already
+          // A discovery that fails is not worth a message: the remote already
           // says it is looking, and the next sweep may well succeed.
         }
         const elapsed = Date.now() - startedAt
@@ -601,33 +675,6 @@
       void api.cast.stopDiscovery()
     }
   })
-
-  /**
-   * Connect, then ask what to cast.
-   *
-   * It used to connect and send whatever was playing in one action, because a
-   * Chromecast connected with nothing on it shows its idle screen and reads
-   * as a failure. Now the list of castable sources follows at once, in the
-   * same panel, so the idle screen lasts only as long as the choice does.
-   */
-  async function castTo(deviceId: string): Promise<void> {
-    castBusy = true
-    castError = null
-    try {
-      const connected = await api.cast.connect(deviceId)
-      if (!connected.ok) {
-        castError = connected.error ?? 'Could not connect to that TV.'
-        return
-      }
-      castFailures = {}
-      castFailureNote = null
-      castChoosing = true
-      void refreshSourceState()
-    } finally {
-      castBusy = false
-      castStatus = await api.cast.status()
-    }
-  }
 
   /**
    * The receiver's volume, which is not the media session's.
@@ -917,10 +964,7 @@
       if (awayUntil !== null) comeBack()
       barVisible = true
       if (which === 'episodes' && context?.type === 'tv') openEpisodes()
-      if (which === 'cast' && castAvailable) {
-        if (casting) remoteHidden = false
-        else openCast()
-      }
+      if (which === 'cast' && castAvailable) openRemote()
     }),
   )
 
@@ -929,6 +973,12 @@
     const action = actionForEvent(event)
     if (action === null) return
     event.preventDefault()
+    // Escape on the list steps out of the list, as Close does. Routed on, it
+    // would shrink the player with the remote still open over it.
+    if (action === 'escape' && showRemote && remoteMode === 'choose') {
+      cancelChoice()
+      return
+    }
     api?.action(action)
   }
 
@@ -945,8 +995,6 @@
     // goes ahead on its own either way.
     if (suggestion && awayUntil === null) barVisible = true
     if (upNext) barVisible = true
-    // Nor may it close under the cast list: closing it lets the TV go.
-    if (castChoosing) barVisible = true
   })
 
   $effect(() => {
@@ -954,7 +1002,6 @@
     if (touch) return
     if (suggestion) return
     if (upNext) return
-    if (castChoosing) return
     // Hovering the chrome holds it open — including hovering a panel, which is
     // a child of it — and so does the shell while paused or in use.
     if (hoveringChrome) return
@@ -976,25 +1023,15 @@
   /**
    * Reserve the room the open panel needs.
    *
-   * The two fixed panels declare their own height in CSS, so a constant is
-   * honest for them. The cast panel does not: it is a hint, or a list of
-   * however many televisions are on the Wi-Fi, or a pair of transport buttons,
-   * and each is a different size. So it is measured instead — which is also
-   * what keeps the reserved strip from swallowing clicks on the video below a
-   * panel that only needed a line of text.
-   *
-   * Leaving `cast` out of this is what made the button look dead: the panel
-   * rendered into a view still only `BAR_HEIGHT` tall and was clipped away
-   * entirely, so nothing appeared and nothing explained why.
+   * Both panels declare their own height in CSS, so a constant is honest for
+   * them. Casting has no panel: the remote takes the whole slot (`WHOLE_SLOT`).
    */
   const panelHeight = $derived(
     panel === 'episodes'
       ? EPISODE_PANEL_HEIGHT + PANEL_GAP
       : panel === 'sources'
         ? SOURCE_PANEL_MAX
-        : panel === 'cast'
-          ? (castPanelHeight || CAST_PANEL_FALLBACK) + PANEL_GAP
-          : 0,
+        : 0,
   )
 
   /**
@@ -1190,10 +1227,11 @@
 
   /* ── The remote ───────────────────────────────────────────────────────────
    *
-   * A connected television replaces the chrome rather than adding to it. The
-   * picture is elsewhere, this window is blanked or muted, and a 56px bar over
-   * a black rectangle is a control surface for nothing — so while a cast is
-   * running this document draws one thing, full bleed. See `CastRemote.svelte`.
+   * Opened by the cast button and kept up by a connected television, it
+   * replaces the chrome rather than adding to it. The picture is elsewhere,
+   * this window is blanked or muted, and a 56px bar over a black rectangle is
+   * a control surface for nothing — so while it is up this document draws one
+   * thing, full bleed. See `CastRemote.svelte`.
    */
 
   let remotePhase = $state<RemotePhase>('playing')
@@ -1209,15 +1247,21 @@
    */
   let switchToken = 0
 
+  /*
+   * Whatever the remote was in the middle of stopped mattering the moment the
+   * television let go, and the remote goes with it: Stop casting ends in the
+   * player, not back at the list. Keyed on `casting` alone, so it runs when a
+   * cast ends and not while the list is being used before one starts.
+   */
   $effect(() => {
     if (casting) return
-    // Whatever the remote was in the middle of stopped mattering the moment
-    // the television let go.
     switchToken += 1
     remoteHidden = false
     remotePhase = 'playing'
     remoteNote = ''
-    castChoosing = false
+    picking = false
+    steppingTo = null
+    remoteOpen = false
   })
 
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1283,9 +1327,10 @@
    * is nothing to put in its place until the last step — so the remote narrates
    * rather than pretending the jump was instant.
    */
-  async function stepTo(step: EpisodeStep | null): Promise<void> {
+  async function stepTo(step: EpisodePlace | null): Promise<void> {
     if (step === null || context === null) return
     const token = ++switchToken
+    steppingTo = { season: step.season, episode: step.episode }
 
     remotePhase = 'switching'
     remoteNote = `Loading ${episodeCode(step.season, step.episode)} here first — the television is fed from this window.`
@@ -1298,14 +1343,83 @@
     await handOverInRemote(token)
   }
 
-  /** The season the television is playing, for `canNext` and the still. */
+  /** The season the television is playing, for the still. */
   const playingEpisodes = $derived(browsingSeason === context?.season ? episodes : [])
 
-  const remoteStep = $derived<EpisodeStep | null>(
+  type EpisodePlace = Pick<NextEpisode, 'season' | 'episode'>
+
+  const remoteStep = $derived<EpisodePlace | null>(
     context?.season != null && context.episode != null
       ? { season: context.season, episode: context.episode }
       : null,
   )
+
+  /**
+   * The episode ⏮ and ⏭ count from: the one last asked for, until the player
+   * reports having got there.
+   *
+   * `goTo` is a message to main and the new context comes back afterwards, so
+   * counting from `remoteStep` alone would make a quick ⏭⏭ load the same
+   * episode twice instead of skipping one.
+   */
+  let steppingTo = $state<EpisodePlace | null>(null)
+  $effect(() => {
+    const target = steppingTo
+    if (
+      target !== null &&
+      remoteStep !== null &&
+      target.season === remoteStep.season &&
+      target.episode === remoteStep.episode
+    )
+      steppingTo = null
+  })
+
+  const remoteAt = $derived(steppingTo ?? remoteStep)
+  /** A string, so the lookup below re-runs when the place changes and not on every new object. */
+  const remoteAtKey = $derived(
+    remoteAt === null || context === null
+      ? ''
+      : `${context.tmdbId}:${remoteAt.season}:${remoteAt.episode}`,
+  )
+
+  /**
+   * Where ⏮ and ⏭ lead from `remoteAt`, looked up before either is pressed.
+   *
+   * Ahead of the press, because whether there *is* a next episode decides
+   * whether ⏭ is enabled: the rule is auto-next's (`nextAiredEpisode`), which
+   * stops at the last episode that has aired, and ⏮ from an episode 1 goes to
+   * the last episode of the season before (`previousEpisode`). Both need
+   * TMDB's season lists, which main caches. Keyed, so an answer for a place
+   * the remote has since left is never shown for the one it is on.
+   */
+  let neighbours = $state<{
+    key: string
+    previous: EpisodePlace | null
+    next: EpisodePlace | null
+  }>({ key: '', previous: null, next: null })
+
+  $effect(() => {
+    const key = remoteAtKey
+    if (!showRemote || key === '') return
+    const at = untrack(() => remoteAt)
+    const tmdbId = untrack(() => context?.tmdbId)
+    if (at === null || tmdbId === undefined) return
+    const season = (n: number): Promise<Season | null> => api.season(tmdbId, n)
+    let live = true
+    // The season count is not in the chrome's context; a season that does
+    // not exist fails to fetch, and a failure answers "no next episode".
+    void Promise.all([previousEpisode(at, season), nextAiredEpisode(at, Infinity, season)]).then(
+      ([previous, next]) => {
+        if (live) neighbours = { key, previous, next }
+      },
+    )
+    return () => {
+      live = false
+    }
+  })
+
+  const remotePrevious = $derived(neighbours.key === remoteAtKey ? neighbours.previous : null)
+  const remoteNext = $derived(neighbours.key === remoteAtKey ? neighbours.next : null)
 
   /**
    * The episode still, when the season happens to be loaded.
@@ -1318,12 +1432,7 @@
     still(playingEpisodes.find((e) => e.episode === context?.episode)?.stillPath ?? null),
   )
 
-  /**
-   * Load the season the moment the remote comes up.
-   *
-   * For the still, and for the one thing `nextEpisode` cannot decide without
-   * it: whether this is the last episode of the season.
-   */
+  /** Load the season the moment the remote comes up, for the episode still. */
   $effect(() => {
     if (!showRemote) return
     if (context?.type !== 'tv' || context.season === null) return
@@ -1363,9 +1472,12 @@
   )}
   {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
   {@const failed = castFailures[provider.id]}
+  {@const current = provider.id === context?.providerId}
+  <!-- While a cast runs, the source playing here is the one feeding the TV. -->
+  {@const currentLabel = casting ? 'on the TV' : 'playing'}
   <button
     class="source"
-    class:playing={provider.id === context?.providerId}
+    class:playing={current}
     title={failed}
     onclick={() => void castFrom(provider.id, provider.name)}
   >
@@ -1380,15 +1492,11 @@
     {:else if failed}
       <span class="tag bad">did not cast</span>
     {:else if castable === 'yes'}
-      <span class="tag"
-        >{provider.id === context?.providerId ? 'playing · ' : ''}casts{measurement(
-          provider.id,
-        )}</span
-      >
+      <span class="tag">{current ? `${currentLabel} · ` : ''}casts{measurement(provider.id)}</span>
     {:else if castable === 'likely'}
       <span class="tag">cast on another title</span>
-    {:else if provider.id === context?.providerId}
-      <span class="tag">playing</span>
+    {:else if current}
+      <span class="tag">{currentLabel}</span>
     {:else if dot.label || measurement(provider.id)}
       <span class="tag" class:bad={dot.tone === 'bad'}
         >{tagText(dot.label, measurement(provider.id))}</span
@@ -1397,29 +1505,84 @@
   </button>
 {/snippet}
 
+{#snippet castList()}
+  <!--
+    Choose what to cast. The ordinary source list, in its ordinary order,
+    narrowed to what a television can play — see `castGroups`. The test
+    button is here too: it is what turns "not checked" rows into answers,
+    live. Drawn here and rendered by the remote, because everything a row
+    reads lives in this component.
+  -->
+  <div class="cast-list">
+    {#if castFailureNote}
+      <p class="hint bad">{castFailureNote}</p>
+    {/if}
+    <button class="source test" class:playing={scanning} onclick={toggleScan}>
+      <span class="dot none"></span>
+      <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
+      {#if scanning}
+        <span class="tag"
+          >{#if scanTotal > 0 && scanDone >= scanTotal}double-checking{:else}{scanDone}/{scanTotal}{/if}</span
+        >
+      {/if}
+    </button>
+    {#if castGroups.yes.length > 0}
+      <p class="cast-group">Casts to this TV</p>
+      {#each castGroups.yes as row (row.provider.id)}
+        {@render castRow(row.provider, row.castable)}
+      {/each}
+    {/if}
+    {#if castGroups.maybe.length > 0}
+      <p class="cast-group">Not checked for casting yet</p>
+      {#each castGroups.maybe as row (row.provider.id)}
+        {@render castRow(row.provider, row.castable)}
+      {/each}
+    {/if}
+    {#if castGroups.hidden > 0}
+      <!-- Counted rather than silently dropped: a list that shrank for
+           no stated reason reads as sources having gone missing. -->
+      <p class="hint">
+        {castGroups.hidden === 1
+          ? '1 source only streams'
+          : `${castGroups.hidden} sources only stream`} in a format this TV cannot play.
+      </p>
+    {/if}
+  </div>
+{/snippet}
+
 <!--
   `onmouseenter`/`onmouseleave` on the chrome itself is what holds it open. The
   pointer merely being near the top is a trigger, handled above.
 -->
 {#if showRemote}
   <!--
-    A television is attached, so this document is the remote and nothing else.
+    The remote is up, so this document is the remote and nothing else.
 
     Not stacked over the bar: the bar's four buttons are Back, reload, Episodes
     and the source picker, and reloading or changing source under a running cast
-    is how you lose the stream. The remote carries the two that still mean
-    something — Back, and Stop casting — and the rest come back with the
-    picture.
+    is how you lose the stream. The remote carries what still means something —
+    Back, Stop casting, the episode keys and its own source list — and the rest
+    come back with the picture.
   -->
   <CastRemote
-    status={castStatus!}
+    status={castStatus}
+    mode={remoteMode}
     title={context?.title ?? ''}
-    subtitle={[positionLabel, context?.providerName ?? ''].filter(Boolean).join(' · ')}
+    subtitle={positionLabel}
     artwork={remoteArtwork}
     phase={remotePhase}
     phaseLabel={remoteNote}
-    canPrevious={previousEpisode(remoteStep) !== null}
-    canNext={nextEpisode(remoteStep, playingEpisodes.length) !== null}
+    error={castError}
+    episodic={context?.type === 'tv'}
+    canPrevious={remotePrevious !== null}
+    canNext={remoteNext !== null}
+    sourceName={context?.providerName ?? ''}
+    devices={castDevices}
+    {selectedDevice}
+    sources={castList}
+    onselectdevice={(id) => (selectedDevice = id)}
+    onchangesource={changeSource}
+    oncancel={cancelChoice}
     onreveal={() => (remoteHidden = true)}
     onretry={() => void handOverInRemote(++switchToken)}
     onback={() => api.back()}
@@ -1428,8 +1591,8 @@
     onseek={(seconds) => void send('seek', seconds)}
     onnudge={(by) =>
       void send('seek', nudgeTarget(castStatus?.seconds ?? 0, by, castStatus?.duration ?? 0))}
-    onprevious={() => void stepTo(previousEpisode(remoteStep))}
-    onnext={() => void stepTo(nextEpisode(remoteStep, playingEpisodes.length))}
+    onprevious={() => void stepTo(remotePrevious)}
+    onnext={() => void stepTo(remoteNext)}
     onvolume={(level) => void setReceiverVolume(level)}
     onmute={() => void setReceiverMuted(!(castStatus?.muted ?? false))}
   />
@@ -1541,19 +1704,18 @@
           Two states. A cast that is running is the more important fact on this
           bar: the picture in front of the user is no longer where the film is.
           So while it runs the button is blue and its screen is filled in (the
-          "connected" cast icon), and its tooltip and the cast panel name the
+          "connected" cast icon), and its tooltip and the remote name the
           television. The name used to be on the button itself, and that is the
           text the owner asked to lose.
         -->
         <button
           class="tool"
-          class:active={panel === 'cast'}
           class:casting={castStatus?.connected === true}
           title={castStatus?.connected ? `Playing on ${castStatus.deviceName}` : 'Play on a TV'}
           aria-label={castStatus?.connected
             ? `Playing on ${castStatus.deviceName}`
             : 'Play on a TV'}
-          onclick={casting ? () => (remoteHidden = false) : openCast}
+          onclick={openRemote}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             {#if castStatus?.connected}
@@ -1669,129 +1831,6 @@
               </button>
             {/each}
           </div>
-        {/if}
-      </div>
-    {/if}
-
-    {#if panel === 'cast'}
-      <div class="panel cast-panel" bind:clientHeight={castPanelHeight}>
-        <!--
-          `castBusy` is tested before `connected` on purpose. Connecting
-          succeeds a second or two before the stream is found, and a TV that is
-          attached with nothing playing reports exactly what a TV whose stream
-          died reports — so testing `connected` first puts a red "stream ended"
-          on screen for the whole of a perfectly normal beam.
-        -->
-        {#if castBusy}
-          <p class="hint">Connecting…</p>
-        {:else if castChoosing}
-          <!--
-            Choose what to cast. The ordinary source list, in its ordinary
-            order, narrowed to what this television can play — see
-            `castGroups`. The test button is here too: it is what turns
-            "not checked" rows into answers, live.
-          -->
-          <p class="cast-head">
-            Connected to <span class="name">{castStatus?.deviceName ?? 'the TV'}</span>. Choose a
-            source to cast.
-          </p>
-          {#if castFailureNote}
-            <p class="hint bad">{castFailureNote}</p>
-          {/if}
-          <button class="source test" class:playing={scanning} onclick={toggleScan}>
-            <span class="dot none"></span>
-            <span class="name">{scanning ? 'Stop testing' : 'Test all sources'}</span>
-            {#if scanning}
-              <span class="tag"
-                >{#if scanTotal > 0 && scanDone >= scanTotal}double-checking{:else}{scanDone}/{scanTotal}{/if}</span
-              >
-            {/if}
-          </button>
-          {#if castGroups.yes.length > 0}
-            <p class="cast-group">Casts to this TV</p>
-            {#each castGroups.yes as row (row.provider.id)}
-              {@render castRow(row.provider, row.castable)}
-            {/each}
-          {/if}
-          {#if castGroups.maybe.length > 0}
-            <p class="cast-group">Not checked for casting yet</p>
-            {#each castGroups.maybe as row (row.provider.id)}
-              {@render castRow(row.provider, row.castable)}
-            {/each}
-          {/if}
-          {#if castGroups.hidden > 0}
-            <!-- Counted rather than silently dropped: a list that shrank for
-                 no stated reason reads as sources having gone missing. -->
-            <p class="hint">
-              {castGroups.hidden === 1
-                ? '1 source only streams'
-                : `${castGroups.hidden} sources only stream`} in a format this TV cannot play.
-            </p>
-          {/if}
-          <button class="source stop" onclick={() => void cancelCastChoice()}>Cancel</button>
-        {:else if castStatus?.connected}
-          <div class="cast-now">
-            <span class="name">Playing on {castStatus.deviceName}</span>
-            {#if !castStatus.proxyRunning}
-              <!--
-                Connected but not serving. Worth its own words: the television
-                is attached and the stream behind it has stopped, which looks
-                identical to "paused" from the sofa.
-              -->
-              <span class="tag bad">stream ended</span>
-            {/if}
-          </div>
-          <!--
-            Transport for the television.
-            
-            The picture is on the other side of the room, so this is the only
-            way to reach it — the provider's own controls drive the copy still
-            running in this window, not the one on the TV.
-          -->
-          <div class="scrub">
-            <span class="time">{clock(scrubSeconds)}</span>
-            <input
-              type="range"
-              min="0"
-              max={Math.max(castStatus.duration, 1)}
-              step="1"
-              value={scrubSeconds}
-              disabled={castStatus.duration <= 0}
-              aria-label="Position on the TV"
-              oninput={(event) => onScrubInput(event.currentTarget.valueAsNumber)}
-              onchange={(event) => void commitScrub(event.currentTarget.valueAsNumber)}
-            />
-            <span class="time">{clock(castStatus.duration)}</span>
-          </div>
-
-          <div class="cast-controls">
-            <button class="tv" title="Back 30 seconds" onclick={() => void nudge(-30)}>-30s</button>
-            <button
-              class="tv wide"
-              title={castStatus.playing ? 'Pause on the TV' : 'Play on the TV'}
-              onclick={() => void send(castStatus?.playing ? 'pause' : 'play')}
-            >
-              {castStatus.playing ? '❚❚ Pause' : '▶ Play'}
-            </button>
-            <button class="tv" title="Forward 30 seconds" onclick={() => void nudge(30)}
-              >+30s</button
-            >
-          </div>
-
-          <button class="source stop" onclick={() => void stopCasting()}>Stop casting</button>
-        {:else if castDevices.length === 0}
-          <p class="hint">Looking for a TV on your Wi-Fi…</p>
-        {:else}
-          {#each castDevices as device (device.id)}
-            <button class="source" onclick={() => void castTo(device.id)}>
-              <span class="dot" style:background={RESUME_COLOUR}></span>
-              <span class="name">{device.name}</span>
-            </button>
-          {/each}
-        {/if}
-
-        {#if castError}
-          <p class="hint bad">{castError}</p>
         {/if}
       </div>
     {/if}
@@ -2549,29 +2588,30 @@
     color: #cfe0ff;
   }
 
-  /* Sized and placed like the source list, and for the same reason: it drops
-     from a button at this end of the bar, and a panel is a strip of the picture
-     the user cannot click through — so it takes the width it needs and no more.
-     A house with a dozen Chromecasts scrolls rather than growing. */
-  .cast-panel {
-    padding: 6px;
-    max-height: 380px;
-    overflow-y: auto;
-    width: 300px;
-    margin-left: auto;
-    margin-right: 14px;
+  /*
+    The source list, rendered inside the remote.
+
+    The remote is drawn outside `.chrome`, so the tokens the rows are styled
+    with are declared again here — the same values, so a row in the remote is
+    a row in the source picker.
+  */
+  .cast-list {
+    --surface: rgba(10, 10, 14, 0.94);
+    --surface-solid: rgba(10, 10, 14, 0.98);
+    --line: rgba(255, 255, 255, 0.1);
+    --hover: rgba(255, 255, 255, 0.08);
+    --accent: #f0b45a;
+    --accent-fill: rgba(240, 180, 90, 0.14);
+    padding: 0 6px 6px;
+    font:
+      500 13px/1 Inter,
+      system-ui,
+      sans-serif;
   }
 
-  .cast-head {
-    margin: 0;
-    padding: 10px 12px 6px;
-    font-size: 13px;
+  .cast-list .hint {
+    padding: 10px 12px;
     line-height: 1.4;
-    color: rgba(255, 255, 255, 0.72);
-  }
-
-  .cast-head .name {
-    color: #cfe0ff;
   }
 
   /* The two groups' headings: small caps-ish labels, like the season picker's. */
@@ -2583,83 +2623,6 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: rgba(255, 255, 255, 0.45);
-  }
-
-  .cast-now {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 16px 4px;
-  }
-
-  .cast-now .name {
-    color: #cfe0ff;
-  }
-
-  .cast-controls {
-    display: flex;
-    gap: 6px;
-    padding: 4px 6px 6px;
-  }
-
-  /* The scrubber. Wide thumb and a tall hit area, because this is reached for
-     while looking at a television rather than at the slider. */
-  .scrub {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px 2px;
-  }
-
-  .scrub .time {
-    color: #9a9aa6;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    min-width: 34px;
-  }
-
-  .scrub .time:last-child {
-    text-align: right;
-  }
-
-  .scrub input[type='range'] {
-    flex: 1;
-    min-width: 0;
-    height: 20px;
-    margin: 0;
-    accent-color: #6ea8ff;
-    cursor: pointer;
-  }
-
-  .scrub input[type='range']:disabled {
-    cursor: default;
-    opacity: 0.4;
-  }
-
-  .tv {
-    flex: 1;
-    min-height: 36px;
-    padding: 0 6px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface-button);
-    color: #e8e8ef;
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .tv.wide {
-    flex: 1.6;
-  }
-
-  .tv:hover {
-    background: linear-gradient(var(--hover), var(--hover)), var(--surface);
-  }
-
-  .stop {
-    width: calc(100% - 12px);
-    margin: 0 6px 4px;
   }
 
   .hint.bad {

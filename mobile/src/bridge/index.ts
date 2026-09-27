@@ -86,7 +86,8 @@ import {
 } from '@main/providerscan'
 import { castabilities } from '@shared/castability'
 import { checkAll, sweepDueIn } from '@main/releases'
-import { UpNextController, isEpisodeEnd, nextAiredEpisode, type UpNextPlace } from '@main/upnext'
+import { UpNextController, isEpisodeEnd, type UpNextPlace } from '@main/upnext'
+import { nextAiredEpisode } from '@shared/episodesteps'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
 import {

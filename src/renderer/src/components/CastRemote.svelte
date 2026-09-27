@@ -1,6 +1,20 @@
 <script lang="ts">
   /**
-   * The phone as a remote control.
+   * The phone as a remote control, and the one place a cast is set up.
+   *
+   * ## Two faces
+   *
+   * The cast button opens this at once (the owner, 2026-09-27). It used to
+   * open a panel over the player: pick a television there, then a source from
+   * a list in the same panel, and only then did this appear. Now the choosing
+   * happens here, on the `choose` face — a row of televisions and the source
+   * list — and the `control` face is the transport once something is on the
+   * television. "Change source" and a source the television refused both lead
+   * back to `choose`, with the television still attached.
+   *
+   * The source list itself is drawn by `PlayerChrome` and handed in as a
+   * snippet. It is the ordinary source list, with the ordinary dots, tags and
+   * test button, and everything those read lives there.
    *
    * ## Why this is a surface and not a panel
    *
@@ -12,7 +26,9 @@
    * and the player becomes white".
    *
    * So this covers the lot. There is nothing behind it the user wants, which
-   * makes covering it the correct answer rather than a cosmetic one.
+   * makes covering it the correct answer rather than a cosmetic one. The
+   * `choose` face covers a picture that is still playing, which is the price of
+   * the one-tap entry: Close gives it straight back.
    *
    * On the desktop that is load-bearing rather than figurative: the chrome is a
    * real `WebContentsView` sized by `setOverlayArea`, and a view swallows
@@ -44,23 +60,41 @@
    * colours are the local convention, not an oversight, and they are the same
    * blues the cast button already uses so a running cast reads as one mode.
    */
-  import type { CastStatus } from '@shared/ipc'
+  import type { Snippet } from 'svelte'
+  import type { CastDevice, CastStatus } from '@shared/ipc'
   import { clock } from '../lib/format'
   import { NUDGE_SECONDS, progressFraction, seekTarget, volumePercent } from '../lib/castremote'
-  import type { RemotePhase } from '../lib/castremote'
+  import type { RemoteMode, RemotePhase } from '../lib/castremote'
 
   interface Props {
-    status: CastStatus
+    /** Null until the first status poll has answered. */
+    status: CastStatus | null
+    mode: RemoteMode
     title: string
-    /** "S02E22 · Videasy", or the provider alone for a film. */
+    /** "S02E22", or nothing for a film. */
     subtitle: string
     /** The episode still, when the chrome has loaded the season. */
     artwork: string | null
     phase: RemotePhase
     /** What is happening, whenever the phase is not `playing`. */
     phaseLabel: string
+    /** The last thing that went wrong, in the user's words, or null. */
+    error: string | null
+    /** A series: ⏮ and ⏭ are drawn. A film has no episodes, so nothing to explain. */
+    episodic: boolean
     canPrevious: boolean
     canNext: boolean
+    /** The source feeding the television, named on the Change source button. */
+    sourceName: string
+    /** Televisions found so far, for the `choose` face before one is attached. */
+    devices: CastDevice[]
+    selectedDevice: string | null
+    /** The source list, drawn by the chrome. */
+    sources: Snippet
+    onselectdevice: (id: string) => void
+    onchangesource: () => void
+    /** Leave `choose`: back to the transport if attached, else close the remote. */
+    oncancel: () => void
     /** Offered only while `stuck`; see the markup for why both exist. */
     onreveal: () => void
     onretry: () => void
@@ -77,13 +111,23 @@
 
   const {
     status,
+    mode,
     title,
     subtitle,
     artwork,
     phase,
     phaseLabel,
+    error,
+    episodic,
     canPrevious,
     canNext,
+    sourceName,
+    devices,
+    selectedDevice,
+    sources,
+    onselectdevice,
+    onchangesource,
+    oncancel,
     onreveal,
     onretry,
     onback,
@@ -105,10 +149,6 @@
    * under their finger; and after a seek it keeps yanking for as long as the
    * receiver takes to act, which on a Chromecast is up to a second — so the
    * seek reads as having been ignored, and invites a second one.
-   *
-   * `PlayerChrome` holds the same rule for the panel's scrubber. It is stated
-   * twice rather than shared because the two are about to stop coexisting: the
-   * panel's transport is what this replaces.
    */
   const HOLD_MS = 1_400
 
@@ -124,15 +164,25 @@
     return () => clearInterval(tick)
   })
 
+  const connected = $derived(status?.connected === true)
+  const duration = $derived(status?.duration ?? 0)
   const seconds = $derived(
-    heldSeconds !== null && now < heldUntil ? heldSeconds : (status.seconds ?? 0),
+    heldSeconds !== null && now < heldUntil ? heldSeconds : (status?.seconds ?? 0),
   )
   const level = $derived(
-    heldVolume !== null && now < volumeHeldUntil ? heldVolume : (status.volume ?? 0),
+    heldVolume !== null && now < volumeHeldUntil ? heldVolume : (status?.volume ?? 0),
   )
-  const fraction = $derived(progressFraction(seconds, status.duration))
-  const remaining = $derived(Math.max(0, (status.duration || 0) - seconds))
+  const fraction = $derived(progressFraction(seconds, duration))
+  const remaining = $derived(Math.max(0, (duration || 0) - seconds))
   const busy = $derived(phase !== 'playing')
+  /**
+   * The list's only busy state. Not `busy`: "Change source" can open the list
+   * while an episode step is still handing over behind it, and picking a
+   * source is exactly how to overtake that.
+   */
+  const connecting = $derived(phase === 'connecting')
+  /** Nothing to pick a source for until there is a television to send it to. */
+  const ready = $derived(connected || selectedDevice !== null)
 
   function hold(value: number): void {
     heldSeconds = value
@@ -142,7 +192,7 @@
 
   function commitScrub(value: number): void {
     hold(value)
-    onseek(seekTarget(status.duration > 0 ? value / status.duration : 0, status.duration))
+    onseek(seekTarget(duration > 0 ? value / duration : 0, duration))
   }
 
   function setVolume(percent: number): void {
@@ -154,177 +204,269 @@
 </script>
 
 <div class="remote">
+  <!--
+    Three columns, so the television's name stays centred whether or not
+    there is a Stop button on the right to balance the left one.
+  -->
   <header>
-    <button class="ghost" onclick={onback}>← Back</button>
+    {#if mode === 'control'}
+      <button class="ghost" onclick={onback}>← Back</button>
+    {:else if connected}
+      <button class="ghost" onclick={oncancel}>← Remote</button>
+    {:else}
+      <button class="ghost" onclick={oncancel}>Close</button>
+    {/if}
     <span class="device">
       <span class="glyph" aria-hidden="true">▣</span>
-      <span class="name">{status.deviceName || 'Television'}</span>
+      <span class="name">{connected ? status?.deviceName || 'Television' : 'Play on a TV'}</span>
     </span>
-    <button class="ghost stop" onclick={onstop}>Stop casting</button>
+    {#if connected}
+      <button class="ghost stop" onclick={onstop}>Stop casting</button>
+    {/if}
   </header>
 
-  <div class="body">
-    <div class="stage">
-      <div class="art">
-        {#if artwork}
-          <img src={artwork} alt="" />
-        {:else}
-          <svg class="glyph big" viewBox="0 0 24 24" aria-hidden="true"
-            ><path d="M3 5h18v11H3zM8 20h8v-1H8z" /></svg
-          >
+  {#if mode === 'choose'}
+    <div class="body choose">
+      <div class="stage">
+        <h1>{title}</h1>
+        {#if subtitle}<p class="sub">{subtitle}</p>{/if}
+        {#if phase === 'connecting'}
+          <p class="phase" role="status">{phaseLabel}</p>
         {/if}
+        {#if error}<p class="phase bad" role="alert">{error}</p>{/if}
       </div>
 
-      <h1>{title}</h1>
-      {#if subtitle}<p class="sub">{subtitle}</p>{/if}
-
       <!--
-      What is happening, whenever it is not simply playing.
-
-      Moving the television to another episode takes several seconds — the embed
-      has to load it here first, because that is the only thing that fetches a
-      stream — and with some providers it needs a tap this app cannot make on
-      the user's behalf. So it is narrated rather than hidden behind a spinner
-      that says nothing.
-    -->
-      {#if busy}
-        <p class="phase" class:stuck={phase === 'stuck'} role="status">{phaseLabel}</p>
-        <!--
-        The one place the remote has to let go of the screen.
-
-        Several providers fetch nothing at all until their own play button is
-        pressed, and that button is on the page this is covering. A remote that
-        says "press play over there" while making "over there" unreachable is
-        worse than no remote — so being stuck comes with the way out, and the
-        cast button in the bar brings this back.
+        Which television. Only before one is attached: changing television
+        under a running cast is Stop casting and then this again, which is
+        what it is on the receiver's side anyway.
       -->
-        {#if phase === 'stuck'}
-          <div class="escape">
-            <button class="ghost" onclick={onreveal}>Show the player</button>
-            <button class="ghost" onclick={onretry}>Try again</button>
-          </div>
-        {/if}
-      {:else if !status.proxyRunning}
-        <!-- Connected and serving nothing: the television is still attached and
-           the stream behind it has stopped, which looks exactly like "paused"
-           from the sofa. -->
-        <p class="phase stuck" role="status">
-          The stream ended — the television has nothing left to play.
-        </p>
-      {/if}
-    </div>
-
-    <div class="controls" class:dim={busy}>
-      <div class="row">
-        <span class="t">{clock(seconds)}</span>
-        <input
-          type="range"
-          min="0"
-          max={Math.max(1, Math.round(status.duration))}
-          step="1"
-          value={Math.round(seconds)}
-          disabled={status.duration <= 0 || busy}
-          aria-label="Position"
-          style="--filled: {Math.round(fraction * 100)}%"
-          oninput={(e) => hold(Number(e.currentTarget.value))}
-          onchange={(e) => commitScrub(Number(e.currentTarget.value))}
-        />
-        <span class="t right">-{clock(remaining)}</span>
-      </div>
-
-      <!--
-      Transport. The primary key is twice the size of the rest, because this is
-      the one surface in the app used at arm's length without being looked at —
-      that is the argument for the sizes here, not generosity.
-    -->
-      <div class="transport">
-        <button
-          class="key"
-          onclick={onprevious}
-          disabled={!canPrevious || busy}
-          title="Previous episode"
-          aria-label="Previous episode"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14H5V5zM19 5v14l-11-7z" /></svg>
-        </button>
-        <button
-          class="key"
-          onclick={() => onnudge(-NUDGE_SECONDS)}
-          disabled={busy}
-          title="Back {NUDGE_SECONDS} seconds"
-          aria-label="Back {NUDGE_SECONDS} seconds">−{NUDGE_SECONDS}s</button
-        >
-        <button
-          class="key primary"
-          onclick={ontoggle}
-          disabled={busy}
-          title={status.playing ? 'Pause on the TV' : 'Play on the TV'}
-          aria-label={status.playing ? 'Pause' : 'Play'}
-        >
-          {#if status.playing}
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg
-            >
+      {#if !connected}
+        <section class="tvs" inert={connecting}>
+          <p class="label">Television</p>
+          {#if devices.length === 0}
+            <p class="looking">Looking for a TV on your Wi-Fi…</p>
           {:else}
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg>
+            <div class="chips">
+              {#each devices as device (device.id)}
+                <button
+                  class="chip"
+                  class:selected={device.id === selectedDevice}
+                  aria-pressed={device.id === selectedDevice}
+                  onclick={() => onselectdevice(device.id)}
+                >
+                  {device.name}
+                </button>
+              {/each}
+            </div>
+            {#if selectedDevice === null}
+              <p class="looking">Choose which television to play on.</p>
+            {/if}
           {/if}
-        </button>
-        <button
-          class="key"
-          onclick={() => onnudge(NUDGE_SECONDS)}
-          disabled={busy}
-          title="Forward {NUDGE_SECONDS} seconds"
-          aria-label="Forward {NUDGE_SECONDS} seconds">+{NUDGE_SECONDS}s</button
-        >
-        <button
-          class="key"
-          onclick={onnext}
-          disabled={!canNext || busy}
-          title="Next episode"
-          aria-label="Next episode"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5v14h2V5zM5 5v14l11-7z" /></svg>
-        </button>
-      </div>
+        </section>
+      {/if}
 
       <!--
-      Volume, and it is the receiver's own — `SET_VOLUME` on the receiver
-      namespace, not a media-session command. Said out loud underneath, because
-      on any television doing HDMI-CEC this is the set's volume: a user
-      expecting an app slider would find it has changed what the news plays at
-      too. The slider stays live while the phase is busy, unlike the transport —
-      volume is the one command that works with nothing playing.
-    -->
-      <div class="row volume">
-        <button
-          class="key small"
-          onclick={onmute}
-          title={status.muted ? 'Unmute the television' : 'Mute the television'}
-          aria-label={status.muted ? 'Unmute the television' : 'Mute the television'}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9h3l5-4v14l-5-4H4z" />
-            {#if status.muted}
-              <path d="M16 9l5 6M21 9l-5 6" class="stroke" />
-            {:else}
-              <path d="M16.5 8.5a5 5 0 0 1 0 7" class="stroke" />
-            {/if}
-          </svg>
-        </button>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          value={volumePercent(level)}
-          aria-label="Television volume"
-          style="--filled: {status.muted ? 0 : volumePercent(level)}%"
-          oninput={(e) => setVolume(Number(e.currentTarget.value))}
-        />
-        <span class="t right">{status.muted ? 'muted' : `${volumePercent(level)}%`}</span>
-      </div>
-      <p class="note">Volume is the television's own.</p>
+        Picking a source is what starts the cast: it connects, loads the
+        source here and hands it over. So the list waits for a television,
+        and stands still while one is being reached.
+      -->
+      <section class="list" class:dim={connecting || !ready} inert={connecting || !ready}>
+        <p class="label">Source</p>
+        <div class="scroll">
+          {@render sources()}
+        </div>
+      </section>
     </div>
-  </div>
+  {:else}
+    <div class="body">
+      <div class="stage">
+        <div class="art">
+          {#if artwork}
+            <img src={artwork} alt="" />
+          {:else}
+            <svg class="glyph big" viewBox="0 0 24 24" aria-hidden="true"
+              ><path d="M3 5h18v11H3zM8 20h8v-1H8z" /></svg
+            >
+          {/if}
+        </div>
+
+        <h1>{title}</h1>
+        {#if subtitle}<p class="sub">{subtitle}</p>{/if}
+        <!--
+          The source is a control and not just a caption: the way out when a
+          source casts badly, or is stuck, is trying another, and that should
+          not mean stopping the cast to get at the list.
+        -->
+        <button class="ghost change" onclick={onchangesource} title="Cast from another source">
+          {sourceName || 'Source'} <span class="action">· Change source</span>
+        </button>
+
+        <!--
+        What is happening, whenever it is not simply playing.
+
+        Moving the television to another episode takes several seconds — the embed
+        has to load it here first, because that is the only thing that fetches a
+        stream — and with some providers it needs a tap this app cannot make on
+        the user's behalf. So it is narrated rather than hidden behind a spinner
+        that says nothing.
+      -->
+        {#if busy}
+          <p class="phase" class:stuck={phase === 'stuck'} role="status">{phaseLabel}</p>
+          <!--
+          The one place the remote has to let go of the screen.
+
+          Several providers fetch nothing at all until their own play button is
+          pressed, and that button is on the page this is covering. A remote that
+          says "press play over there" while making "over there" unreachable is
+          worse than no remote — so being stuck comes with the way out, and the
+          cast button in the bar brings this back.
+        -->
+          {#if phase === 'stuck'}
+            <div class="escape">
+              <button class="ghost" onclick={onreveal}>Show the player</button>
+              <button class="ghost" onclick={onretry}>Try again</button>
+            </div>
+          {/if}
+        {:else if !status?.proxyRunning}
+          <!-- Connected and serving nothing: the television is still attached and
+             the stream behind it has stopped, which looks exactly like "paused"
+             from the sofa. -->
+          <p class="phase stuck" role="status">
+            The stream ended — the television has nothing left to play.
+          </p>
+        {/if}
+        <!-- A command the television did not take. A button that did nothing
+             and said nothing reads, from the sofa, as one that worked. -->
+        {#if error}<p class="phase bad" role="alert">{error}</p>{/if}
+      </div>
+
+      <div class="controls">
+        <div class="row" class:dim={busy}>
+          <span class="t">{clock(seconds)}</span>
+          <input
+            type="range"
+            min="0"
+            max={Math.max(1, Math.round(duration))}
+            step="1"
+            value={Math.round(seconds)}
+            disabled={duration <= 0 || busy}
+            aria-label="Position"
+            style="--filled: {Math.round(fraction * 100)}%"
+            oninput={(e) => hold(Number(e.currentTarget.value))}
+            onchange={(e) => commitScrub(Number(e.currentTarget.value))}
+          />
+          <span class="t right">-{clock(remaining)}</span>
+        </div>
+
+        <!--
+        Transport. The primary key is twice the size of the rest, because this is
+        the one surface in the app used at arm's length without being looked at —
+        that is the argument for the sizes here, not generosity.
+
+        ⏮ and ⏭ stay live while an episode is loading or stuck, unlike the
+        keys between them. Those are about a position about to be discarded;
+        these are the way past an episode that will not start, which is when
+        they are wanted most. A second press overtakes the first.
+      -->
+        <div class="transport">
+          {#if episodic}
+            <button
+              class="key"
+              onclick={onprevious}
+              disabled={!canPrevious}
+              title="Previous episode"
+              aria-label="Previous episode"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"
+                ><path d="M7 5v14H5V5zM19 5v14l-11-7z" /></svg
+              >
+            </button>
+          {/if}
+          <button
+            class="key"
+            onclick={() => onnudge(-NUDGE_SECONDS)}
+            disabled={busy}
+            title="Back {NUDGE_SECONDS} seconds"
+            aria-label="Back {NUDGE_SECONDS} seconds">−{NUDGE_SECONDS}s</button
+          >
+          <button
+            class="key primary"
+            onclick={ontoggle}
+            disabled={busy}
+            title={status?.playing ? 'Pause on the TV' : 'Play on the TV'}
+            aria-label={status?.playing ? 'Pause' : 'Play'}
+          >
+            {#if status?.playing}
+              <svg viewBox="0 0 24 24" aria-hidden="true"
+                ><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg
+              >
+            {:else}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg>
+            {/if}
+          </button>
+          <button
+            class="key"
+            onclick={() => onnudge(NUDGE_SECONDS)}
+            disabled={busy}
+            title="Forward {NUDGE_SECONDS} seconds"
+            aria-label="Forward {NUDGE_SECONDS} seconds">+{NUDGE_SECONDS}s</button
+          >
+          {#if episodic}
+            <button
+              class="key"
+              onclick={onnext}
+              disabled={!canNext}
+              title="Next episode"
+              aria-label="Next episode"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"
+                ><path d="M17 5v14h2V5zM5 5v14l11-7z" /></svg
+              >
+            </button>
+          {/if}
+        </div>
+
+        <!--
+        Volume, and it is the receiver's own — `SET_VOLUME` on the receiver
+        namespace, not a media-session command. Said out loud underneath, because
+        on any television doing HDMI-CEC this is the set's volume: a user
+        expecting an app slider would find it has changed what the news plays at
+        too. The slider stays live while the phase is busy, unlike the transport —
+        volume is the one command that works with nothing playing.
+      -->
+        <div class="row volume">
+          <button
+            class="key small"
+            onclick={onmute}
+            title={status?.muted ? 'Unmute the television' : 'Mute the television'}
+            aria-label={status?.muted ? 'Unmute the television' : 'Mute the television'}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9h3l5-4v14l-5-4H4z" />
+              {#if status?.muted}
+                <path d="M16 9l5 6M21 9l-5 6" class="stroke" />
+              {:else}
+                <path d="M16.5 8.5a5 5 0 0 1 0 7" class="stroke" />
+              {/if}
+            </svg>
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={volumePercent(level)}
+            aria-label="Television volume"
+            style="--filled: {status?.muted ? 0 : volumePercent(level)}%"
+            oninput={(e) => setVolume(Number(e.currentTarget.value))}
+          />
+          <span class="t right">{status?.muted ? 'muted' : `${volumePercent(level)}%`}</span>
+        </div>
+        <p class="note">Volume is the television's own.</p>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -358,11 +500,19 @@
   }
 
   header {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
     flex: none;
+  }
+
+  header > .ghost:first-child {
+    justify-self: start;
+  }
+
+  header > .stop {
+    justify-self: end;
   }
 
   .device {
@@ -515,6 +665,101 @@
     color: #9a9aa6;
   }
 
+  .phase.bad {
+    background: rgba(251, 92, 118, 0.16);
+    color: #ffc2cc;
+  }
+
+  /* The source, as a button. Quiet, because it is not transport: it sits in
+     the caption where the provider's name always was. */
+  .ghost.change {
+    margin-top: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: #cfe0ff;
+  }
+
+  .change .action {
+    color: #9a9aa6;
+  }
+
+  /* ── The choose face ─────────────────────────────────────────────────────
+     Top-aligned rather than centred: the list is as long as the sources are
+     many, and it scrolls inside its own box so the header and the television
+     row stay where the thumb expects them. */
+  .body.choose {
+    justify-content: flex-start;
+    gap: 18px;
+  }
+
+  .label {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .tvs {
+    flex: none;
+  }
+
+  .looking {
+    margin: 0;
+    font-size: 12px;
+    color: #9a9aa6;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .chip {
+    min-height: 40px;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #e9e9ee;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .chip:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  /* The blue of a running cast: this is the television it will run on. */
+  .chip.selected {
+    background: rgba(24, 46, 84, 0.9);
+    border-color: rgba(91, 157, 250, 0.65);
+    color: #cfe0ff;
+  }
+
+  .list {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .list.dim {
+    opacity: 0.45;
+  }
+
+  .scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  }
+
   .escape {
     display: flex;
     gap: 8px;
@@ -529,9 +774,10 @@
   }
 
   /* Dimmed rather than removed while the television is being moved to another
-     episode: the transport below is about a position about to be discarded,
-     but taking it off screen would make the remote jump. */
-  .controls.dim {
+     episode: the time bar is about a position about to be discarded, but
+     taking it off screen would make the remote jump. The keys dim themselves
+     through `:disabled`, except ⏮ and ⏭, which stay live on purpose. */
+  .row.dim {
     opacity: 0.45;
   }
 
@@ -677,7 +923,7 @@
     a thumb rather than floating in the middle of it.
   */
   @media (max-width: 560px) and (min-height: 600px) {
-    .body {
+    .body:not(.choose) {
       justify-content: space-between;
       padding-bottom: 4px;
     }

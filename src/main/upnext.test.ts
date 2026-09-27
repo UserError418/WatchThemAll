@@ -4,9 +4,9 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Season } from '@shared/types'
 import type { UpNextOffer } from '@shared/ipc'
-import { UP_NEXT_COUNTDOWN_MS, UpNextController, isEpisodeEnd, nextAiredEpisode, type NextEpisode } from './upnext'
+import type { NextEpisode } from '@shared/episodesteps'
+import { UP_NEXT_COUNTDOWN_MS, UpNextController, isEpisodeEnd } from './upnext'
 
 const NOW = new Date(2026, 8, 27, 20, 0, 0).getTime()
 
@@ -26,52 +26,6 @@ describe('isEpisodeEnd', () => {
   it('needs a length to measure against', () => {
     expect(isEpisodeEnd({ seconds: 2_700, duration: null, ended: true }, 45)).toBe(false)
     expect(isEpisodeEnd({ seconds: 2_700, duration: Infinity, ended: true }, 45)).toBe(false)
-  })
-})
-
-describe('nextAiredEpisode', () => {
-  const ep = (episode: number, airDate: string | null, name = `Episode ${episode}`) => ({
-    season: 0,
-    episode,
-    name,
-    airDate,
-    overview: '',
-    stillPath: null,
-    runtime: 45,
-    rating: 0,
-  })
-  const seasons: Record<number, Season> = {
-    1: { season: 1, name: 'Season 1', episodes: [ep(1, '2026-01-01'), ep(2, '2026-01-08'), ep(3, '2026-01-15')] },
-    2: { season: 2, name: 'Season 2', episodes: [ep(1, '2026-09-20', 'Return'), ep(2, '2026-10-04')] },
-  }
-  const fetchSeason = vi.fn(async (n: number) => seasons[n] ?? null)
-
-  it('plays the next episode of the season', async () => {
-    expect(await nextAiredEpisode({ season: 1, episode: 1 }, 2, fetchSeason, NOW)).toEqual({ season: 1, episode: 2, name: 'Episode 2' })
-  })
-
-  it('rolls into the next season after the last episode', async () => {
-    expect(await nextAiredEpisode({ season: 1, episode: 3 }, 2, fetchSeason, NOW)).toEqual({ season: 2, episode: 1, name: 'Return' })
-  })
-
-  it('stops at the last aired episode', async () => {
-    expect(await nextAiredEpisode({ season: 2, episode: 1 }, 2, fetchSeason, NOW)).toBeNull()
-  })
-
-  it('stops at the end of the last season', async () => {
-    expect(await nextAiredEpisode({ season: 2, episode: 2 }, 2, fetchSeason, NOW)).toBeNull()
-  })
-
-  it('does not guess when TMDB cannot be asked', async () => {
-    const failing = async () => {
-      throw new Error('offline')
-    }
-    expect(await nextAiredEpisode({ season: 1, episode: 1 }, 2, failing, NOW)).toBeNull()
-  })
-
-  it('treats an episode with no date as not out', async () => {
-    const undated = async () => ({ season: 1, name: '', episodes: [ep(1, '2026-01-01'), ep(2, null)] })
-    expect(await nextAiredEpisode({ season: 1, episode: 1 }, 1, undated, NOW)).toBeNull()
   })
 })
 
