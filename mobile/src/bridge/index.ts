@@ -121,6 +121,7 @@ import { MobileStore } from './store'
 import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
 import type { SyncStatus } from '@shared/sync/types'
+import { unreadableLibrary } from '@shared/store/core'
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
 const SYNC_AFTER_WRITE_MS = 8_000
@@ -1256,7 +1257,11 @@ export async function createBridge(): Promise<WtaApi> {
 
   return {
     store: {
-      read: async () => store.read(),
+      read: async () => {
+        // See `StoreCore.loadFailure`: never hand the app an empty stand-in.
+        if (store.loadFailure !== null) throw new Error(unreadableLibrary(store.loadFailure))
+        return store.read()
+      },
       write: async (patch: Partial<StoreShape>) => {
         store.applyPatch(patch)
       },

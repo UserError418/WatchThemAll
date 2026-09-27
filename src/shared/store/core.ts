@@ -57,6 +57,14 @@ import type {
  */
 export interface StorePersistence {
   /** The document as written, or null when there is none yet. */
+  /**
+   * The stored text, or null when there is no document yet.
+   *
+   * Null means *not there*, and nothing else. A document that exists and
+   * cannot be read (locked, no permission, an I/O error) must throw: the
+   * store answers null with a fresh empty library, and it writes that library
+   * out.
+   */
   read(): Promise<string | null>
   write(text: string): Promise<void>
   /**
@@ -70,6 +78,31 @@ export interface StorePersistence {
   quarantine(): Promise<void>
   /** A human-readable location, shown in the app. */
   describe(): Promise<string>
+}
+
+/** What the app shows when the library file exists and would not open. */
+export function unreadableLibrary(reason: string): string {
+  return `Your library could not be read (${reason}). Nothing was changed. Close and reopen WatchThemAll to try again.`
+}
+
+/**
+ * Read attempts for a document that exists, and the wait between them.
+ *
+ * A lock held by a virus scanner or a file-sync client is usually gone within
+ * a second, and giving up on the first try would cost the user a session.
+ */
+const READ_ATTEMPTS = 3
+const READ_RETRY_MS = 300
+
+async function readPatiently(persistence: StorePersistence): Promise<string | null> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await persistence.read()
+    } catch (err) {
+      if (attempt >= READ_ATTEMPTS) throw err
+      await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS))
+    }
+  }
 }
 
 /** How long to wait for further mutations before writing. */
@@ -194,6 +227,16 @@ export class StoreCore {
   private loaded = false
 
   /**
+   * Why the document could not be read, when it exists and would not open.
+   *
+   * Null in every normal case, including a first run (no document) and a
+   * corrupt one (quarantined, then a fresh start). Set, nothing is written
+   * for the rest of the session and the platforms refuse to hand the empty
+   * stand-in to the app as if it were the library.
+   */
+  loadFailure: string | null = null
+
+  /**
    * @param deviceKind What this install is. Stamped on the document at every
    *   load rather than stored once, because it is a fact about the install:
    *   a library restored from another device's backup must not keep calling
@@ -215,9 +258,18 @@ export class StoreCore {
 
     let text: string | null
     try {
-      text = await this.persistence.read()
-    } catch {
-      text = null
+      text = await readPatiently(this.persistence)
+    } catch (err) {
+      // There, and not readable. Until 2026-09-27 this was treated as a first
+      // run, and the empty library that follows was written over the real
+      // one. Now the store keeps its hands off the file for the session (see
+      // `flush`), and the app says it could not load the library, so the
+      // next launch finds the file exactly as it was.
+      this.loadFailure = err instanceof Error ? err.message : String(err)
+      console.error('[store] the document exists but could not be read:', err)
+      this.doc = { ...emptyDocument(), deviceKind: this.deviceKind }
+      this.invalidate()
+      return
     }
 
     if (text === null) {
@@ -479,6 +531,9 @@ export class StoreCore {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
+    // A document that could not be read is never written: what is in memory is
+    // an empty stand-in, and writing it would destroy the real one.
+    if (this.loadFailure !== null) return this.writing
     const snapshot = JSON.stringify(this.doc)
     // Chained, not concurrent: two overlapping writes to one path can interleave
     // and leave a half-written document, and the newer one is not guaranteed to

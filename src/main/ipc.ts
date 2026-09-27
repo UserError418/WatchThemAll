@@ -51,6 +51,7 @@ import { NO_CLIENT_REASON } from '@shared/sync/credentials'
 import type { SyncStatus } from '@shared/sync/types'
 import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
+import { unreadableLibrary } from '@shared/store/core'
 
 /** What the renderer sees when this build has no OAuth client at all. */
 /** Shown when a cast is asked for with no player open. */
@@ -173,7 +174,12 @@ export function registerIpc(deps: IpcDeps): void {
   const { store, getMainWindow, openPlayer } = deps
   const providers = deps.allProviders
 
-  ipcMain.handle(CH.storeRead, () => store.read())
+  ipcMain.handle(CH.storeRead, () => {
+    // An empty stand-in for a library that exists and would not open must not
+    // reach the app as if it were the library; see `StoreCore.loadFailure`.
+    if (store.loadFailure !== null) throw new Error(unreadableLibrary(store.loadFailure))
+    return store.read()
+  })
   ipcMain.handle(CH.storeWrite, (_e, patch: Partial<StoreShape>) => store.applyPatch(patch))
 
   ipcMain.handle(CH.tmdbRow, (_e, req: RowRequest | GenreRowRequest | DiscoverRequest) => tmdb.row(req))

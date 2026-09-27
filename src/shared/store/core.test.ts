@@ -127,3 +127,63 @@ describe('replaceDocument', () => {
     expect(store.raw().streamOutcomes).toEqual([readded])
   })
 })
+
+describe('load', () => {
+  /** A persistence whose reads are scripted, and whose writes are kept. */
+  function scripted(read: () => Promise<string | null>) {
+    const writes: string[] = []
+    const store = new StoreCore(
+      {
+        read,
+        write: async (text) => {
+          writes.push(text)
+        },
+        quarantine: async () => {},
+        describe: async () => 'memory',
+      },
+      migrate,
+      'desktop',
+    )
+    return { store, writes }
+  }
+
+  /**
+   * The case that destroyed libraries: a file that exists and will not open
+   * (a virus scanner's lock, a permission) used to be taken for a first run,
+   * and the empty library that followed was written over it.
+   */
+  it('never writes over a document that exists and would not open', async () => {
+    const { store, writes } = scripted(async () => {
+      throw new Error('EBUSY: resource busy or locked')
+    })
+    await store.load()
+
+    expect(store.loadFailure).toMatch(/EBUSY/)
+    store.collection('resumePoints').put({ key: 'movie:1', tmdbId: 1, seconds: 600, duration: 6000 })
+    await store.flush()
+    expect(writes).toEqual([])
+  })
+
+  it('reads a document whose lock clears on a later try', async () => {
+    let calls = 0
+    const { store, writes } = scripted(async () => {
+      calls += 1
+      if (calls === 1) throw new Error('EBUSY: resource busy or locked')
+      return JSON.stringify({ schemaVersion: SCHEMA_VERSION, streamOutcomes: [outcome('a', 1)] })
+    })
+    await store.load()
+
+    expect(store.loadFailure).toBeNull()
+    expect(calls).toBe(2)
+    expect(store.read().streamOutcomes.map((r) => r.providerId)).toEqual(['a'])
+    expect(writes).toEqual([])
+  })
+
+  it('starts, and saves, a fresh library when there is no document at all', async () => {
+    const { store, writes } = scripted(async () => null)
+    await store.load()
+
+    expect(store.loadFailure).toBeNull()
+    expect(writes).toHaveLength(1)
+  })
+})
