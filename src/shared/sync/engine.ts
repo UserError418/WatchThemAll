@@ -103,7 +103,7 @@ export async function syncOnce(
 }
 
 /**
- * Serialises syncs and coalesces the ones that pile up behind a running sync.
+ * Serialises a task and coalesces the requests that pile up behind a run.
  *
  * The triggers are launch, foreground, and a settled write, and they overlap
  * constantly — foregrounding the app while a launch sync is still going is the
@@ -114,22 +114,18 @@ export async function syncOnce(
  * A single pending flag rather than a queue: when three requests arrive during
  * one sync, the honest answer is *one* more sync afterwards, not three.
  */
-export class SyncRunner {
-  private running: Promise<SyncOutcome> | null = null
+export class CoalescingRunner<T> {
+  private running: Promise<T> | null = null
   private pending = false
 
-  constructor(
-    private readonly host: SyncHost,
-    private readonly backend: SyncBackend,
-    private readonly now: () => number = Date.now,
-  ) {}
+  constructor(private readonly task: () => Promise<T>) {}
 
-  /** True while a sync is in flight, for the status line. */
+  /** True while a run is in flight, for the status line. */
   get busy(): boolean {
     return this.running !== null
   }
 
-  async request(): Promise<SyncOutcome> {
+  async request(): Promise<T> {
     if (this.running !== null) {
       // Join the run in flight rather than starting one. `run` loops while
       // `pending` is set, so the promise being returned resolves to an outcome
@@ -145,12 +141,19 @@ export class SyncRunner {
     return this.running
   }
 
-  private async run(): Promise<SyncOutcome> {
-    let outcome = await syncOnce(this.host, this.backend, this.now())
+  private async run(): Promise<T> {
+    let outcome = await this.task()
     while (this.pending) {
       this.pending = false
-      outcome = await syncOnce(this.host, this.backend, this.now())
+      outcome = await this.task()
     }
     return outcome
+  }
+}
+
+/** The library's runner: `syncOnce`, serialised and coalesced. */
+export class SyncRunner extends CoalescingRunner<SyncOutcome> {
+  constructor(host: SyncHost, backend: SyncBackend, now: () => number = Date.now) {
+    super(() => syncOnce(host, backend, now()))
   }
 }

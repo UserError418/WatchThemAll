@@ -325,6 +325,21 @@ export class StoreCore {
   }
 
   /**
+   * Take a collection exactly as a sync merge produced it: every record with
+   * the stamps it came with, tombstones included.
+   *
+   * For merges of one collection, where replacing the whole document would
+   * reload everything and restamp nothing. Nothing here re-stamps either: the
+   * records are already the merge's verdict, and a fresh `updatedAt` would make
+   * this device's copy look newer than the one it just took.
+   */
+  adoptRecords<K extends CollectionKey>(key: K, records: RecordOf<K>[]): void {
+    if (JSON.stringify(records) === JSON.stringify(this.doc[key])) return
+    ;(this.doc as unknown as Record<string, unknown>)[key] = records
+    this.changed(key)
+  }
+
+  /**
    * Fired after every mutation, coalesced with nothing — one call per change,
    * naming the key it touched. A write that changes nothing is not a change
    * and fires nothing.

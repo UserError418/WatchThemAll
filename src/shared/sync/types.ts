@@ -84,21 +84,21 @@ export interface StoredCredentials extends OAuthTokens {
  * install, a wiped profile — has nothing to heal from and gets whatever the
  * remote holds.
  */
-export interface RemoteDocument {
-  document: StoreDocument
+export interface RemoteDocument<T = StoreDocument> {
+  document: T
   version: string | null
 }
 
-export interface SyncBackend {
+export interface SyncBackend<T = StoreDocument> {
   /** The remote document, or `null` when this account has never synced. */
-  pull(): Promise<RemoteDocument | null>
+  pull(): Promise<RemoteDocument<T> | null>
   /**
    * Replace the remote document.
    *
    * `expected` is the version `pull` returned, offered so a backend that *can*
    * do conditional writes may. Drive cannot and ignores it.
    */
-  push(document: StoreDocument, expected: string | null): Promise<void>
+  push(document: T, expected: string | null): Promise<void>
 }
 
 /* ── Status ─────────────────────────────────────────────────────────────── */

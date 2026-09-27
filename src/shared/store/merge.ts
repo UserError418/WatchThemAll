@@ -269,6 +269,18 @@ function mergeCollection<K extends CollectionKey>(
   return order.map((id) => byId.get(id) as RecordOf<K>)
 }
 
+/**
+ * Merge two sets of resume points by the same rule the whole-library merge
+ * uses for them, for the positions file (`sync/positions.ts`), which carries
+ * nothing else.
+ */
+export function mergeResumePoints(
+  local: RecordOf<'resumePoints'>[],
+  remote: RecordOf<'resumePoints'>[],
+): RecordOf<'resumePoints'>[] {
+  return mergeCollection('resumePoints', local, remote)
+}
+
 /* ── Preferences ────────────────────────────────────────────────────────── */
 
 /**

@@ -74,6 +74,11 @@ export interface DriveBackendOptions {
   /** Called before every request; returns a token that is valid *now*. */
   accessToken: () => Promise<string>
   fetchImpl?: FetchLike
+  /**
+   * The file this backend reads and writes: the library by default, or the
+   * small positions file (`positions.ts`), which syncs on its own schedule.
+   */
+  name?: string
 }
 
 /** The document's file, as a listing or an upload describes it. */
@@ -91,12 +96,12 @@ interface DriveFile {
  * user signs in as somebody else or clears the app folder from Drive's
  * settings. One listing per sync is a fair price for having no stale-id case.
  */
-async function findFile(fetchImpl: FetchLike, accessToken: string): Promise<DriveFile | null> {
+async function findFile(fetchImpl: FetchLike, accessToken: string, name: string): Promise<DriveFile | null> {
   // No `spaces` filter is needed and none would help: under `drive.file` a
   // listing only ever contains files this app created, so the name is already
   // searched within our own small world.
   const query = new URLSearchParams({
-    q: `name = '${DOCUMENT_NAME}' and trashed = false`,
+    q: `name = '${name}' and trashed = false`,
     fields: 'files(id,md5Checksum)',
     pageSize: '1',
   })
@@ -109,8 +114,8 @@ async function findFile(fetchImpl: FetchLike, accessToken: string): Promise<Driv
 /** Asked of every upload, so its answer says what the file now holds. */
 const UPLOAD_FIELDS = 'fields=id,md5Checksum'
 
-export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
-  const { accessToken, fetchImpl = fetch } = options
+export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptions): SyncBackend<T> {
+  const { accessToken, fetchImpl = fetch, name = DOCUMENT_NAME } = options
 
   /**
    * The file as this backend last saw it: found by the pull, and then what the
@@ -161,7 +166,7 @@ export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
      * lookup above — so every sync would make another one.
      */
     const boundary = `wta-${Math.random().toString(36).slice(2)}`
-    const metadata = JSON.stringify({ name: DOCUMENT_NAME })
+    const metadata = JSON.stringify({ name })
     const body =
       `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
       `--${boundary}\r\nContent-Type: application/json\r\n\r\n${payload}\r\n` +
@@ -176,9 +181,9 @@ export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
   }
 
   return {
-    async pull(): Promise<RemoteDocument | null> {
+    async pull(): Promise<RemoteDocument<T> | null> {
       const token = await accessToken()
-      const file = await findFile(fetchImpl, token)
+      const file = await findFile(fetchImpl, token, name)
       pulledId = file?.id ?? null
       if (file === null) return null
 
@@ -193,9 +198,9 @@ export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
         remember(file, text)
       }
 
-      let document: StoreDocument
+      let document: T
       try {
-        document = JSON.parse(text) as StoreDocument
+        document = JSON.parse(text) as T
       } catch {
         // Someone else's bytes, or a truncated upload. Treated as "no remote
         // document" rather than as a hard failure: the next push replaces it,
@@ -208,13 +213,13 @@ export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
       return { document, version: null }
     },
 
-    async push(document: StoreDocument, _expected: string | null): Promise<void> {
+    async push(document: T, _expected: string | null): Promise<void> {
       const token = await accessToken()
       const payload = JSON.stringify(document)
       // The pull that always precedes a push found the file seconds ago, so it
       // is not listed a second time. Deleted since then, the update 404s and
       // the file is created afresh, as a listing would have concluded.
-      const id = pulledId !== undefined ? pulledId : ((await findFile(fetchImpl, token))?.id ?? null)
+      const id = pulledId !== undefined ? pulledId : ((await findFile(fetchImpl, token, name))?.id ?? null)
 
       let file: DriveFile | null
       try {
