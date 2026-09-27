@@ -94,6 +94,7 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
+import { installMediaRelay } from './mediarelay'
 import { createScanRunner } from './scan'
 import { preferencesCatalogStore } from './catalogstore'
 import { createChromeApi } from './chrome'
@@ -152,6 +153,9 @@ export async function createBridge(): Promise<WtaApi> {
   const playbackActive = new Signal<boolean>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
+  /** The phone's side of main's `playerMini` / `playerPaused`; see `setMini`. */
+  const playerMini = new Signal<boolean>()
+  const playerPaused = new Signal<boolean>()
   const playerPointerTop = new Signal<boolean>()
   const providerScan = new Signal<ProviderScanProgress>()
   const syncStatus = new Signal<SyncStatus>()
@@ -340,7 +344,15 @@ export async function createBridge(): Promise<WtaApi> {
 
   let progress: Progress | null = null
 
+  /** Whether the provider's video is moving, as the relay last reported. */
+  let videoPlaying = false
+
   const surface = createPlayerSurface({
+    onMediaState: (playing) => {
+      videoPlaying = playing
+      playerPaused.emit(!playing)
+    },
+
     /**
      * What is on screen, for the parser's benefit.
      *
@@ -406,6 +418,31 @@ export async function createBridge(): Promise<WtaApi> {
   })
   const chrome = createChromeOverlay()
   let session: Session | null = null
+
+  /**
+   * The mini player (2026-09-27): the video shrunk into a strip above the tab
+   * bar, the app usable around it. Back and the chrome's ← both land here;
+   * only the strip's ✕ stops playback. The desktop keeps the same state in
+   * main (`setPlayerMini`), and the two announce it the same way.
+   */
+  let mini = false
+
+  const setMini = (next: boolean): void => {
+    if (mini === next || (next && session === null)) return
+    mini = next
+    // Hidden, not closed: the chrome's state is what the full player comes
+    // back to. Its countdown to switch source stands down meanwhile.
+    chrome.setHidden(next)
+    playerMini.emit(next)
+    playerPaused.emit(!videoPlaying)
+  }
+
+  /*
+    Before any player opens: the relay can only reach documents created after
+    it is installed. Without it the mini player's button does nothing, which
+    is the whole of the failure; see `mediarelay.ts`.
+  */
+  void installMediaRelay(location.origin)
 
   /**
    * The last state emitted, kept so a late subscriber can be caught up.
@@ -760,6 +797,8 @@ export async function createBridge(): Promise<WtaApi> {
       leaveCandidate(false)
       settleProgress(session.req)
     }
+    setMini(false)
+    videoPlaying = false
     chrome.close()
     surface.close()
     session = null
@@ -987,8 +1026,10 @@ export async function createBridge(): Promise<WtaApi> {
    * binds is the smaller lie.
    */
   void CapacitorApp.addListener('backButton', () => {
-    if (session) {
-      closePlayer()
+    // Back shrinks a full player into the corner, as the chrome's ← does.
+    // With the mini player up, Back belongs to the app again.
+    if (session && !mini) {
+      setMini(true)
       return
     }
     if (document.querySelector('.scrim, aside.panel')) {
@@ -1105,7 +1146,8 @@ export async function createBridge(): Promise<WtaApi> {
     subscribeState: (cb) => playerState.subscribe(cb),
     currentState: () => currentPlayerState,
     subscribeSuggestion: (cb) => playerSuggestion.subscribe(cb),
-    close: closePlayer,
+    minimize: () => setMini(true),
+    subscribeMini: (cb) => playerMini.subscribe(cb),
     goTo: playerGoTo,
     switchProvider: playerSwitchProvider,
     reload: playerReload,
@@ -1284,6 +1326,9 @@ export async function createBridge(): Promise<WtaApi> {
         leaveCandidate(false)
         settleProgress(session.req)
       }
+      // Pressing Play is asking to watch, so what plays next opens full size
+      // even when it replaces a mini player.
+      setMini(false)
 
       session = { req, candidates: selection.candidates, index: 0 }
       const now = Date.now()
@@ -1322,6 +1367,8 @@ export async function createBridge(): Promise<WtaApi> {
       switchProvider: playerSwitchProvider,
       dismissSuggestion: async () => {},
       reload: playerReload,
+      setMini: async (next) => setMini(next),
+      setPaused: async (paused) => surface.setPaused(paused),
     },
 
     cast: {
@@ -1504,6 +1551,8 @@ export async function createBridge(): Promise<WtaApi> {
       storeChanged: (cb) => storeChanged.subscribe(cb),
       playbackActive: (cb) => playbackActive.subscribe(cb),
       playerState: (cb) => playerState.subscribe(cb),
+      playerMini: (cb) => playerMini.subscribe(cb),
+      playerPaused: (cb) => playerPaused.subscribe(cb),
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),

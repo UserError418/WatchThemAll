@@ -115,6 +115,10 @@ export interface IpcDeps {
   acceptSuggestion: () => boolean
   /** Reload the embed currently playing, in place. */
   reloadPlayer: () => void
+  /** Shrink the player into the app's corner, or bring it back. */
+  setPlayerMini: (mini: boolean) => void
+  /** Pause or resume the provider's video. */
+  setPlayerPaused: (paused: boolean) => void
   /**
    * Casting to a television.
    *
@@ -459,6 +463,9 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
   ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())
+  // Strictly booleans: anything else from a renderer is a bug, not a request.
+  ipcMain.handle(CH.playSetMini, (_e, mini: unknown) => deps.setPlayerMini(mini === true))
+  ipcMain.handle(CH.playSetPaused, (_e, paused: unknown) => deps.setPlayerPaused(paused === true))
 
   ipcMain.handle(CH.dataExport, async () => {
     const payload = exportStore(store.read())

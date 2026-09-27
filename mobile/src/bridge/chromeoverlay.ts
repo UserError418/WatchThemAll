@@ -41,11 +41,19 @@ export interface ChromeOverlay {
   open(): void
   /** Take it down. Safe to call when nothing is open. */
   close(): void
+  /**
+   * Hide it while the player is in the corner, without unmounting it.
+   *
+   * Hidden rather than closed so the bar, the source menu and a held offer
+   * are exactly as they were when the full player comes back.
+   */
+  setHidden(hidden: boolean): void
 }
 
 export function createChromeOverlay(): ChromeOverlay {
   let host: HTMLDivElement | null = null
   let component: Record<string, unknown> | null = null
+  let hidden = false
 
   return {
     open() {
@@ -66,6 +74,7 @@ export function createChromeOverlay(): ChromeOverlay {
         */
         'pointer-events: none',
       ].join(';')
+      if (hidden) host.style.display = 'none'
 
       document.body.appendChild(host)
       component = mount(PlayerChrome, { target: host, props: { touch: true } })
@@ -76,6 +85,12 @@ export function createChromeOverlay(): ChromeOverlay {
       component = null
       host?.remove()
       host = null
+      hidden = false
+    },
+
+    setHidden(next) {
+      hidden = next
+      if (host) host.style.display = next ? 'none' : ''
     },
   }
 }

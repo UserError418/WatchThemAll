@@ -20,6 +20,7 @@
   import Settings from './views/Settings.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
   import DetailOverlay from './components/DetailOverlay.svelte'
+  import MiniPlayer from './components/MiniPlayer.svelte'
   import PlayerFrame from './components/PlayerFrame.svelte'
   import ProviderPanel from './components/ProviderPanel.svelte'
   import PreviewSoundButton from './components/PreviewSoundButton.svelte'
@@ -79,6 +80,14 @@
    * fallback ran.
    */
   let playing = $state<PlayerState | null>(null)
+
+  /**
+   * The player is shrunk into the corner and the app is usable around it.
+   *
+   * Main's to decide and announce (see `on.playerMini`), because the Back
+   * that starts it is pressed in the player's own chrome.
+   */
+  let mini = $state(false)
   /** A standing offer to leave a slow provider. Withdrawn by main, never here. */
   let providersOpen = $state(false)
   let paletteOpen = $state(false)
@@ -160,7 +169,11 @@
        * window is not going to receive a `mouseleave`.
        */
       window.wta.on.playbackActive((active) => previewAudio.setSuspended(active)),
-      window.wta.on.playerState((state) => (playing = state)),
+      window.wta.on.playerState((state) => {
+        playing = state
+        if (state === null) mini = false
+      }),
+      window.wta.on.playerMini((next) => (mini = next)),
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
         if (list.length === 0) return
@@ -215,8 +228,10 @@
      * *behind* the player — invisibly, so the user would come back from
      * watching an episode to the browse page instead of the episode list they
      * left. Same for `/`, which would focus a search box under a video.
+     * Not the mini player: shrinking it is how the user asks for the app
+     * back, keyboard included.
      */
-    if (playing) return
+    if (playing && !mini) return
 
     const target = event.target as HTMLElement | null
     const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
@@ -395,7 +410,11 @@
   inside a scrolling container.
 -->
 {#if playing}
-  <PlayerFrame player={playing} onclose={() => void window.wta.player.close()} />
+  {#if mini}
+    <MiniPlayer player={playing} />
+  {:else}
+    <PlayerFrame player={playing} onback={() => void window.wta.player.setMini(true)} />
+  {/if}
 {/if}
 
 {#if paletteOpen}

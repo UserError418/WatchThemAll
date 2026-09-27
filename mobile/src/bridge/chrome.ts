@@ -64,7 +64,9 @@ export interface ChromeDeps {
   /** The same, read once — see `onContext` for why a subscription is not enough. */
   currentState(): PlayerState | null
   subscribeSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
-  close(): void
+  /** The chrome's Back: shrink the player into the corner (see `setMini`). */
+  minimize(): void
+  subscribeMini(cb: (mini: boolean) => void): () => void
   goTo(season: number, episode: number): Promise<void>
   switchProvider(providerId: string): Promise<boolean>
   reload(): Promise<void>
@@ -101,7 +103,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     setOverlayArea: () => {},
     setSkipSize: () => {},
 
-    back: () => deps.close(),
+    back: () => deps.minimize(),
     goTo: (season, episode) => void deps.goTo(season, episode),
     switchProvider: (providerId) => void deps.switchProvider(providerId),
     reload: () => deps.reload(),
@@ -144,6 +146,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     },
 
     onSuggestion: (cb) => deps.subscribeSuggestion(cb),
+    onMini: (cb) => deps.subscribeMini(cb),
     onSkipOffer: never<SkipOffer | null>,
     onPointerTop: never<boolean>,
   }

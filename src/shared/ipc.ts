@@ -96,6 +96,10 @@ export const CH = {
   playAcceptSuggestion: 'play:accept-suggestion',
   /** Reload the embed in place, for when a source hangs part-way. */
   playReload: 'play:reload',
+  /** Shrink the player into the corner so the app can be browsed, or bring it back. */
+  playSetMini: 'play:set-mini',
+  /** Pause or resume the video itself, for the mini player's button. */
+  playSetPaused: 'play:set-paused',
   releasesCheck: 'releases:check',
 
   dataExport: 'data:export',
@@ -215,6 +219,16 @@ export const EV = {
    * is why they are separate channels rather than one shared one.
    */
   playerState: 'evt:player-state',
+  /**
+   * The player went into the corner, or came back out of it.
+   *
+   * Main's to announce, to the app window and to the player's own chrome,
+   * because the chrome's Back reaches main first: the app window learns
+   * about a minimise it did not start. See `player.setMini`.
+   */
+  playerMini: 'evt:player-mini',
+  /** main → app window: the video stopped or started moving. */
+  playerPaused: 'evt:player-paused',
 
   /**
    * A provider is taking too long, and there is another one to try.
@@ -863,6 +877,26 @@ export interface WtaApi {
     dismissSuggestion(): Promise<void>
     /** Reload the embed in place, without losing the episode position. */
     reload(): Promise<void>
+    /**
+     * Shrink the player into a corner of the app, or restore it.
+     *
+     * Playback carries on untouched: same page, same source, progress still
+     * recorded. What changes is where the video sits (the renderer reports
+     * the new rectangle through `setBounds`, as it always does) and what is
+     * drawn over it: the player's own chrome stands aside, and with it any
+     * countdown to switch source, which must never run where the offer
+     * cannot be seen.
+     */
+    setMini(mini: boolean): Promise<void>
+    /**
+     * Pause or resume the provider's video.
+     *
+     * Reaches into the provider's frames: on desktop through `WebFrameMain`,
+     * on Android through a document-start relay (`bridge/mediarelay.ts`).
+     * The answer comes back as `on.playerPaused`, from the video itself,
+     * rather than being assumed.
+     */
+    setPaused(paused: boolean): Promise<void>
   }
   mal: {
     /** Opens a file picker. Null when the user cancelled. */
@@ -985,6 +1019,10 @@ export interface WtaApi {
     storeChanged(cb: () => void): () => void
     playbackActive(cb: (active: boolean) => void): () => void
     playerState(cb: (state: PlayerState | null) => void): () => void
+    /** True while the player is shrunk into the corner. */
+    playerMini(cb: (mini: boolean) => void): () => void
+    /** Whether the video is paused, as the video itself reports it. */
+    playerPaused(cb: (paused: boolean) => void): () => void
     playerSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
     /** True while the pointer is near the top edge of the video. */
     playerPointerTop(cb: (nearTop: boolean) => void): () => void
@@ -1080,6 +1118,8 @@ export interface WtaChromeApi {
   onContext(cb: (context: PlayerContext) => void): () => void
   /** The standing offer to change source, or null when there is none. */
   onSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
+  /** True while the player is shrunk into the app's corner and this chrome is out of sight. */
+  onMini(cb: (mini: boolean) => void): () => void
   /** Pointer near the top of the picture, reported by the view that can see it. */
   onPointerTop(cb: (nearTop: boolean) => void): () => void
 

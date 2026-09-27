@@ -71,6 +71,8 @@ const api: WtaApi = {
       ipcRenderer.invoke(CH.playSwitchProvider, providerId),
     dismissSuggestion: () => ipcRenderer.invoke(CH.playDismissSuggestion),
     reload: () => ipcRenderer.invoke(CH.playReload),
+    setMini: (mini: boolean) => ipcRenderer.invoke(CH.playSetMini, mini),
+    setPaused: (paused: boolean) => ipcRenderer.invoke(CH.playSetPaused, paused),
   },
   mal: {
     preview: () => ipcRenderer.invoke(CH.malPreview),
@@ -112,6 +114,8 @@ const api: WtaApi = {
     storeChanged: (cb) => subscribe(EV.storeChanged, cb),
     playbackActive: (cb) => subscribe(EV.playbackActive, cb),
     playerState: (cb) => subscribe(EV.playerState, cb),
+    playerMini: (cb) => subscribe(EV.playerMini, cb),
+    playerPaused: (cb) => subscribe(EV.playerPaused, cb),
     playerSuggestion: (cb) => subscribe(EV.playerSuggestion, cb),
     playerPointerTop: (cb) => subscribe(EV.playerPointerTop, cb),
     providerScan: (cb) => subscribe(EV.providerScan, cb),

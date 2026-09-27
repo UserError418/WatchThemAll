@@ -83,6 +83,19 @@ export interface InlinePlayer {
   /** Move the video. Called by the renderer whenever its slot moves or resizes. */
   setBounds: (bounds: PlayerBounds) => void
   /**
+   * Shrink into the app's corner, or come back.
+   *
+   * The video view itself moves wherever the renderer's slot says, as
+   * always. What this changes is the two views stacked on it: the chrome
+   * and the skip button are sized to nothing, because at a few hundred
+   * pixels wide the app draws its own controls beside the picture instead.
+   * The chrome is told as well, so that it holds any countdown to switch
+   * source while nobody can see it.
+   */
+  setMini: (mini: boolean) => void
+  /** Pause or resume the provider's video. See `PAUSE_SCRIPT`. */
+  setPaused: (paused: boolean) => void
+  /**
    * Forward an event to the player chrome's own document.
    *
    * The chrome is a separate `WebContentsView` with its own preload, so the
@@ -265,15 +278,16 @@ export interface InlinePlayerOptions {
     isAnimated: (tmdbId: number) => Promise<boolean>
   }
   /**
-   * The user asked to leave the player — the chrome's back button.
+   * The chrome's Back button was pressed.
    *
-   * Separate from `onClosed`, and the confusion between the two is why that
-   * button did nothing at all: `onClosed` fires *after* the view has torn
-   * itself down, so wiring "go back" to it asked the player to report a
-   * teardown that nobody had started. This one is a request; the host decides
-   * what leaving means and calls `destroy`.
+   * A request, and the host decides what it means. Since the mini player it
+   * means "shrink into the corner", not "stop". It is separate from
+   * `onClosed`, and the confusion between the two once made that button do
+   * nothing at all: `onClosed` fires *after* the view has torn itself down,
+   * so wiring Back to it asked the player to report a teardown nobody had
+   * started.
    */
-  onRequestClose?: () => void
+  onBack?: () => void
   /** Fired once this view has torn itself down, from `destroy`. */
   onClosed?: () => void
   /**
@@ -300,6 +314,11 @@ export interface InlinePlayerOptions {
    */
   onSuggest?: (suggestion: PlayerSuggestion | null) => void
   /**
+   * The video started or stopped moving, as Chromium's own media events
+   * report it, for the mini player's play/pause button.
+   */
+  onPlayingChange?: (playing: boolean) => void
+  /**
    * Whether "Test all sources" currently rates this provider as working for
    * the title being played. An offer to leave such a source never counts down
    * by itself — see `mayAutoSwitch`. Asked at the moment of the offer, so a
@@ -307,6 +326,39 @@ export interface InlinePlayerOptions {
    */
   testedWorking?: (providerId: string) => boolean
 }
+
+/**
+ * Pause every video in a frame, for the mini player's button.
+ *
+ * Every one, not just the film: an advert left running is exactly what a
+ * pause should also stop.
+ */
+const PAUSE_SCRIPT = `(() => {
+  for (const video of document.querySelectorAll('video')) video.pause()
+})()`
+
+/**
+ * Resume the film, and only the film: the biggest video with a real
+ * duration, the same choice `READ_POSITION_SCRIPT` makes. Resuming every
+ * video would restart an advert's clip along with it. `play()` rejects when
+ * the page refuses. The rejection is swallowed, because the answer that
+ * counts arrives as `media-started-playing`, or does not.
+ */
+const RESUME_SCRIPT = `(() => {
+  let best = null
+  let bestArea = 0
+  for (const video of document.querySelectorAll('video')) {
+    const duration = Number(video.duration)
+    if (!Number.isFinite(duration) || duration <= 0) continue
+    const rect = video.getBoundingClientRect()
+    const area = rect.width * rect.height
+    if (area > bestArea) {
+      best = video
+      bestArea = area
+    }
+  }
+  best?.play().catch(() => {})
+})()`
 
 /**
  * Find the video that *is* the film, inside whatever frame holds it.
@@ -406,6 +458,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   view.setBackgroundColor('#000000')
 
   let closed = false
+  /** Shrunk into the app's corner; see `setMini`. */
+  let mini = false
 
   const player: InlinePlayer = {
     session: contents.session,
@@ -419,6 +473,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // Replaced below, once the view exists to press into.
     pressPlay: async () => {},
     setBounds: () => {},
+    setMini: () => {},
+    setPaused: () => {},
     // Replaced once the overlay exists; until then there is nothing to tell.
     notifyChrome: () => {},
     load: () => {},
@@ -1618,6 +1674,36 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     placeSkip()
   }
 
+  player.setMini = (next: boolean): void => {
+    if (closed || win.isDestroyed()) return
+    mini = next
+    placeOverlay(overlayArea)
+    placeSkip()
+    player.notifyChrome(EV.playerMini, next)
+  }
+
+  player.setPaused = (paused: boolean): void => {
+    if (!alive()) return
+    const script = paused ? PAUSE_SCRIPT : RESUME_SCRIPT
+    // Not awaited: the caller learns the outcome from the media events below,
+    // and a frame whose renderer has died never settles its promise at all
+    // (see `FRAME_ANSWER_MS` in `pressplay.ts`).
+    for (const frame of contents.mainFrame.framesInSubtree) {
+      try {
+        frame.executeJavaScript(script, true).catch(() => {
+          /* frame detached or navigated away */
+        })
+      } catch {
+        /* the frame went between listing and calling */
+      }
+    }
+  }
+
+  // What the play/pause button shows. From the video itself, so a pause the
+  // provider's own controls made reads the same as one from the button.
+  contents.on('media-started-playing', () => options.onPlayingChange?.(true))
+  contents.on('media-paused', () => options.onPlayingChange?.(false))
+
   player.load = (nextUrl: string): void => {
     if (!alive()) return
     // `load` is how the host moves to another episode; the host has already
@@ -1814,6 +1900,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const placeSkip = (): void => {
     if (skipView === null || closed || win.isDestroyed()) return
     const slot = view.getBounds()
+    if (mini) {
+      skipView.setBounds({ x: slot.x, y: slot.y, width: 0, height: 0 })
+      return
+    }
     const width = Math.min(skipSize.width, Math.max(0, slot.width - SKIP_MARGIN * 2))
     const height = Math.min(skipSize.height, Math.max(0, slot.height - SKIP_MARGIN * 2))
     skipView.setBounds({
@@ -1831,6 +1921,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const placeOverlay = (area: OverlayArea): void => {
     if (overlay === null || closed || win.isDestroyed()) return
     const slot = view.getBounds()
+    // Sized to nothing rather than removed: its document keeps running, so
+    // the bar, the source menu and a held offer are all still there on the
+    // way back out of the corner.
+    if (mini) {
+      overlay.setBounds({ x: slot.x, y: slot.y, width: 0, height: 0 })
+      return
+    }
     const width = area.width === null ? slot.width : Math.min(Math.round(area.width), slot.width)
     overlay.setBounds({
       x: slot.x + Math.round((slot.width - width) / 2),
@@ -1850,7 +1947,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
   const onBack = (event: Electron.IpcMainEvent): void => {
     if (overlay === null || event.sender !== overlay.webContents) return
-    options.onRequestClose?.()
+    options.onBack?.()
   }
   const onSkipSize = (
     event: Electron.IpcMainEvent,

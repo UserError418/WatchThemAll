@@ -37,6 +37,9 @@
   --nav-height: 54px;
   --tab-bar-height: 58px;
 
+  /* The mini player docks just above the tab bar, where YouTube's does. */
+  --mini-bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + var(--space-2));
+
   /* ── Cards ───────────────────────────────────────────────────────────── */
 
   /*

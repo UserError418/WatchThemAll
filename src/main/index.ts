@@ -317,11 +317,19 @@ function openPlayer(
     */
     chromeUrl: chromeDocumentUrl(),
     /*
-      The chrome's back button. It sends a request rather than closing itself,
-      because leaving the player is the app's business: the window has to drop
-      its player state and tell the renderer, and the view cannot do either.
+      The chrome's Back button shrinks the player into the app's corner, like
+      YouTube's (the owner, 2026-09-27); the mini player's ✕ is what stops it.
+      A request rather than something the view does itself, because the app
+      window has to be told and has to make room.
     */
-    onRequestClose: () => closePlayer(),
+    onBack: () => setPlayerMini(true),
+    // The mini player hears about a failing source too, since the chrome
+    // that normally shows the offer is out of sight while it is small.
+    onSuggest: (suggestion) => send(EV.playerSuggestion, suggestion),
+    onPlayingChange: (playing) => {
+      videoPlaying = playing
+      send(EV.playerPaused, !playing)
+    },
     /*
       The skip-intro offer, and the switch that governs it.
 
@@ -544,6 +552,27 @@ function sendPlayerState(): void {
 }
 
 /**
+ * Whether the player is shrunk into the app's corner.
+ *
+ * Kept here rather than in the renderer, because the Back that starts it is
+ * pressed in the player's own chrome, which only reaches main.
+ */
+let playerMini = false
+
+/** Whether the provider's video is moving, per Chromium's media events. */
+let videoPlaying = false
+
+function setPlayerMini(mini: boolean): void {
+  if (!player || playerMini === mini) return
+  playerMini = mini
+  player.setMini(mini)
+  send(EV.playerMini, mini)
+  // The button's first state. Events only report changes, and the mini
+  // player did not exist to hear the last one.
+  send(EV.playerPaused, !videoPlaying)
+}
+
+/**
  * Stop playing and put the app back.
  *
  * `announce` is false only when a new player is about to replace this one —
@@ -556,6 +585,13 @@ function closePlayer(announce = true): void {
   leaveCurrent()
   player.destroy()
   player = null
+  videoPlaying = false
+  // Whatever plays next opens full size, even when it replaces a mini player:
+  // pressing Play is asking to watch.
+  if (playerMini) {
+    playerMini = false
+    send(EV.playerMini, false)
+  }
   // The user stopped watching; the tester may take its turn again.
   watchlistTester.poke()
 
@@ -875,6 +911,8 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       keepWaiting: () => player?.keepWaiting(),
       acceptSuggestion: () => player?.acceptSuggestion() ?? false,
       reloadPlayer: () => player?.reload(),
+      setPlayerMini,
+      setPlayerPaused: (paused) => player?.setPaused(paused),
       setPlayerMuted: (muted) => player?.setMuted(muted),
       pressPlay: async () => player?.pressPlay(),
       cast,

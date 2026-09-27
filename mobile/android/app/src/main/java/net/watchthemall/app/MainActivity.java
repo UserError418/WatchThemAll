@@ -58,6 +58,7 @@ public class MainActivity extends BridgeActivity {
          */
         registerPlugin(CastPlugin.class);
         registerPlugin(ProbeViewPlugin.class);
+        registerPlugin(PlayerRelayPlugin.class);
 
         super.onCreate(savedInstanceState);
 

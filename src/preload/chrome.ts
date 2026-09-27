@@ -137,6 +137,11 @@ const api: WtaChromeApi = {
     ipcRenderer.on(EV.playerSuggestion, listener)
     return () => ipcRenderer.removeListener(EV.playerSuggestion, listener)
   },
+  onMini: (callback: (mini: boolean) => void): (() => void) => {
+    const listener = (_event: unknown, mini: boolean): void => callback(mini)
+    ipcRenderer.on(EV.playerMini, listener)
+    return () => ipcRenderer.removeListener(EV.playerMini, listener)
+  },
 
   /**
    * Jump past the intro.

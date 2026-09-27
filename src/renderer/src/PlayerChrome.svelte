@@ -737,6 +737,16 @@
   let countdown = $state<number | null>(null)
 
   /**
+   * The player is shrunk into the app's corner, and this chrome with it.
+   *
+   * On the desktop this view is sized to nothing, and on the phone its host
+   * is hidden. Its document keeps running, so the bar, the menus and a
+   * standing offer are all still here on the way back.
+   */
+  let mini = $state(false)
+  $effect(() => api?.onMini((next) => (mini = next)))
+
+  /**
    * Keyed on the offer itself, so a second provider failing restarts the clock
    * rather than inheriting what was left of the first one's.
    */
@@ -766,6 +776,17 @@
      * obeys. The banner stays, without a clock.
      */
     if (!pending.autoSwitch) {
+      countdown = null
+      return
+    }
+    /*
+      Nor while the player is small. The rule is that the player never
+      switches without the offer bar on screen, and a mini player has no
+      room for one. So the offer waits: the mini player says the source
+      stopped, and the countdown starts from the top once the user opens the
+      player again. That is where they can see it and stop it.
+    */
+    if (mini) {
       countdown = null
       return
     }

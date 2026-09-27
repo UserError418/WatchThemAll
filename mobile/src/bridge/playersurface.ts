@@ -66,6 +66,7 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { StatusBar } from '@capacitor/status-bar'
 
 import { parsePlayerMessage, type PlayerContext, type PlayerReading } from '@main/playermessage'
+import { parseRelayState, relayCommand } from './mediarelay'
 import type { PlayCandidate } from '@main/providers'
 
 /** Where the renderer's player chrome wants the video, in CSS pixels. */
@@ -186,9 +187,17 @@ function listenForReadings(
   frame: HTMLIFrameElement,
   onReading: (reading: PlayerReading) => void,
   expects: () => PlayerContext | null,
+  onMediaState: (playing: boolean) => void,
 ): () => void {
   const onMessage = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow) return
+    // The mini player's relay reporting the video starting or stopping. See
+    // `mediarelay.ts`; it shares this listener for the sender check.
+    const playing = parseRelayState(event.data)
+    if (playing !== null) {
+      onMediaState(playing)
+      return
+    }
     // What is playing goes *in*, not just out. A provider that posts its whole
     // progress library — both of the two that report anything do — leaves the
     // parser choosing between titles, and the only thing on this side of the
@@ -220,11 +229,18 @@ export interface PlayerSurfaceOptions {
    * one for the life of the app.
    */
   expects?(): PlayerContext | null
+  /** The video started (true) or stopped (false), as the relay reports it. */
+  onMediaState?(playing: boolean): void
 }
 
 export interface PlayerSurface {
   /** Show `candidate` in the surface, creating it on first use. */
   show(candidate: PlayCandidate): void
+  /**
+   * Pause or resume the provider's video, through the relay installed by
+   * `installMediaRelay`. The outcome comes back as `onMediaState`.
+   */
+  setPaused(paused: boolean): void
   /** Reload the current URL without changing provider. */
   reload(): void
   /**
@@ -279,10 +295,11 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
-    if (options.onReading) {
-      const onReading = options.onReading.bind(options)
+    if (options.onReading || options.onMediaState) {
+      const onReading = options.onReading?.bind(options) ?? (() => {})
       const expects = options.expects?.bind(options) ?? (() => null)
-      stopListening = listenForReadings(frame, onReading, expects)
+      const onMediaState = options.onMediaState?.bind(options) ?? (() => {})
+      stopListening = listenForReadings(frame, onReading, expects, onMediaState)
     }
     return frame
   }
@@ -298,6 +315,12 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       // `src` rather than `location.replace`: the frame is cross-origin, so its
       // `contentWindow` is off limits from here.
       el.src = candidate.url
+    },
+
+    setPaused(paused) {
+      // '*' because the provider's origin is whatever it is today. The
+      // message carries nothing but the word pause or play.
+      frame?.contentWindow?.postMessage(relayCommand(paused), '*')
     },
 
     reload() {

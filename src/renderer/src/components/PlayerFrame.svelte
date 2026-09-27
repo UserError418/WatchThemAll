@@ -30,10 +30,11 @@
      * `$state(...)` in this file parse as a store subscription on it.
      */
     player: PlayerState
-    onclose: () => void
+    /** Escape: the keyboard's Back, which shrinks the player into the corner. */
+    onback: () => void
   }
 
-  const { onclose }: Props = $props()
+  const { onback }: Props = $props()
 
   let slot = $state<HTMLDivElement | null>(null)
 
@@ -77,7 +78,7 @@
   })
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onclose()
+    if (event.key === 'Escape') onback()
   }
 </script>
 
