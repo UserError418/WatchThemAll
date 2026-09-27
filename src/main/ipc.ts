@@ -193,7 +193,7 @@ export function registerIpc(deps: IpcDeps): void {
     forYouRow(store.read(), req, tmdbNetwork),
   )
 
-  ipcMain.handle(CH.tmdbDetail, (_e, id: number, type: MediaType) => tmdb.detail(id, type))
+  ipcMain.handle(CH.tmdbDetail, (_e, id: number, type: MediaType) => tmdb.detailOrNull(id, type))
   ipcMain.handle(CH.tmdbSeason, (_e, id: number, season: number) => tmdb.season(id, season))
   ipcMain.handle(CH.tmdbTrailer, (_e, id: number, type: MediaType) => tmdb.trailer(id, type))
 

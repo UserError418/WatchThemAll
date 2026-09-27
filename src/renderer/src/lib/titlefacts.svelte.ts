@@ -38,6 +38,13 @@ class TitleFactsStore {
   private readonly facts = new SvelteMap<string, TitleFacts>()
   private readonly queue: Array<{ type: MediaType; tmdbId: number }> = []
   private readonly pending = new Set<string>()
+  /**
+   * Titles TMDB answered it does not know, this session.
+   *
+   * They left nothing behind, so their rows asked again every time they came
+   * into view. Not persisted: TMDB can learn a title, and a restart asks.
+   */
+  private readonly unknown = new Set<string>()
   private active = 0
   private saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -68,7 +75,7 @@ class TitleFactsStore {
     const key = factsKey(type, tmdbId)
     const held = this.facts.get(key)
     if (held && !isStale(held, Date.now())) return
-    if (this.pending.has(key)) return
+    if (this.pending.has(key) || this.unknown.has(key)) return
     this.pending.add(key)
     this.queue.push({ type, tmdbId })
     this.pump()
@@ -90,7 +97,10 @@ class TitleFactsStore {
     try {
       const detail = await window.wta.tmdb.detail(tmdbId, type)
       // Null is TMDB not knowing the title — an import that never resolved.
-      if (detail === null) return
+      if (detail === null) {
+        this.unknown.add(key)
+        return
+      }
       this.facts.set(key, factsFromDetail(detail, Date.now()))
       this.scheduleSave()
     } catch {

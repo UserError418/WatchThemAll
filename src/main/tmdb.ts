@@ -62,6 +62,14 @@ const inflight = new Map<string, Promise<unknown>>()
 
 type Params = Record<string, string | number>
 
+/** TMDB has no such title (a 404), as distinct from being unreachable. */
+export class TmdbNotFound extends Error {
+  constructor(path: string) {
+    super(`TMDB has no ${path}`)
+    this.name = 'TmdbNotFound'
+  }
+}
+
 /** The request's URL, which is also its cache key. */
 function urlFor(path: string, params: Params): string {
   const url = new URL(BASE + path)
@@ -89,6 +97,7 @@ async function get<T>(path: string, params: Params = {}): Promise<T> {
       headers: REQUEST_HEADERS,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
+    if (res.status === 404) throw new TmdbNotFound(path)
     if (!res.ok) throw new Error(`TMDB ${path} responded ${res.status}`)
     const value = (await res.json()) as T
     remember(key, path, value)
@@ -353,6 +362,20 @@ export async function search(query: string, page = 1): Promise<Paged<MediaSummar
   if (!query.trim()) return { items: [], page: 1, totalPages: 0 }
   const res = await get<TmdbPage>('/search/multi', { query, page, include_adult: 'false' })
   return toPaged(res, 'tv')
+}
+
+/**
+ * `detail` for the renderer, whose contract answers `null` for a title TMDB
+ * does not know. The renderer can then tell "no such title" (say so, and do
+ * not ask again) from "could not ask" (try again later).
+ */
+export async function detailOrNull(tmdbId: number, type: MediaType): Promise<MediaDetail | null> {
+  try {
+    return await detail(tmdbId, type)
+  } catch (err) {
+    if (err instanceof TmdbNotFound) return null
+    throw err
+  }
 }
 
 /** What every detail request asks for; see `detail`. Shared so `trailer` can find its answer. */

@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { detail, genres, keywords, pickLogo, search, trailer, type TmdbLogo } from './tmdb'
+import { detail, detailOrNull, genres, keywords, pickLogo, search, trailer, type TmdbLogo } from './tmdb'
 
 const logo = (file_path: string, iso_639_1: string | null, vote_average: number): TmdbLogo => ({
   file_path,
@@ -105,6 +105,14 @@ describe('the request cache', () => {
 
     expect(await trailer(4343, 'movie')).toBe('xyz')
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/movie/4343/videos')
+  })
+
+  it('answers null for a title TMDB does not know, and throws when it cannot ask', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
+    expect(await detailOrNull(4444, 'tv')).toBeNull()
+
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+    await expect(detailOrNull(4545, 'tv')).rejects.toThrow('503')
   })
 })
 

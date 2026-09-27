@@ -1304,7 +1304,7 @@ export async function createBridge(): Promise<WtaApi> {
       forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, tmdbNetwork),
       forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, tmdbNetwork),
 
-      detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),
+      detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detailOrNull(id, type),
       season: (id: number, s: number): Promise<Season | null> => tmdb.season(id, s),
       trailer: (id: number, type: MediaType) => tmdb.trailer(id, type),
     },
