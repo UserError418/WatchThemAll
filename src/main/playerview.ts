@@ -39,12 +39,12 @@
 import { WebContentsView, BrowserWindow, ipcMain, webFrameMain, type Session } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
-import type { BarState, OverlayArea, PlayRequest, PlayerSuggestion } from '@shared/ipc'
+import type { BarState, EpisodeNav, OverlayArea, PlayRequest, PlayerSuggestion } from '@shared/ipc'
 import { filmRelayScript } from '@shared/filmrelay'
 import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 import { applyProviderReferer } from './identity'
 import { decide } from './adblock'
-import { pressPlay as pressPlayIn } from './pressplay'
+import { clickPlayInFrames, pressPlay as pressPlayIn } from './pressplay'
 import { beginStallWatch, frozenSeconds, observeStall, type StallWatch } from './playbackstall'
 import { checkRuntime } from './runtimecheck'
 import { findIntro } from './skiplookup'
@@ -175,6 +175,8 @@ export interface InlinePlayer {
   action: (action: PlayerAction) => void
   /** The own-controls setting changed while playing; tell the shell. */
   refreshConfig: () => void
+  /** Whether `contents` is this player's shell: who may ask for its subtitles. */
+  owns: (contents: Electron.WebContents) => boolean
 }
 
 /**
@@ -310,6 +312,8 @@ export interface InlinePlayerOptions {
   onBack?: () => void
   /** v2: draw the app's own controls and hide the source's (`Settings.ownControls`). */
   ownControls?: () => boolean
+  /** v2: the subtitle language to start with (`Settings.subtitleLanguage`). */
+  subtitleLanguage?: () => string | null
   /** Fired once this view has torn itself down, from `destroy`. */
   onClosed?: () => void
   /**
@@ -473,6 +477,16 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const contents = view.webContents
   contents.setBackgroundThrottling(false)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  /*
+    Never a download from a source's page. Electron answers an unhandled
+    download with a save dialog, so a source could put the system's file
+    picker in front of the user (reported by the owner, 2026-09-27). The
+    session is this player's own partition, so this reaches nothing else.
+  */
+  contents.session.on('will-download', (event, item) => {
+    console.log(`[download] refused ${new URL(item.getURL()).origin} (${item.getFilename()})`)
+    event.preventDefault()
+  })
   // Black rather than white: an embed page paints its own background late, and
   // a white flash between the app and the video is the most jarring thing a
   // player can do.
@@ -508,6 +522,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // Replaced below, once the views they route to exist.
     action: () => {},
     refreshConfig: () => {},
+    owns: () => false,
   }
 
   const currentCandidate = (): PlayCandidate | undefined => player.candidates[player.candidateIndex]
@@ -773,6 +788,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let pendingChange: { providerId: string; providerName: string; reason: string } | null = null
   /** Whether the bar is up, as the chrome last said; the shell's controls follow it. */
   let barState: BarState = { visible: true, away: false }
+  /** The episode strip is open, as the chrome last said; see `player.action`. */
+  let episodesOpen = false
 
   const sendConfig = (): void => {
     if (!alive()) return
@@ -780,6 +797,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       ownControls: options.ownControls?.() ?? false,
       fullscreen: !win.isDestroyed() && win.isFullScreen(),
       mini,
+      subtitleLanguage: options.subtitleLanguage?.() ?? null,
     })
   }
   // However fullscreen was entered or left: F, Escape, the window manager, the menu.
@@ -800,6 +818,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     }
   })
   player.refreshConfig = sendConfig
+  player.owns = (candidate) => candidate === contents
 
   /**
    * The success signal, and the only honest one.
@@ -1871,6 +1890,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
     ipcMain.removeListener(EV.playerKey, onPlayerKey)
     ipcMain.removeListener(EV.playerActivity, onActivity)
+    ipcMain.removeListener(EV.playerPressPlay, onPressPlay)
     leaveFullscreen()
     if (!win.isDestroyed()) {
       win.removeListener('enter-full-screen', sendConfig)
@@ -2050,6 +2070,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (overlay === null || event.sender !== overlay.webContents) return
     overlayArea = area
     placeOverlay(area)
+    episodesOpen = area.episodesOpen === true
     const next: BarState = { visible: area.barVisible ?? true, away: area.away ?? false }
     if (next.visible !== barState.visible || next.away !== barState.away) {
       barState = next
@@ -2094,8 +2115,26 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (fullscreenByPlayer) setFullscreen(false)
   }
 
+  /**
+   * While the episode strip is open, ←/→ move its highlight, Enter plays the
+   * highlighted episode, and Back or Escape close the strip (the owner,
+   * 2026-09-27). The film is not moved while the viewer is picking.
+   */
+  const EPISODE_KEYS: Partial<Record<PlayerAction, EpisodeNav>> = {
+    seekBack: 'prev',
+    seekForward: 'next',
+    episodes: 'play',
+    back: 'close',
+    escape: 'close',
+  }
+
   player.action = (action: PlayerAction): void => {
     if (!alive()) return
+    const nav = episodesOpen ? EPISODE_KEYS[action] : undefined
+    if (nav !== undefined && overlay !== null && !overlay.webContents.isDestroyed()) {
+      overlay.webContents.send(EV.chromeEpisodeNav, nav)
+      return
+    }
     switch (action) {
       case 'fullscreen':
         setFullscreen(!win.isFullScreen())
@@ -2138,8 +2177,18 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       overlay.webContents.send(EV.chromeActivity, hold === true)
     }
   }
+  /**
+   * The shell's cover is over the source, so a mouse click at the centre
+   * would land on the cover. What reaches the source's poster is a DOM click
+   * in its frames, which works on hidden elements too.
+   */
+  const onPressPlay = (event: Electron.IpcMainEvent): void => {
+    if (event.sender !== contents || !alive()) return
+    void clickPlayInFrames(contents).catch(() => {})
+  }
   ipcMain.on(EV.playerKey, onPlayerKey)
   ipcMain.on(EV.playerActivity, onActivity)
+  ipcMain.on(EV.playerPressPlay, onPressPlay)
 
   if (overlay !== null) {
     ipcMain.on(EV.chromeOverlayArea, onOverlayArea)

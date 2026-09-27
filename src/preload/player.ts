@@ -18,7 +18,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { EV } from '@shared/ipc'
+import { CH, EV } from '@shared/ipc'
 import type { BarState, PlayerContext, PlayerOverlayConfig, WtaPlayerApi } from '@shared/ipc'
 import { isPlayerAction, isTransportAction, type TransportAction } from '@shared/playerkeys'
 
@@ -66,6 +66,12 @@ const api: WtaPlayerApi = {
     if (isPlayerAction(action)) ipcRenderer.send(EV.playerKey, action)
   },
   activity: (hold) => ipcRenderer.send(EV.playerActivity, hold === true),
+  pressPlay: () => ipcRenderer.send(EV.playerPressPlay),
+  subtitles: {
+    languages: () => ipcRenderer.invoke(CH.subtitleLanguages),
+    load: (code, filmSeconds) => ipcRenderer.invoke(CH.subtitleLoad, code, filmSeconds),
+    remember: (code) => ipcRenderer.invoke(CH.subtitleRemember, code),
+  },
 }
 
 contextBridge.exposeInMainWorld('wtaPlayer', api)

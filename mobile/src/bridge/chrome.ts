@@ -162,6 +162,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     // by key.
     onActivity: never<boolean>,
     onOpenPanel: never<'episodes' | 'cast'>,
+    onEpisodeNav: never<'prev' | 'next' | 'play' | 'close'>,
     action: () => {},
   }
 }

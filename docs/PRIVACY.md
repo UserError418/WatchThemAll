@@ -74,6 +74,18 @@ Three details change what this actually exposes:
 Turning the feature off in the Providers panel stops all of these requests. There
 is nothing stored to delete.
 
+**Subtitles (only when you ask for them).** When a video source offers no
+subtitles of its own, the player can fetch a subtitle file from
+[OpenSubtitles](https://www.opensubtitles.org/). The request contains the IMDB id
+of the title, the season and episode number for a series, and the language, so
+OpenSubtitles learns what you are watching. Nothing else is sent: no account and
+no device identifier.
+
+- Nothing is sent until you open the subtitles menu in the player.
+- Once you pick a language, it is remembered, and later titles ask for subtitles
+  in it when they start playing.
+- Choosing "Off" in the same menu stops those requests.
+
 **Video embed providers** are third-party websites you choose to open from within
 the application. Your device connects to them directly, exactly as a browser
 would, and they see what any website you visit would see. WatchThemAll does not
@@ -86,9 +98,9 @@ No usage analytics. No crash reporting. No advertising identifiers. No profile o
 what you watch is built anywhere except on your own device, to order your own
 browse screen.
 
-Nothing is sent to any third party not listed above. The intro-skip lookup is the
-only one you can switch off, because it is the only one not required for the
-application to do what you asked it to.
+Nothing is sent to any third party not listed above. The intro-skip lookup and
+the subtitle search are the only ones you can switch off, because they are the
+only ones not required for the application to do what you asked it to.
 
 ## Children
 

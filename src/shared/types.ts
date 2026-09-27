@@ -904,6 +904,12 @@ export interface Settings {
    */
   ownControls: boolean
   /**
+   * The subtitle language last chosen in the player, OpenSubtitles' id
+   * (`eng`), or null for none. Once one is chosen, every later title starts
+   * with it; see `main/subtitlesearch.ts` for what that asks of whom.
+   */
+  subtitleLanguage: string | null
+  /**
    * How sources are ordered within each group — works, may work, does not
    * work — for the source lists and for Automatic alike. Every key, once, in
    * priority order. `list` orders completely, so anything after it never gets

@@ -306,6 +306,33 @@
           <dd>Close whatever is open — a title, a menu, the player</dd>
         </dl>
       </section>
+
+      <!-- The player's own keys: `@shared/playerkeys` is the table they come from. -->
+      <section class="card">
+        <h2>In the player</h2>
+        <dl class="keys">
+          <dt><kbd>Space</kbd></dt>
+          <dd>Play or pause</dd>
+          <dt><kbd>←</kbd> <kbd>→</kbd></dt>
+          <dd>Back or forward 10 seconds</dd>
+          <dt><kbd>↑</kbd> <kbd>↓</kbd></dt>
+          <dd>Volume up or down</dd>
+          <dt><kbd>M</kbd></dt>
+          <dd>Mute</dd>
+          <dt><kbd>F</kbd></dt>
+          <dd>Fullscreen</dd>
+          <dt><kbd>Enter</kbd></dt>
+          <dd>Episodes; then <kbd>←</kbd> <kbd>→</kbd> to pick one and <kbd>Enter</kbd> to play it</dd>
+          <dt><kbd>C</kbd></dt>
+          <dd>Play on a TV</dd>
+          <dt><kbd>R</kbd></dt>
+          <dd>Reload the source</dd>
+          <dt><kbd>Backspace</kbd></dt>
+          <dd>Back, keeping the video playing in the corner</dd>
+          <dt><kbd>Esc</kbd></dt>
+          <dd>Leave fullscreen, or go back</dd>
+        </dl>
+      </section>
     </div>
   </div>
 </div>

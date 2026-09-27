@@ -311,6 +311,9 @@ async function runProbe(
 
   const partition = `probe-${provider.id}-${Date.now()}`
   const probeSession = session.fromPartition(partition)
+  // A hidden test must never put a save dialog in front of the user; the
+  // player refuses downloads for the same reason (`playerview.ts`).
+  probeSession.on('will-download', (event) => event.preventDefault())
   applyBrowserIdentity(probeSession)
   applyProviderReferer(probeSession, provider.rootUrl)
 

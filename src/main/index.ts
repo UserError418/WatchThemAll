@@ -165,12 +165,13 @@ let player: InlinePlayer | null = null
  * The own-controls switch applies to what is playing, not only to the next
  * thing played: the shell is told as soon as the setting changes.
  */
-let ownControlsWas: boolean | null = null
+let shellSettingsWas: string | null = null
 store.subscribe((key) => {
   if (key !== 'settings') return
-  const now = store.read().settings.ownControls
-  if (now === ownControlsWas) return
-  ownControlsWas = now
+  const { ownControls, subtitleLanguage } = store.read().settings
+  const now = `${ownControls}:${subtitleLanguage}`
+  if (now === shellSettingsWas) return
+  shellSettingsWas = now
   player?.refreshConfig()
 })
 
@@ -479,6 +480,7 @@ function openPlayer(
     */
     onBack: () => setPlayerMini(true),
     ownControls: () => store.read().settings.ownControls,
+    subtitleLanguage: () => store.read().settings.subtitleLanguage,
     // The mini player hears about a failing source too, since the chrome
     // that normally shows the offer is out of sight while it is small.
     onSuggest: (suggestion) => send(EV.playerSuggestion, suggestion),
@@ -1113,6 +1115,14 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       setPlayerMini,
       setPlayerPaused: (paused) => player?.setPaused(paused),
       playerAction: (action) => player?.action(action),
+      subtitleQuery: (sender) =>
+        player !== null && player.owns(sender)
+          ? { imdbId: player.context.imdbId, season: player.context.season, episode: player.context.episode }
+          : null,
+      setSubtitleLanguage: (code) => {
+        const settings = store.read().settings
+        if (settings.subtitleLanguage !== code) store.applyPatch({ settings: { ...settings, subtitleLanguage: code } })
+      },
       setOnTv,
       upNextNow: () => upNext.playNow(),
       upNextCancel: () => upNext.cancel(),

@@ -53,6 +53,7 @@ import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
 import { unreadableLibrary } from '@shared/store/core'
 import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
+import { loadSubtitles, subtitleLanguages, type SubtitleQuery } from './subtitlesearch'
 
 /** Shown when a cast is asked for with no player open. */
 const NOTHING_PLAYING_REASON = 'Nothing is playing.'
@@ -127,6 +128,10 @@ export interface IpcDeps {
   setPlayerPaused: (paused: boolean) => void
   /** A player key pressed in the app window (`playerkeys.ts`). */
   playerAction: (action: PlayerAction) => void
+  /** What the player whose shell is `sender` plays, for its subtitles; null for anyone else. */
+  subtitleQuery: (sender: Electron.WebContents) => SubtitleQuery | null
+  /** Remember the subtitle language to start with, or none. */
+  setSubtitleLanguage: (code: string | null) => void
   /**
    * Casting to a television.
    *
@@ -479,6 +484,24 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.playSetPaused, (_e, paused: unknown) => deps.setPlayerPaused(paused === true))
   ipcMain.handle(CH.playAction, (_e, action: unknown) => {
     if (isPlayerAction(action)) deps.playerAction(action)
+  })
+  // The shell names neither the title nor the episode: main asks about what
+  // that shell's player is playing, and nothing else.
+  ipcMain.handle(CH.subtitleLanguages, async (e) => {
+    const query = deps.subtitleQuery(e.sender)
+    return query === null ? [] : subtitleLanguages(query)
+  })
+  ipcMain.handle(CH.subtitleLoad, async (e, code: unknown, filmSeconds: unknown) => {
+    const query = deps.subtitleQuery(e.sender)
+    if (query === null || typeof code !== 'string' || !/^[a-z]{3}$/.test(code)) return null
+    deps.setSubtitleLanguage(code)
+    const seconds = typeof filmSeconds === 'number' && Number.isFinite(filmSeconds) ? filmSeconds : null
+    return loadSubtitles(query, code, seconds)
+  })
+  ipcMain.handle(CH.subtitleRemember, (e, code: unknown) => {
+    if (deps.subtitleQuery(e.sender) === null) return
+    if (code === null) deps.setSubtitleLanguage(null)
+    else if (typeof code === 'string' && /^[a-z]{3}$/.test(code)) deps.setSubtitleLanguage(code)
   })
 
   ipcMain.handle(CH.dataExport, async () => {

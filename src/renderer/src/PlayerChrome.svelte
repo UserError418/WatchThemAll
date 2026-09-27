@@ -1024,6 +1024,7 @@
             width: null,
             barVisible,
             away: false,
+            episodesOpen: barVisible && panel === 'episodes',
           },
   )
 
@@ -1130,6 +1131,56 @@
     list.addEventListener('wheel', onWheel, { passive: false })
     return () => list.removeEventListener('wheel', onWheel)
   })
+
+  /* ── The strip by keyboard (v2) ──────────────────────────────────────── */
+
+  /**
+   * The episode the arrows are on, in the season being browsed. It starts on
+   * the playing episode, or on the first one that has aired.
+   */
+  let highlighted = $state<number | null>(null)
+
+  $effect(() => {
+    if (panel !== 'episodes' || episodes.length === 0) {
+      if (panel !== 'episodes') highlighted = null
+      return
+    }
+    if (highlighted !== null && episodes.some((e) => e.episode === highlighted)) return
+    const playing = browsingSeason === context?.season ? (context?.episode ?? null) : null
+    highlighted = playing ?? episodes.find((e) => hasAired(e.airDate))?.episode ?? null
+  })
+
+  /** Only episodes that have aired can be landed on; an unaired one cannot play. */
+  function moveHighlight(step: 1 | -1): void {
+    const playable = episodes.filter((e) => hasAired(e.airDate))
+    if (playable.length === 0) return
+    const at = playable.findIndex((e) => e.episode === highlighted)
+    const next = playable[Math.min(playable.length - 1, Math.max(0, at < 0 ? 0 : at + step))]
+    highlighted = next?.episode ?? null
+    // A viewer picking an episode is using the bar: its clock starts over.
+    activityTick += 1
+  }
+
+  $effect(() => {
+    const target = highlighted
+    if (target === null || !episodeList) return
+    episodeList
+      .querySelector<HTMLElement>(`[data-episode="${target}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  })
+
+  $effect(() =>
+    api?.onEpisodeNav((nav) => {
+      if (panel !== 'episodes') return
+      if (nav === 'prev') moveHighlight(-1)
+      else if (nav === 'next') moveHighlight(1)
+      else if (nav === 'close') panel = 'none'
+      else if (highlighted !== null && browsingSeason !== null) {
+        api.goTo(browsingSeason, highlighted)
+        panel = 'none'
+      }
+    }),
+  )
 
   const positionLabel = $derived(
     context === null || context.season === null || context.episode === null
@@ -1585,6 +1636,8 @@
                    and the detail view's list draws the same line. -->
               <button
                 class="episode"
+                data-episode={episode.episode}
+                class:highlighted={episode.episode === highlighted && !touch}
                 class:playing={episode.episode === context?.episode &&
                   browsingSeason === context?.season}
                 class:unaired={!aired}
@@ -2242,6 +2295,25 @@
 
   .episode.playing .thumb {
     box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  /* Where the arrows are: lifted, with a white ring, apart from the amber of
+     the playing episode. */
+  .episode .thumb {
+    transition:
+      box-shadow 0.18s ease-out,
+      transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1.2);
+  }
+
+  .episode.highlighted .thumb {
+    box-shadow:
+      0 0 0 3px #f4f4f6,
+      0 8px 24px rgba(0, 0, 0, 0.55);
+    transform: translateY(-3px) scale(1.03);
+  }
+
+  .episode.highlighted .ep-title {
+    color: #fff;
   }
 
   .now-playing {

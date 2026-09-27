@@ -19,9 +19,11 @@
    * The design is in `docs/internal/v2-player.md`.
    */
   import { fade } from 'svelte/transition'
-  import type { BarState, PlayerOverlayConfig } from '@shared/ipc'
+  import type { BarState, PlayerContext, PlayerOverlayConfig } from '@shared/ipc'
+  import type { FilmTrack } from '@shared/filmrelay'
   import { actionForEvent, SEEK_STEP_SECONDS, VOLUME_STEP, type TransportAction } from '@shared/playerkeys'
   import { clock } from '../lib/format'
+  import { cuesAt, type Cue, type SubtitleLanguage } from '@shared/subtitles'
   import { FilmLink, type FilmView } from './filmlink'
   import SeekBar from './SeekBar.svelte'
   import { ICONS } from './icons'
@@ -31,28 +33,52 @@
 
   const link = new FilmLink((message) => frame?.contentWindow?.postMessage(message, '*'))
 
-  let config = $state<PlayerOverlayConfig>({ ownControls: false, fullscreen: false, mini: false })
+  /*
+    Our controls are assumed on until main says otherwise, so the cover is up
+    from this component's first frame rather than from the config's arrival.
+  */
+  let config = $state<PlayerOverlayConfig>({ ownControls: true, fullscreen: false, mini: false, subtitleLanguage: null })
   let bar = $state<BarState>({ visible: true, away: false })
   let view = $state<FilmView>(link.view())
 
+  let context = $state<PlayerContext | null>(null)
+
   /** The user asked for the source's own controls, for this load. */
   let sourceChosen = $state(false)
-  /** The film has played at least once in this load; before that, the source's page rules. */
+  /** The film's time has moved in this load: it is playing, not just loaded. */
   let started = $state(false)
+  /**
+   * The source's own page is showing, because we could not play it without the
+   * viewer: nothing playable after `REVEAL_AFTER_MS` (a captcha, a gate, an
+   * error of its own), or the film gone for `LOST_REVEAL_MS`. Undone as soon
+   * as the film moves again.
+   */
+  let revealed = $state(false)
 
   const film = $derived(view.film)
-  const engaged = $derived(config.ownControls && !sourceChosen && started && film !== null)
+  /** Our controls rather than the source's: on, and not handed back by the viewer. */
+  const playerMode = $derived(config.ownControls && !sourceChosen)
+  const engaged = $derived(playerMode && started && film !== null && !revealed)
+  /**
+   * Our cover over the source's page, from its first frame (the owner,
+   * 2026-09-27: never the source's own elements in player mode). It is up
+   * while the source loads, and while a playing film is briefly gone
+   * (a quality change, a new element, a stall).
+   */
+  const curtain = $derived(playerMode && !revealed && (!started || film === null))
+
+  const REVEAL_AFTER_MS = 25_000
+  const LOST_REVEAL_MS = 10_000
+  /** When to press the source's own play control while it has no film yet. */
+  const PRESS_AT_MS = [2_500, 6_000, 11_000, 17_000]
 
   /**
-   * The film is there but has not played yet: a source waiting on its poster
-   * for a click. Ours plays it directly, which worked on every source the
-   * study measured, even where a real click on the source's own poster did
-   * nothing (VidRock under test). Only the button takes the pointer; the rest
-   * of the source's page stays reachable, in case it wants something else
-   * first.
+   * Last resort: our own play button, over the cover, for a film that is there
+   * and has refused every automatic start. Space does the same.
    */
+  let autoplayGaveUp = $state(false)
   const offerPlay = $derived(
-    config.ownControls && !sourceChosen && !started && film !== null && film.paused && !film.ended && view.wanted !== false,
+    playerMode && !started && !revealed && film !== null && film.paused && !film.ended && autoplayGaveUp,
   )
 
   /* ── The film ──────────────────────────────────────────────────────────── */
@@ -71,14 +97,58 @@
     // the controls are away, and a stale one would put the time behind it.
     now = performance.now()
     const f = view.film
-    if (started || f === null) return
-    if (f.paused) {
+    if (f === null || f.paused) {
       playingAt = null
       return
     }
-    if (playingAt !== null && f.seconds > playingAt + 0.2) started = true
+    if (playingAt !== null && f.seconds > playingAt + 0.2) {
+      started = true
+      revealed = false
+    }
     playingAt = f.seconds
   }
+
+  /* ── Starting without being asked ─────────────────────────────────────── */
+
+  const openedAt = performance.now()
+
+  /**
+   * Start the film the moment it is there (the owner, 2026-09-27: no second
+   * press of Play). While there is no film yet, press the source's own play
+   * control for it, in its frames, a few times (main does the pressing:
+   * `pressPlay`). While there is still nothing after `REVEAL_AFTER_MS`, the
+   * source needs the viewer, and its page is shown.
+   */
+  $effect(() => {
+    if (!playerMode) return
+    // How many of PRESS_AT_MS (ascending) are done: at most one press a tick.
+    let presses = 0
+    const tick = setInterval(() => {
+      const elapsed = performance.now() - openedAt
+      if (started) return
+      if (view.film === null && presses < PRESS_AT_MS.length && elapsed >= PRESS_AT_MS[presses]!) {
+        presses += 1
+        api?.pressPlay()
+      }
+      if (elapsed >= REVEAL_AFTER_MS && !revealed) revealed = true
+    }, 500)
+    return () => clearInterval(tick)
+  })
+
+  // Autoplay: every time the film is there, paused, and nobody has asked for anything.
+  $effect(() => {
+    if (!playerMode || started || film === null || !film.paused || film.ended || view.wanted !== null) return
+    if (performance.now() - openedAt > REVEAL_AFTER_MS / 2) autoplayGaveUp = true
+    link.setPaused(false)
+    refresh()
+  })
+
+  // A playing film that has gone: our cover for a while, then the source's page.
+  $effect(() => {
+    if (!playerMode || !started || film !== null || revealed) return
+    const timer = setTimeout(() => (revealed = true), LOST_REVEAL_MS)
+    return () => clearTimeout(timer)
+  })
 
   $effect(() => {
     const onMessage = (event: MessageEvent): void => {
@@ -100,9 +170,10 @@
     }
   })
 
-  // The source's interface is hidden exactly while ours is in charge.
+  // The source's interface is hidden while ours is in charge, and through a
+  // brief loss of the film, when our cover is up anyway.
   $effect(() => {
-    link.setHidden(engaged)
+    link.setHidden(playerMode && started && !revealed)
   })
 
   /**
@@ -145,7 +216,7 @@
 
   let hoverControls = $state(false)
   let scrubbing = $state(false)
-  let menu = $state<'none' | 'subtitles'>('none')
+  let menu = $state<'none' | 'subtitles' | 'quality'>('none')
   /** A move just now, before the bar's own state has come back from main. */
   let recentMove = $state(false)
   let moveTimer: ReturnType<typeof setTimeout> | undefined
@@ -153,8 +224,9 @@
   const hold = $derived((film !== null && paused) || scrubbing || hoverControls || menu !== 'none')
   const controlsVisible = $derived(engaged && !config.mini && !bar.away && (bar.visible || hold || recentMove))
 
+  // Frames for the clock while it is seen: the seek bar, or subtitles we draw.
   $effect(() => {
-    if (!controlsVisible || !playing) return
+    if (!(controlsVisible || subtitle.kind === 'file') || !playing) return
     let handle = requestAnimationFrame(function tick(time) {
       now = time
       handle = requestAnimationFrame(tick)
@@ -267,6 +339,16 @@
       config = next
     }),
   )
+
+  // The page's own first-frame cover (`player.html`), handed over to ours.
+  $effect(() => {
+    document.getElementById('cover')?.remove()
+  })
+  $effect(() =>
+    api?.onContext((next) => {
+      context = next
+    }),
+  )
   $effect(() =>
     api?.onBarState((next) => {
       bar = next
@@ -297,13 +379,157 @@
 
   /* ── Subtitles ─────────────────────────────────────────────────────────── */
 
-  let trackIndex = $state(-1)
-  function chooseTrack(index: number): void {
-    trackIndex = index
+  /**
+   * Which subtitles are shown: none, one of the source's own tracks (its cues
+   * come through the relay), or a file from OpenSubtitles that we time
+   * ourselves against the film (`cuesAt`).
+   */
+  type Subtitle =
+    | { kind: 'off' }
+    | { kind: 'track'; index: number }
+    | { kind: 'file'; code: string; label: string; cues: Cue[] }
+  let subtitle = $state<Subtitle>({ kind: 'off' })
+
+  /** OpenSubtitles' languages for this title: null until first asked, which is when the menu opens. */
+  let languages = $state<SubtitleLanguage[] | null>(null)
+  let languagesLoading = $state(false)
+  /** The language being fetched, for its row's "Loading" label. */
+  let loadingCode = $state<string | null>(null)
+  let subtitleError = $state<string | null>(null)
+
+  /** One question per load, however many ask: the menu, the auto-load, a track being remembered. */
+  let languagesAsked: Promise<void> | null = null
+  function askLanguages(): Promise<void> {
+    languagesAsked ??= (async () => {
+      languagesLoading = true
+      languages = (await api?.subtitles.languages().catch(() => [])) ?? []
+      languagesLoading = false
+    })()
+    return languagesAsked
+  }
+
+  /** Whether a source's own track is in an OpenSubtitles language: by ISO code, else by name. */
+  const sameLanguage = (language: SubtitleLanguage, track: FilmTrack): boolean =>
+    (language.iso !== '' && track.language.toLowerCase().startsWith(language.iso)) ||
+    (language.name !== '' && track.label.toLowerCase().includes(language.name.toLowerCase()))
+
+  function toggleSubtitlesMenu(): void {
+    menu = menu === 'subtitles' ? 'none' : 'subtitles'
+    if (menu === 'subtitles') void askLanguages()
+  }
+
+  /** `remember`: the viewer chose it, so the next title starts in its language too. */
+  function chooseTrack(index: number, remember: boolean): void {
+    subtitle = { kind: 'track', index }
     link.chooseTrack(index)
     menu = 'none'
+    if (remember) void rememberTrackLanguage(index)
   }
-  const cues = $derived(engaged && trackIndex >= 0 ? view.cues : [])
+
+  /**
+   * A source's own track carries no OpenSubtitles code, and the next title
+   * may play on a source without that track. So the track's language is
+   * remembered as the OpenSubtitles language it matches, which the next
+   * title finds either way. A track in no language OpenSubtitles has for
+   * this title changes nothing.
+   */
+  async function rememberTrackLanguage(index: number): Promise<void> {
+    const track = view.tracks.find((t) => t.index === index)
+    if (!track) return
+    await askLanguages()
+    const language = languages?.find((l) => sameLanguage(l, track))
+    if (language) await api?.subtitles.remember(language.code)
+  }
+
+  async function chooseFile(code: string): Promise<void> {
+    if (!api) return
+    loadingCode = code
+    subtitleError = null
+    const loaded = await api.subtitles.load(code, film?.duration ?? null).catch(() => null)
+    loadingCode = null
+    if (loaded === null) {
+      subtitleError = 'No subtitles could be loaded in that language'
+      return
+    }
+    link.chooseTrack(-1)
+    subtitle = { kind: 'file', code, label: loaded.label, cues: loaded.cues }
+    menu = 'none'
+  }
+
+  function subtitlesOff(): void {
+    subtitle = { kind: 'off' }
+    link.chooseTrack(-1)
+    void api?.subtitles.remember(null)
+    menu = 'none'
+  }
+
+  /**
+   * The languages in the order a viewer looks for them: the one they chose
+   * before, then English, then the ones with the most files.
+   */
+  const orderedLanguages = $derived.by(() => {
+    const list = languages ?? []
+    const rank = (language: SubtitleLanguage): number =>
+      language.code === config.subtitleLanguage ? 0 : language.code === 'eng' ? 1 : 2
+    return [...list].sort((a, b) => rank(a) - rank(b) || b.count - a.count || a.name.localeCompare(b.name))
+  })
+
+  /**
+   * A language chosen once starts every later title. A source's own track in
+   * that language is taken first: it is timed to this very stream. Otherwise
+   * the file comes from OpenSubtitles. Tried once per load, once the film
+   * plays.
+   */
+  let autoSubtitlesTried = false
+  $effect(() => {
+    const code = config.subtitleLanguage
+    if (!engaged || autoSubtitlesTried || code === null || subtitle.kind !== 'off') return
+    autoSubtitlesTried = true
+    void (async () => {
+      await askLanguages()
+      const language = languages?.find((l) => l.code === code)
+      const own = language && view.tracks.find((track) => sameLanguage(language, track))
+      if (own) chooseTrack(own.index, false)
+      else await chooseFile(code)
+    })()
+  })
+
+  const cues = $derived.by(() => {
+    if (!engaged) return []
+    if (subtitle.kind === 'track') return view.cues
+    if (subtitle.kind === 'file') return cuesAt(subtitle.cues, shownSeconds)
+    return []
+  })
+
+  /* ── Quality ───────────────────────────────────────────────────────────── */
+
+  /**
+   * The source's own quality ladder, where its engine can be reached
+   * (`findEngine` in the relay): one entry per height, the best bitrate of
+   * each, highest first. Asked for when the film starts and when the menu
+   * opens; the picture's own height comes with it either way.
+   */
+  const heights = $derived.by(() => {
+    const byBitrate = [...(view.quality?.levels ?? [])].sort((a, b) => b.bitrate - a.bitrate)
+    // The first of each height, by bitrate, is its best. A ladder has a handful of rungs.
+    const best = byBitrate.filter((level, i) => byBitrate.findIndex((l) => l.height === level.height) === i)
+    return best.sort((a, b) => b.height - a.height)
+  })
+  const heightLabel = (height: number): string => (height > 0 ? `${height}p` : 'Auto')
+
+  $effect(() => {
+    if (engaged) link.askQuality()
+  })
+
+  function toggleQualityMenu(): void {
+    menu = menu === 'quality' ? 'none' : 'quality'
+    if (menu === 'quality') link.askQuality()
+  }
+
+  function chooseLevel(index: number): void {
+    link.setLevel(index)
+    menu = 'none'
+  }
 
   /* ── The source's own controls, on request ─────────────────────────────── */
 
@@ -348,6 +574,24 @@
     {#if film !== null && film.waiting && !paused}
       <div class="spinner" transition:fade={{ duration: 200 }} aria-hidden="true"></div>
     {/if}
+  {/if}
+
+  {#if curtain}
+    <div class="curtain" transition:fade={{ duration: 350 }} aria-live="polite">
+      <div class="curtain-spinner" aria-hidden="true"></div>
+      <p class="curtain-label">
+        {started ? 'Reconnecting' : `Starting ${context?.providerName ?? 'the source'}`}
+      </p>
+    </div>
+  {/if}
+
+  {#if playerMode && revealed}
+    <!-- Says what happened, not why: a page waiting for a click and a source
+         failing to stream (VidLux's "Switching server…") look the same from here. -->
+    <div class="note" transition:fade={{ duration: 200 }}>
+      {context?.providerName ?? 'The source'}
+      {started ? 'lost its video' : 'has not started'} · showing its own page
+    </div>
   {/if}
 
   {#if offerPlay}
@@ -462,31 +706,90 @@
 
         <span class="spacer"></span>
 
-        {#if view.tracks.length > 0}
-          <div class="menu-anchor">
-            <button
-              class="control"
-              class:active={trackIndex >= 0 || menu === 'subtitles'}
-              aria-label="Subtitles"
-              title="Subtitles"
-              onclick={() => (menu = menu === 'subtitles' ? 'none' : 'subtitles')}
-            >
-              <svg viewBox="0 0 24 24"><path d={ICONS.subtitles} /></svg>
-            </button>
-            {#if menu === 'subtitles'}
-              <div class="menu" transition:fade={{ duration: 140 }}>
-                <button class="item" class:chosen={trackIndex < 0} onclick={() => chooseTrack(-1)}>
-                  <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>Off
-                </button>
+        <div class="menu-anchor">
+          <button
+            class="control"
+            class:active={subtitle.kind !== 'off' || menu === 'subtitles'}
+            aria-label="Subtitles"
+            title="Subtitles"
+            onclick={toggleSubtitlesMenu}
+          >
+            <svg viewBox="0 0 24 24"><path d={ICONS.subtitles} /></svg>
+          </button>
+          {#if menu === 'subtitles'}
+            <div class="menu" transition:fade={{ duration: 140 }}>
+              <button class="item" class:chosen={subtitle.kind === 'off'} onclick={subtitlesOff}>
+                <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>Off
+              </button>
+              {#if view.tracks.length > 0}
+                <p class="menu-group">From {context?.providerName ?? 'the source'}</p>
                 {#each view.tracks as track (track.index)}
-                  <button class="item" class:chosen={trackIndex === track.index} onclick={() => chooseTrack(track.index)}>
+                  <button
+                    class="item"
+                    class:chosen={subtitle.kind === 'track' && subtitle.index === track.index}
+                    onclick={() => chooseTrack(track.index, true)}
+                  >
                     <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>{track.label || track.language || `Track ${track.index + 1}`}
                   </button>
                 {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+              {/if}
+              <p class="menu-group">From OpenSubtitles</p>
+              {#if languagesLoading}
+                <p class="menu-hint">Looking for subtitles…</p>
+              {:else if languages !== null && languages.length === 0}
+                <p class="menu-hint">None found for this title</p>
+              {/if}
+              {#each orderedLanguages as language (language.code)}
+                <button
+                  class="item"
+                  class:chosen={subtitle.kind === 'file' && subtitle.code === language.code}
+                  onclick={() => void chooseFile(language.code)}
+                >
+                  <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
+                  <span class="item-name">{language.name}</span>
+                  {#if loadingCode === language.code}<span class="item-note">Loading…</span>{/if}
+                </button>
+              {/each}
+              {#if subtitleError}<p class="menu-hint bad">{subtitleError}</p>{/if}
+            </div>
+          {/if}
+        </div>
+
+        <div class="menu-anchor">
+          <button
+            class="control quality"
+            class:active={menu === 'quality'}
+            aria-label="Quality"
+            title="Quality"
+            onclick={toggleQualityMenu}
+          >
+            <span class="quality-label">{heightLabel(view.quality?.height ?? 0)}</span>
+          </button>
+          {#if menu === 'quality'}
+            <div class="menu" transition:fade={{ duration: 140 }}>
+              {#if heights.length > 1}
+                <button class="item" class:chosen={view.quality?.auto !== false} onclick={() => chooseLevel(-1)}>
+                  <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
+                  <span class="item-name">Auto</span>
+                </button>
+                {#each heights as level (level.index)}
+                  <button
+                    class="item"
+                    class:chosen={view.quality?.auto === false && view.quality.current === level.index}
+                    onclick={() => chooseLevel(level.index)}
+                  >
+                    <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
+                    <span class="item-name">{level.height}p</span>
+                  </button>
+                {/each}
+              {:else}
+                <p class="menu-hint">
+                  {context?.providerName ?? 'This source'} offers {view.quality?.height ? `only ${view.quality.height}p` : 'no choice of quality'}
+                </p>
+              {/if}
+            </div>
+          {/if}
+        </div>
 
         <button class="control" aria-label="Use the source's own controls" title="Use the source's own controls" onclick={useSourceControls}>
           <svg viewBox="0 0 24 24"><path d={ICONS.tune} /></svg>
@@ -812,6 +1115,54 @@
     color: var(--accent);
   }
 
+  .item-name {
+    flex: 1;
+  }
+
+  /* The resolution itself is the icon: what is playing, at a glance. */
+  .control.quality {
+    width: auto;
+    min-width: 44px;
+    padding: 0 8px;
+    border-radius: 22px;
+  }
+
+  .control.quality::before {
+    border-radius: 22px;
+  }
+
+  .quality-label {
+    position: relative;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .item-note {
+    color: rgba(244, 244, 246, 0.55);
+    font-size: 12px;
+  }
+
+  .menu-group {
+    margin: 8px 10px 4px;
+    color: rgba(244, 244, 246, 0.45);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .menu-hint {
+    margin: 4px 10px 8px;
+    color: rgba(244, 244, 246, 0.6);
+    font-size: 13px;
+  }
+
+  .menu-hint.bad {
+    color: #fb8a9c;
+  }
+
   .item.chosen svg {
     visibility: visible;
   }
@@ -843,6 +1194,19 @@
     font-weight: 600;
     line-height: 1.3;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+
+  /* The corner card is about 320px wide: at the full size, one line of dialogue filled it. */
+  .overlay.mini .cues {
+    bottom: 8px;
+    max-width: 94%;
+    gap: 2px;
+  }
+
+  .overlay.mini .cues span {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
   }
 
   /* ── Feedback in the middle of the picture ────────────────────────────── */
@@ -1046,6 +1410,53 @@
   }
 
   /* ── Before the film has played ───────────────────────────────────────── */
+
+  /* Opaque: the source's page is loading behind it, adverts and all. */
+  .curtain {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 18px;
+    background: radial-gradient(circle at 50% 45%, #15151c, #050507 70%);
+    pointer-events: auto;
+  }
+
+  .curtain-spinner {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.12);
+    border-top-color: var(--accent);
+    animation: spin 900ms linear infinite;
+  }
+
+  .curtain-label {
+    margin: 0;
+    color: rgba(244, 244, 246, 0.72);
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    animation: breatheText 2.4s ease-in-out infinite;
+  }
+
+  @keyframes breatheText {
+    50% {
+      opacity: 0.55;
+    }
+  }
+
+  .note {
+    position: absolute;
+    left: 16px;
+    top: 64px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(10, 10, 14, 0.82);
+    font-size: 13px;
+    pointer-events: none;
+  }
 
   .big-play {
     position: absolute;

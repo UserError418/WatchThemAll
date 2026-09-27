@@ -15,6 +15,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EV } from '@shared/ipc'
 import type {
+  EpisodeNav,
   OverlayArea,
   PlayerContext,
   PlayerSuggestion,
@@ -60,13 +61,15 @@ const api: WtaChromeApi = {
    * its bounds, so an overlay sized to the whole window would make the video
    * unclickable. The document measures itself and main follows.
    */
-  setOverlayArea: ({ height, width, barVisible, away }: OverlayArea): void => {
+  setOverlayArea: ({ height, width, barVisible, away, episodesOpen }: OverlayArea): void => {
     ipcRenderer.send(EV.chromeOverlayArea, {
       height: Math.max(0, Math.round(height)),
       width: width === null ? null : Math.max(0, Math.round(width)),
       // Whether the bar shows, for the shell's controls to follow (v2).
       barVisible: barVisible !== false,
       away: away === true,
+      // Whether the arrows and Enter belong to the episode strip (v2).
+      episodesOpen: episodesOpen === true,
     })
   },
 
@@ -113,6 +116,14 @@ const api: WtaChromeApi = {
     }
     ipcRenderer.on(EV.chromeOpenPanel, listener)
     return () => ipcRenderer.removeListener(EV.chromeOpenPanel, listener)
+  },
+
+  onEpisodeNav: (callback: (nav: EpisodeNav) => void): (() => void) => {
+    const listener = (_event: unknown, nav: unknown): void => {
+      if (nav === 'prev' || nav === 'next' || nav === 'play' || nav === 'close') callback(nav)
+    }
+    ipcRenderer.on(EV.chromeEpisodeNav, listener)
+    return () => ipcRenderer.removeListener(EV.chromeEpisodeNav, listener)
   },
 
   /** A player key pressed here; main routes it (`playerkeys.ts`). */

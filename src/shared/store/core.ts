@@ -130,6 +130,7 @@ export const DEFAULT_SETTINGS: Settings = {
   skipIntro: true,
   autoNext: true,
   ownControls: true,
+  subtitleLanguage: null,
   // The user's own order first: exactly the behaviour before this setting
   // existed, so nobody's Automatic changes until they choose otherwise.
   sourceOrder: ['list', 'speed', 'quality'],

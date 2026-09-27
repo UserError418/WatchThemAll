@@ -36,10 +36,30 @@
         height: 100vh;
         border: 0;
       }
+      /*
+        Black from the first frame, before the controls' bundle has run: in
+        player mode the source's page is never to be seen (the owner,
+        2026-09-27). The overlay removes it as soon as its own cover is up.
+        It also goes by itself after four seconds, so a bundle that failed
+        to load cannot leave the picture black for good.
+      */
+      #cover {
+        position: fixed;
+        inset: 0;
+        z-index: 5;
+        background: #050507;
+        animation: uncover 0s linear 4s forwards;
+      }
+      @keyframes uncover {
+        to {
+          visibility: hidden;
+        }
+      }
     </style>
   </head>
   <body>
     <!--wta:provider-frame-->
+    <div id="cover"></div>
     <div id="overlay"></div>
     <script type="module" src="/src/player.ts"></script>
   </body>

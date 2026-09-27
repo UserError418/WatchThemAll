@@ -68,9 +68,14 @@ export type FilmCommand =
   | { command: 'seekBy'; delta: number; duration: number }
   | { command: 'volume'; level: number; duration: number }
   | { command: 'mute'; muted: boolean; duration: number }
-  | { command: 'hide' }
+  /** `film` is the relay id of the frame that holds the film; see `STRICT_CSS`. */
+  | { command: 'hide'; film?: string }
   | { command: 'unhide' }
   | { command: 'track'; index: number; duration: number }
+  /** Report the film's qualities; see `FilmQuality`. */
+  | { command: 'levels'; duration: number }
+  /** A quality by its index in the engine's levels, or -1 for automatic. */
+  | { command: 'level'; index: number; duration: number }
 
 export function filmCommand(command: FilmCommand, seq?: string): Record<string, unknown> {
   return seq === undefined ? { [TAG]: 1, ...command } : { [TAG]: 1, ...command, seq }
@@ -92,6 +97,23 @@ export interface FilmState {
   buffered: number
   /** Stalled, waiting for data. */
   waiting: boolean
+}
+
+/**
+ * The film's qualities, as the source's streaming engine has them.
+ *
+ * `levels` is empty when no engine could be found: then `height` is all there
+ * is to say. Found by shape rather than by source (`findEngine` in the
+ * script), so any hls.js a page keeps where a script can reach it counts:
+ * VidSrc's in a global, VidLux's in React state.
+ */
+export interface FilmQuality {
+  levels: Array<{ index: number; height: number; bitrate: number }>
+  /** The engine's own choice: the level playing, or -1. */
+  current: number
+  auto: boolean
+  /** The picture's height as decoded, 0 before the first frame. */
+  height: number
 }
 
 export interface FilmTrack {
@@ -153,6 +175,25 @@ export function parseTracks(data: unknown): { id: string; tracks: FilmTrack[] } 
   return { id: message.id, tracks }
 }
 
+export function parseQuality(data: unknown): { id: string; quality: FilmQuality } | null {
+  const message = tagged(data)
+  const q = message?.quality
+  if (!message || typeof message.id !== 'string' || typeof q !== 'object' || q === null) return null
+  const raw = q as Record<string, unknown>
+  const levels: FilmQuality['levels'] = []
+  for (const level of Array.isArray(raw.levels) ? (raw.levels as unknown[]) : []) {
+    const l = level as Record<string, unknown>
+    const index = finite(l?.index)
+    const height = finite(l?.height)
+    if (index === null || height === null || height <= 0) continue
+    levels.push({ index, height, bitrate: finite(l.bitrate) ?? 0 })
+  }
+  return {
+    id: message.id,
+    quality: { levels, current: finite(raw.current) ?? -1, auto: raw.auto !== false, height: finite(raw.height) ?? 0 },
+  }
+}
+
 /** The subtitle lines showing now, as plain text: cue markup such as `<i>` is removed. */
 export function parseCues(data: unknown): { id: string; lines: string[] } | null {
   const message = tagged(data)
@@ -189,6 +230,21 @@ export const HIDE_CSS =
   'video::-webkit-media-controls,video::-webkit-media-controls-enclosure{display:none!important}'
 
 /**
+ * The stricter half, for the frames on the way to the film: every frame and
+ * every video *not* on that way is hidden too. That catches advert frames,
+ * advert videos, and whatever else a source lays over or beside the film.
+ *
+ * The way is marked from the film up. The frame that holds the film marks its
+ * video (`data-wta-film`) and says so to its parent (`path`). Each parent
+ * marks the frame that said it and passes it on. A frame adds this style only
+ * once it knows its own way to the film, so the film is never hidden while the
+ * marks are still on their way up.
+ */
+export const STRICT_CSS =
+  'video:not([data-wta-film]),iframe:not([data-wta-film]){visibility:hidden!important}' +
+  'video[data-wta-film],iframe[data-wta-film]{visibility:visible!important}'
+
+/**
  * The script for every provider frame, as source text.
  *
  * `appOrigin` is the shell's origin, which the outermost frame requires of
@@ -207,6 +263,9 @@ export function filmRelayScript(appOrigin: string): string {
   const ID = Math.random().toString(36).slice(2, 10)
   const HIDE_ID = 'wta-hide-source-ui'
   const HIDE_CSS = ${JSON.stringify(HIDE_CSS)}
+  const STRICT_ID = 'wta-hide-strict'
+  const STRICT_CSS = ${JSON.stringify(STRICT_CSS)}
+  const MARK = 'data-wta-film'
 
   const send = (message) => {
     try { window.parent.postMessage(message, '*') } catch (error) {}
@@ -331,7 +390,97 @@ export function filmRelayScript(appOrigin: string): string {
   }
 
   // ── Commands, from the parent only ─────────────────────────────────────
-  const COMMANDS = ['watch', 'play', 'pause', 'toggle', 'setPaused', 'seek', 'seekBy', 'volume', 'mute', 'hide', 'unhide', 'track']
+  const COMMANDS = ['watch', 'play', 'pause', 'toggle', 'setPaused', 'seek', 'seekBy', 'volume', 'mute', 'hide', 'unhide', 'track', 'levels', 'level']
+
+  // ── Quality: the page's streaming engine, found by its shape ──────────────
+  // An hls.js-like engine: a list of levels, the one playing, and an
+  // automatic mode. Found wherever a script can reach it, and only if it is
+  // attached to this very video.
+  const isEngine = (value) => {
+    try {
+      return Array.isArray(value.levels) && value.levels.length > 0 &&
+        typeof value.currentLevel === 'number' && 'autoLevelEnabled' in value
+    } catch (error) { return false }
+  }
+  let engine = null
+  const findEngine = (video) => {
+    if (engine && (engine.media === video || !engine.media)) return engine
+    engine = null
+    const seen = new Set()
+    let budget = 0
+    const look = (value, depth) => {
+      if (!value || typeof value !== 'object' || seen.has(value) || budget-- <= 0) return null
+      seen.add(value)
+      if (value === window || (typeof Node === 'function' && value instanceof Node)) return null
+      if (isEngine(value) && (!value.media || value.media === video)) return value
+      if (depth === 0) return null
+      let keys = []
+      try { keys = Object.keys(value).slice(0, 80) } catch (error) { return null }
+      for (const key of keys) {
+        let child
+        try { child = value[key] } catch (error) { continue }
+        const found = look(child, depth - 1)
+        if (found) return found
+      }
+      return null
+    }
+    // The page's own globals (VidSrc: window.__JW.state.hls).
+    budget = 8000
+    for (const key of Object.keys(window)) {
+      let value
+      try { value = window[key] } catch (error) { continue }
+      const found = look(value, 3)
+      if (found) return (engine = found)
+    }
+    // React state along the video element's own fiber (VidLux: a useRef).
+    budget = 8000
+    const fiberKey = Object.keys(video).find((key) => key.startsWith('__reactFiber') || key.startsWith('__reactInternalInstance'))
+    let fiber = fiberKey ? video[fiberKey] : null
+    for (let hops = 0; fiber && hops < 60; hops++, fiber = fiber.return) {
+      let hook = fiber.memoizedState
+      for (let n = 0; hook && typeof hook === 'object' && n < 40; n++, hook = hook.next) {
+        const found = look(hook.memoizedState, 2)
+        if (found) return (engine = found)
+      }
+      const found = look(fiber.stateNode !== video ? fiber.stateNode : null, 2)
+      if (found) return (engine = found)
+    }
+    return null
+  }
+  const reportQuality = (video) => {
+    if (!watching || video !== film()) return
+    const found = findEngine(video)
+    const levels = []
+    if (found) {
+      found.levels.forEach((level, index) => {
+        const height = Number(level && level.height)
+        if (height > 0) levels.push({ index, height, bitrate: Number(level.bitrate) || 0 })
+      })
+    }
+    send({ [TAG]: 1, id: ID, quality: {
+      levels,
+      current: found ? Number(found.currentLevel) : -1,
+      auto: found ? found.autoLevelEnabled !== false : true,
+      height: Number(video.videoHeight) || 0,
+    } })
+  }
+
+  // Hiding the source's interface, and with the way to the film known, the rest.
+  let hiding = false
+  const style = (id, css) => {
+    if (document.getElementById(id)) return
+    const element = document.createElement('style')
+    element.id = id
+    element.textContent = css
+    ;(document.head || document.documentElement).appendChild(element)
+  }
+  const unstyle = (id) => document.getElementById(id)?.remove()
+  // This frame is on the film's way: mark what leads there, hide the rest.
+  const onWay = (element) => {
+    if (element) element.setAttribute(MARK, '')
+    if (hiding) style(STRICT_ID, STRICT_CSS)
+    send({ [TAG]: 1, path: ID })
+  }
 
   // The commands already acted on, by seq; see FilmCommand. A few hundred is
   // minutes of them, and the oldest go first.
@@ -408,23 +557,47 @@ export function filmRelayScript(appOrigin: string): string {
           break
         }
         case 'hide':
-          if (!document.getElementById(HIDE_ID)) {
-            const style = document.createElement('style')
-            style.id = HIDE_ID
-            style.textContent = HIDE_CSS
-            ;(document.head || document.documentElement).appendChild(style)
-          }
+          hiding = true
+          style(HIDE_ID, HIDE_CSS)
+          if (data.film === ID) onWay(video)
+          else if (document.querySelector('[' + MARK + ']')) style(STRICT_ID, STRICT_CSS)
           break
         case 'unhide':
-          document.getElementById(HIDE_ID)?.remove()
+          hiding = false
+          unstyle(HIDE_ID)
+          unstyle(STRICT_ID)
           break
         case 'track': {
           const target = aimed(data)
           if (target) chooseTrack(target, Number(data.index))
           break
         }
+        case 'levels': {
+          const target = aimed(data)
+          if (target) reportQuality(target)
+          break
+        }
+        case 'level': {
+          const target = aimed(data)
+          const found = target && findEngine(target)
+          const index = Number(data.index)
+          if (found && Number.isInteger(index) && index >= -1 && index < found.levels.length) {
+            // currentLevel switches now, flushing what was buffered at the old
+            // level; -1 hands the choice back to the engine.
+            try { found.currentLevel = index } catch (error) {}
+            setTimeout(() => reportQuality(target), 300)
+          }
+          break
+        }
       }
       down(data)
+      return
+    }
+
+    // A child is on the film's way: mark its frame, and say so upwards.
+    if (typeof data.path === 'string') {
+      const child = children().find((frame) => frame.contentWindow === event.source)
+      if (child) onWay(child)
       return
     }
 
@@ -470,6 +643,8 @@ export function filmRelayScript(appOrigin: string): string {
     on(type, (video) => report(video, true))
   }
   on('loadedmetadata', () => reportTracks())
+  // A new picture size: a quality change, by us or by the engine.
+  on('resize', (video) => reportQuality(video))
 
   send({ [TAG]: 1, hello: ID })
 })()`

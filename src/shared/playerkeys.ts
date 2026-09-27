@@ -59,6 +59,8 @@ export interface KeyPress {
   altKey: boolean
   /** The focused element's tag, upper case, as `Element.tagName` gives it. */
   targetTag?: string
+  /** An input's `type`, for telling a slider from a text field. */
+  targetType?: string
   targetEditable?: boolean
 }
 
@@ -77,16 +79,29 @@ const KEYS: Record<string, PlayerAction> = {
   m: 'mute',
 }
 
-/** Where typing goes to the element itself: a text field, a list, anything editable. */
+/**
+ * Where typing goes to the element itself: a text field, a list, anything
+ * editable. A range input is not one of them: its arrows would move the
+ * volume slider instead of seeking.
+ */
 const TYPING = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
-/** Where Space and Enter already mean "press this". */
-const PRESSABLE = new Set(['BUTTON', 'A', 'SUMMARY'])
 
+/**
+ * Space and Enter are the player's even on a focused button.
+ *
+ * They once were not: Space and Enter on a focused button pressed it, as
+ * they do on any page. But a click leaves focus behind on whatever was
+ * clicked. That might be the picture (a button in the shell), a control, or
+ * the detail view's Play button behind the player. So Enter "pressed" that
+ * button instead of opening the episode browser (reported by the owner,
+ * 2026-09-27). Every document that uses this map cancels the key's default,
+ * so no focused button is pressed by it either.
+ */
 export function playerKeyAction(press: KeyPress): PlayerAction | null {
   if (press.ctrlKey || press.metaKey || press.altKey) return null
   const tag = press.targetTag ?? ''
-  if (press.targetEditable || TYPING.has(tag)) return press.key === 'Escape' ? 'escape' : null
-  if (PRESSABLE.has(tag) && (press.key === ' ' || press.key === 'Enter')) return null
+  const typing = press.targetEditable || (TYPING.has(tag) && press.targetType !== 'range')
+  if (typing) return press.key === 'Escape' ? 'escape' : null
   const key = press.key.length === 1 ? press.key.toLowerCase() : press.key
   return KEYS[key] ?? null
 }
@@ -100,6 +115,7 @@ export function actionForEvent(event: KeyboardEvent): PlayerAction | null {
     metaKey: event.metaKey,
     altKey: event.altKey,
     targetTag: target?.tagName,
+    targetType: (target as HTMLInputElement | null)?.type,
     targetEditable: target?.isContentEditable === true,
   })
 }

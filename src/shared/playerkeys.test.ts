@@ -36,11 +36,18 @@ describe('playerKeyAction', () => {
     expect(playerKeyAction(press('Escape', { targetTag: 'INPUT' }))).toBe('escape')
   })
 
-  /** A focused button in the bar: Space and Enter press it, as they always do. */
-  it('lets Space and Enter press a focused button, but not the other keys', () => {
-    expect(playerKeyAction(press(' ', { targetTag: 'BUTTON' }))).toBeNull()
-    expect(playerKeyAction(press('Enter', { targetTag: 'BUTTON' }))).toBeNull()
-    expect(playerKeyAction(press('ArrowRight', { targetTag: 'BUTTON' }))).toBe('seekForward')
+  /**
+   * A click leaves focus on whatever was clicked, the picture or the detail
+   * view's Play button behind the player. Enter must still open the episodes.
+   */
+  it('keeps Space and Enter for the player on a focused button', () => {
+    expect(playerKeyAction(press(' ', { targetTag: 'BUTTON' }))).toBe('togglePlay')
+    expect(playerKeyAction(press('Enter', { targetTag: 'BUTTON' }))).toBe('episodes')
+  })
+
+  it("takes the arrows from the volume slider, which is not a text field", () => {
+    expect(playerKeyAction(press('ArrowRight', { targetTag: 'INPUT', targetType: 'range' }))).toBe('seekForward')
+    expect(playerKeyAction(press('ArrowRight', { targetTag: 'INPUT', targetType: 'text' }))).toBeNull()
   })
 
   it('ignores every other key', () => {

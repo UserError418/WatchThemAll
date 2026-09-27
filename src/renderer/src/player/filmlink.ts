@@ -14,8 +14,10 @@ import {
   parseCues,
   parseFilmState,
   parseHello,
+  parseQuality,
   parseTracks,
   type FilmCommand,
+  type FilmQuality,
   type FilmState,
   type FilmTrack,
 } from '@shared/filmrelay'
@@ -50,13 +52,18 @@ export interface FilmView {
   lastReportAt: number
   /** Paused or playing, as the viewer last asked, while that is being held; see `wanted`. */
   wanted: boolean | null
+  /** The film's qualities, once asked for (`askQuality`); null before. */
+  quality: FilmQuality | null
 }
 
 export class FilmLink {
   private readonly states = new Map<string, { state: FilmState; at: number }>()
   private readonly tracks = new Map<string, FilmTrack[]>()
   private readonly cues = new Map<string, string[]>()
+  private readonly qualities = new Map<string, FilmQuality>()
   private hidden = false
+  /** The film's frame the last `hide` named, so a new one is named again. */
+  private hiddenFor: string | null = null
   private track = -1
   private lastReportAt = 0
   private intent: { paused: boolean; until: number; sentAt: number } | null = null
@@ -84,6 +91,9 @@ export class FilmLink {
       this.states.set(state.id, { state, at })
       this.lastReportAt = at
       this.holdIntent()
+      // The film moved to another frame, or its frame got a new document:
+      // the way to it has to be marked afresh.
+      if (this.hidden && this.view().film?.id !== this.hiddenFor) this.sendHide()
       return true
     }
     const tracks = parseTracks(data)
@@ -94,6 +104,11 @@ export class FilmLink {
     const cues = parseCues(data)
     if (cues !== null) {
       this.cues.set(cues.id, cues.lines)
+      return true
+    }
+    const quality = parseQuality(data)
+    if (quality !== null) {
+      this.qualities.set(quality.id, quality.quality)
       return true
     }
     return false
@@ -110,6 +125,7 @@ export class FilmLink {
       cues: film === null ? [] : (this.cues.get(film.id) ?? []),
       lastReportAt: this.lastReportAt,
       wanted: this.wanted(),
+      quality: film === null ? null : (this.qualities.get(film.id) ?? null),
     }
   }
 
@@ -155,7 +171,28 @@ export class FilmLink {
   setHidden(hidden: boolean): void {
     if (hidden === this.hidden) return
     this.hidden = hidden
-    this.send({ command: hidden ? 'hide' : 'unhide' })
+    if (hidden) this.sendHide()
+    else {
+      this.hiddenFor = null
+      this.send({ command: 'unhide' })
+    }
+  }
+
+  /** Hide, naming the film's frame so the relays can mark the way to it. */
+  private sendHide(): void {
+    const film = this.view().film
+    this.hiddenFor = film?.id ?? null
+    this.send(film === null ? { command: 'hide' } : { command: 'hide', film: film.id })
+  }
+
+  /** Ask the film's frame what qualities its engine has. */
+  askQuality(): void {
+    this.aimed((duration) => this.send({ command: 'levels', duration }))
+  }
+
+  /** A quality by its index in the engine's levels, or -1 for automatic. */
+  setLevel(index: number): void {
+    this.aimed((duration) => this.send({ command: 'level', index, duration }))
   }
 
   /** A subtitle track by its index in the film's `textTracks`, or -1 for none. */
@@ -180,7 +217,7 @@ export class FilmLink {
 
   private restate(): void {
     this.watch()
-    if (this.hidden) this.send({ command: 'hide' })
+    if (this.hidden) this.sendHide()
     if (this.track >= 0) this.chooseTrack(this.track)
   }
 

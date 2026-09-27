@@ -38,6 +38,7 @@ import type {
 export type { ProbeVerdict, ProviderScan, ScanReason }
 import type { SyncStatus } from './sync/types'
 import type { PlayerAction, TransportAction } from './playerkeys'
+import type { LoadedSubtitles, SubtitleLanguage } from './subtitles'
 
 /** Invoke channels: renderer → main, with a reply. */
 export const CH = {
@@ -100,6 +101,15 @@ export const CH = {
   playSetPaused: 'play:set-paused',
   /** A player key pressed while the app window has the focus; see `playerkeys.ts`. */
   playAction: 'play:action',
+  /**
+   * The shell's subtitles from OpenSubtitles (`main/subtitlesearch.ts`):
+   * the languages there are, one file read, and the language to start the
+   * next title with. Answered only for the shell of the player that is on,
+   * and always about what it plays.
+   */
+  subtitleLanguages: 'subtitles:languages',
+  subtitleLoad: 'subtitles:load',
+  subtitleRemember: 'subtitles:remember',
   releasesCheck: 'releases:check',
 
   dataExport: 'data:export',
@@ -286,6 +296,10 @@ export const EV = {
   playerBarState: 'evt:player-bar-state',
   chromeOpenPanel: 'evt:chrome-open-panel',
   playerOverlayConfig: 'evt:player-overlay-config',
+  /** shell → main: the source has no film yet; press its own play control in its frames. */
+  playerPressPlay: 'player:press-play',
+  /** main → chrome: the arrows and Enter, while the episode strip is open. */
+  chromeEpisodeNav: 'evt:chrome-episode-nav',
   syncStatus: 'evt:sync-status',
 
   /**
@@ -1125,7 +1139,12 @@ export interface OverlayArea {
    */
   barVisible?: boolean
   away?: boolean
+  /** The episode strip is open: ←/→ and Enter belong to it, not to the film. */
+  episodesOpen?: boolean
 }
+
+/** A key for the episode strip: move the highlight, play it, or close the strip. */
+export type EpisodeNav = 'prev' | 'next' | 'play' | 'close'
 
 /**
  * What the player's floating chrome can do.
@@ -1194,6 +1213,8 @@ export interface WtaChromeApi {
   onActivity(cb: (hold: boolean) => void): () => void
   /** Enter or C, from wherever the key was pressed. */
   onOpenPanel(cb: (panel: 'episodes' | 'cast') => void): () => void
+  /** The arrows and Enter while the episode strip is open. */
+  onEpisodeNav(cb: (nav: EpisodeNav) => void): () => void
   /** A player key pressed in the chrome; main routes it. */
   action(action: PlayerAction): void
 
@@ -1260,6 +1281,8 @@ export interface PlayerOverlayConfig {
   fullscreen: boolean
   /** Shrunk into the app's corner: no controls over a picture that small. */
   mini: boolean
+  /** `Settings.subtitleLanguage`: the language to start with, or null for none. */
+  subtitleLanguage: string | null
 }
 
 /**
@@ -1281,4 +1304,17 @@ export interface WtaPlayerApi {
   action(action: PlayerAction): void
   /** The pointer moved over the picture. `hold`: keep the bar up. */
   activity(hold: boolean): void
+  /** Press the source's own play control, in its frames (behind our cover). */
+  pressPlay(): void
+  subtitles: {
+    languages(): Promise<SubtitleLanguage[]>
+    /** The best file in `code` for a film this long; remembered as the language to start with. */
+    load(code: string, filmSeconds: number | null): Promise<LoadedSubtitles | null>
+    /**
+     * The language to start the next title with (an OpenSubtitles code), or
+     * null for none. For a choice that loads no file: a source's own track,
+     * or subtitles off.
+     */
+    remember(code: string | null): Promise<void>
+  }
 }

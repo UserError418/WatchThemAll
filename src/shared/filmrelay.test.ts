@@ -21,6 +21,7 @@ import {
   parseCues,
   parseFilmState,
   parseHello,
+  parseQuality,
   parseTracks,
   type FilmState,
 } from './filmrelay'
@@ -50,7 +51,18 @@ class FakeTrack {
   }
 }
 
-class FakeVideo {
+/** What the relay reads and writes of an element's attributes. */
+class Marked {
+  readonly attributes = new Set<string>()
+  setAttribute(name: string): void {
+    this.attributes.add(name)
+  }
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(name)
+  }
+}
+
+class FakeVideo extends Marked {
   paused = true
   currentTime = 0
   ended = false
@@ -59,10 +71,13 @@ class FakeVideo {
   playbackRate = 1
   buffered = { length: 0, start: () => 0, end: () => 0 }
   textTracks = new FakeTrackList()
+  videoHeight = 720
   constructor(
     public duration = 2_885,
     private readonly size = { width: 1280, height: 720 },
-  ) {}
+  ) {
+    super()
+  }
   play(): Promise<void> {
     this.paused = false
     return Promise.resolve()
@@ -114,6 +129,8 @@ class FakeWindow {
 
 interface Frame {
   win: FakeWindow
+  /** This frame's own `<iframe>` element, in its parent's document. */
+  element: Marked & { contentWindow: FakeWindow }
   videos: FakeVideo[]
   children: Frame[]
   styles: Map<string, { id: string; textContent: string; remove(): void }>
@@ -126,6 +143,7 @@ function frame(origin: string, parent?: Frame, created?: (made: Frame) => void):
   const styles: Frame['styles'] = new Map()
   const self: Frame = {
     win,
+    element: Object.assign(new Marked(), { contentWindow: win }),
     videos: [],
     children: [],
     styles,
@@ -136,8 +154,13 @@ function frame(origin: string, parent?: Frame, created?: (made: Frame) => void):
       selector === 'video'
         ? self.videos
         : selector === 'iframe'
-          ? self.children.map((child) => ({ contentWindow: child.win }))
+          ? self.children.map((child) => child.element)
           : [],
+    querySelector: (selector: string) =>
+      selector === '[data-wta-film]'
+        ? ([...self.videos, ...self.children.map((child) => child.element)].find((e) => e.hasAttribute('data-wta-film')) ??
+          null)
+        : null,
     addEventListener: (type: string, listener: (event: { target: unknown }) => void) =>
       (capture[type] ??= []).push(listener),
     getElementById: (id: string) => styles.get(id) ?? null,
@@ -260,6 +283,25 @@ describe('commands down the frames', () => {
     expect([film.currentTime, film.volume]).toEqual([600, 0.2])
   })
 
+  it('marks the way to the film and hides every other frame and video', () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    const advert = frame('https://ads.example', w.provider)
+    w.player.videos.push(film)
+    // The film's frame is known by the id in its reports.
+    command(w, { command: 'watch' })
+    const id = (w.heard.map(parseFilmState).find(Boolean) as FilmState).id
+    command(w, { command: 'hide', film: id })
+
+    expect(film.hasAttribute('data-wta-film')).toBe(true)
+    expect(w.player.element.hasAttribute('data-wta-film')).toBe(true)
+    expect(advert.element.hasAttribute('data-wta-film')).toBe(false)
+    expect(w.provider.styles.has('wta-hide-strict')).toBe(true)
+    expect(w.player.styles.has('wta-hide-strict')).toBe(true)
+    // The advert's own frame never learns a way to the film: its parent hides it.
+    expect(advert.styles.has('wta-hide-strict')).toBe(false)
+  })
+
   it('hides the source interface in every frame, and shows it again', () => {
     const w = world()
     command(w, { command: 'hide' })
@@ -359,6 +401,79 @@ describe('reports up the frames', () => {
     const tagged = w.heard as Array<Record<string, unknown>>
     expect(tagged.some((m) => m.state === 'paused')).toBe(true)
     expect(tagged.find((m) => m.time)?.time).toMatchObject({ seconds: 1_234, duration: 2_700 })
+  })
+})
+
+/** An hls.js as far as the relay can tell: levels, the one playing, and an automatic mode. */
+function engineFor(video: FakeVideo): { levels: Array<{ height: number; bitrate: number }>; currentLevel: number; autoLevelEnabled: boolean; media: FakeVideo } {
+  return {
+    levels: [
+      { height: 360, bitrate: 800_000 },
+      { height: 720, bitrate: 2_500_000 },
+    ],
+    currentLevel: 1,
+    autoLevelEnabled: true,
+    media: video,
+  }
+}
+
+describe('quality', () => {
+  const qualityOf = (heard: unknown[]) => heard.map(parseQuality).filter(Boolean).at(-1)?.quality
+
+  /** VidSrc keeps its hls.js at window.__JW.state.hls. */
+  it("finds an engine in the page's globals, and switches it", () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    w.player.videos.push(film)
+    const engine = engineFor(film)
+    ;(w.player.win as unknown as Record<string, unknown>).__JW = { state: { hls: engine } }
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)).toEqual({
+      levels: [
+        { index: 0, height: 360, bitrate: 800_000 },
+        { index: 1, height: 720, bitrate: 2_500_000 },
+      ],
+      current: 1,
+      auto: true,
+      height: 720,
+    })
+    command(w, { command: 'level', index: 0, duration: 2_885 })
+    expect(engine.currentLevel).toBe(0)
+    command(w, { command: 'level', index: -1, duration: 2_885 })
+    expect(engine.currentLevel).toBe(-1)
+  })
+
+  /** VidLux keeps its hls.js in React state, reached from the video element. */
+  it('finds an engine in React state along the video element', () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    const engine = engineFor(film)
+    const hook = { memoizedState: { current: engine }, next: null }
+    ;(film as unknown as Record<string, unknown>)['__reactFiber$x1'] = { memoizedState: null, return: { memoizedState: hook, return: null } }
+    w.player.videos.push(film)
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)?.levels).toHaveLength(2)
+  })
+
+  it('still reports the picture height when no engine can be found', () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    w.player.videos.push(film)
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)).toEqual({ levels: [], current: -1, auto: true, height: 720 })
+  })
+
+  it("ignores an engine attached to another video", () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    w.player.videos.push(film)
+    ;(w.player.win as unknown as Record<string, unknown>).hls = engineFor(new FakeVideo(30))
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)?.levels).toEqual([])
   })
 })
 
