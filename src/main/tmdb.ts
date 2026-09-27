@@ -31,7 +31,34 @@ const API_KEY = process.env.VITE_TMDB_KEY || FALLBACK_KEY
 const CACHE_TTL_MS = 10 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 10_000
 
-const cache = new Map<string, { at: number; value: unknown }>()
+/**
+ * Answers that do not change within a day, kept for one: the genre names,
+ * and a title's keywords, which the personal rows ask for on every visit to
+ * Browse. Everything else, detail (air dates, next episode) above all, keeps
+ * the ten minutes: the release sweep and the countdowns depend on it.
+ */
+const LONG_TTL_MS = 24 * 60 * 60 * 1000
+const LONG_LIVED_PATHS = [/^\/genre\/(movie|tv)\/list$/, /^\/(movie|tv)\/\d+\/keywords$/]
+
+/**
+ * Entries kept before expired and then oldest ones are dropped.
+ *
+ * Nothing was ever dropped before: expired entries were only skipped, so the
+ * map grew for as long as the app stayed open. A browse session is a few
+ * hundred entries; this keeps every one a session reuses.
+ */
+const MAX_CACHE_ENTRIES = 600
+
+const cache = new Map<string, { at: number; ttl: number; value: unknown }>()
+
+/**
+ * Requests on the wire, by URL. A second caller asking for the same thing
+ * while the first is waiting shares its answer. The cache alone could not do
+ * that, because it is filled only when an answer lands: the billboard and
+ * Continue Watching asked for the same title together, and every personal
+ * Browse row loading at once asked for the same recommendations.
+ */
+const inflight = new Map<string, Promise<unknown>>()
 
 async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = new URL(BASE + path)
@@ -40,17 +67,45 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
 
   const key = url.toString()
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value as T
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.value as T
 
-  const res = await fetch(key, {
-    headers: REQUEST_HEADERS,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  })
-  if (!res.ok) throw new Error(`TMDB ${path} responded ${res.status}`)
-  const value = (await res.json()) as T
+  const waiting = inflight.get(key)
+  if (waiting) return waiting as Promise<T>
 
-  cache.set(key, { at: Date.now(), value })
-  return value
+  const request = (async () => {
+    const res = await fetch(key, {
+      headers: REQUEST_HEADERS,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    if (!res.ok) throw new Error(`TMDB ${path} responded ${res.status}`)
+    const value = (await res.json()) as T
+    remember(key, path, value)
+    return value
+  })()
+  inflight.set(key, request)
+  try {
+    return await request
+  } finally {
+    inflight.delete(key)
+  }
+}
+
+function remember(key: string, path: string, value: unknown): void {
+  const ttl = LONG_LIVED_PATHS.some((pattern) => pattern.test(path)) ? LONG_TTL_MS : CACHE_TTL_MS
+  // Deleted first so the entry moves to the end: the map's order is then the
+  // order answers arrived in, and the oldest is the first key.
+  cache.delete(key)
+  cache.set(key, { at: Date.now(), ttl, value })
+  if (cache.size <= MAX_CACHE_ENTRIES) return
+
+  const now = Date.now()
+  for (const [stored, entry] of cache) {
+    if (now - entry.at >= entry.ttl) cache.delete(stored)
+  }
+  for (const stored of cache.keys()) {
+    if (cache.size <= MAX_CACHE_ENTRIES) break
+    cache.delete(stored)
+  }
 }
 
 /* ── Response shapes ────────────────────────────────────────────────────── */
