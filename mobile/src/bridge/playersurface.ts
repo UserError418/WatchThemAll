@@ -66,7 +66,7 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { StatusBar } from '@capacitor/status-bar'
 
 import { parsePlayerMessage, type PlayerContext, type PlayerReading } from '@main/playermessage'
-import { parseRelayState, relayCommand } from './mediarelay'
+import { parseRelayState, parseRelayTime, relayCommand } from './mediarelay'
 import type { PlayCandidate } from '@main/providers'
 
 /** Where the renderer's player chrome wants the video, in CSS pixels. */
@@ -196,6 +196,22 @@ function listenForReadings(
     const playing = parseRelayState(event.data)
     if (playing !== null) {
       onMediaState(playing)
+      return
+    }
+    // The relay's reading of the film's own element: every provider, whether
+    // or not it posts a position of its own. It names no title or episode;
+    // the caller files it under what is playing.
+    const time = parseRelayTime(event.data)
+    if (time !== null) {
+      onReading({
+        tmdbId: null,
+        seconds: time.seconds,
+        duration: time.duration,
+        season: null,
+        episode: null,
+        ended: time.ended,
+        playing: time.playing,
+      })
       return
     }
     // What is playing goes *in*, not just out. A provider that posts its whole

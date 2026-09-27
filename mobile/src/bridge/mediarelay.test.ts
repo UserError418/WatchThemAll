@@ -11,14 +11,16 @@
  * the relay's security rests on: `event.source` is supplied by the browser.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { mediaRelayScript, parseRelayState, relayCommand } from './mediarelay'
+import { mediaRelayScript, parseRelayState, parseRelayTime, relayCommand } from './mediarelay'
 
 const APP = 'https://localhost'
 
 class FakeVideo {
   paused = true
+  currentTime = 0
+  ended = false
   constructor(
     public duration = 3_600,
     private readonly size = { width: 640, height: 360 },
@@ -78,7 +80,7 @@ interface Frame {
   videos: FakeVideo[]
   children: Frame[]
   /** A media event in this frame's document, as the page would fire it. */
-  fire(type: 'playing' | 'pause', target: unknown): void
+  fire(type: 'playing' | 'pause' | 'timeupdate' | 'ended', target: unknown): void
 }
 
 function frame(origin: string, parent?: Frame): Frame {
@@ -191,7 +193,7 @@ describe('state going up', () => {
 
     player.fire('playing', film)
     player.fire('pause', film)
-    expect(heard.map(parseRelayState)).toEqual([true, false])
+    expect(heard.map(parseRelayState).filter((state) => state !== null)).toEqual([true, false])
   })
 
   it('ignores media that is not video', () => {
@@ -209,5 +211,85 @@ describe('parseRelayState', () => {
     expect(parseRelayState({ event: 'timeupdate', time: 12 })).toBeNull()
     expect(parseRelayState('{"wtaMedia":1,"state":"playing"}')).toBeNull()
     expect(parseRelayState(null)).toBeNull()
+  })
+})
+
+describe('time going up', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("reports the film's time to the app, at most every two seconds", () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const { player, heard } = world()
+    const film = new FakeVideo(2_700)
+    film.paused = false
+    player.videos.push(film)
+
+    film.currentTime = 600
+    player.fire('timeupdate', film)
+    film.currentTime = 600.25
+    player.fire('timeupdate', film)
+    vi.advanceTimersByTime(2_000)
+    film.currentTime = 602
+    player.fire('timeupdate', film)
+
+    expect(heard.map(parseRelayTime)).toEqual([
+      { seconds: 600, duration: 2_700, ended: false, playing: true },
+      { seconds: 602, duration: 2_700, ended: false, playing: true },
+    ])
+  })
+
+  /** The end starts the next-episode countdown, so it cannot wait two seconds. */
+  it('reports the end at once', () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const { player, heard } = world()
+    const film = new FakeVideo(2_700)
+    player.videos.push(film)
+
+    film.currentTime = 2_699
+    player.fire('timeupdate', film)
+    film.currentTime = 2_700
+    film.ended = true
+    player.fire('ended', film)
+
+    expect(heard.map(parseRelayTime).at(-1)).toEqual({ seconds: 2_700, duration: 2_700, ended: true, playing: false })
+  })
+
+  it("sends the pause's exact place before the pause itself", () => {
+    const { player, heard } = world()
+    const film = new FakeVideo(2_700)
+    player.videos.push(film)
+    film.currentTime = 1_234
+
+    player.fire('pause', film)
+    expect(parseRelayTime(heard[0])?.seconds).toBe(1_234)
+    expect(parseRelayState(heard[1])).toBe(false)
+  })
+
+  it("ignores an advert's clip beside the film", () => {
+    const { player, heard } = world()
+    const film = new FakeVideo(2_700, { width: 1280, height: 720 })
+    const advert = new FakeVideo(30, { width: 300, height: 250 })
+    player.videos.push(advert, film)
+
+    advert.currentTime = 29
+    player.fire('timeupdate', advert)
+    expect(heard).toEqual([])
+  })
+})
+
+describe('parseRelayTime', () => {
+  it("reads the relay's own time reports and nothing else", () => {
+    expect(parseRelayTime({ wtaMedia: 1, time: { seconds: 5, duration: 60, ended: false, playing: true } })).toEqual({
+      seconds: 5,
+      duration: 60,
+      ended: false,
+      playing: true,
+    })
+    expect(parseRelayTime({ wtaMedia: 1, state: 'playing' })).toBeNull()
+    expect(parseRelayTime({ wtaMedia: 1, time: { seconds: 5, duration: Infinity } })).toBeNull()
+    expect(parseRelayTime({ wtaMedia: 1, time: { seconds: -1, duration: 60 } })).toBeNull()
+    expect(parseRelayTime({ time: { seconds: 5, duration: 60 } })).toBeNull()
   })
 })

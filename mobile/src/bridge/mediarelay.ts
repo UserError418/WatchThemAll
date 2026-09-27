@@ -44,6 +44,33 @@ export function relayCommand(paused: boolean): Record<string, unknown> {
   return { [TAG]: 1, command: paused ? 'pause' : 'play' }
 }
 
+/** Where the provider's own video is, as the relay reads it off the element. */
+export interface RelayTime {
+  seconds: number
+  duration: number
+  ended: boolean
+  playing: boolean
+}
+
+/**
+ * Read a time report from the surface frame, or null for anything else.
+ *
+ * The relay's second job (1.9.8). Most providers post no position at all
+ * (VidLux, VidFlix and VidRock never did), so on the phone they recorded
+ * none. The relay already sits in every frame and knows which video is the
+ * film, so it reads the time off the element itself, as the desktop does.
+ */
+export function parseRelayTime(data: unknown): RelayTime | null {
+  if (typeof data !== 'object' || data === null) return null
+  const message = data as Record<string, unknown>
+  if (message[TAG] !== 1 || typeof message.time !== 'object' || message.time === null) return null
+  const time = message.time as Record<string, unknown>
+  const seconds = Number(time.seconds)
+  const duration = Number(time.duration)
+  if (!Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(duration) || duration <= 0) return null
+  return { seconds, duration, ended: time.ended === true, playing: time.playing === true }
+}
+
 /**
  * Read a state report from the surface frame: true for playing, false for
  * paused, null for anything that is not one of the relay's own messages.
@@ -76,9 +103,10 @@ export function mediaRelayScript(appOrigin: string): string {
   const TAG = ${JSON.stringify(TAG)}
   const APP = ${JSON.stringify(appOrigin)}
 
-  const up = (state) => {
-    try { window.parent.postMessage({ [TAG]: 1, state }, '*') } catch (error) {}
+  const send = (message) => {
+    try { window.parent.postMessage(message, '*') } catch (error) {}
   }
+  const up = (state) => send({ [TAG]: 1, state })
   const children = () => Array.from(document.querySelectorAll('iframe'))
   const fromParent = (event) =>
     event.source === window.parent && (window.parent !== window.top || event.origin === APP)
@@ -116,17 +144,46 @@ export function mediaRelayScript(appOrigin: string): string {
       return
     }
 
-    if (data.state === 'playing' || data.state === 'paused') {
-      if (children().some((child) => child.contentWindow === event.source)) up(data.state)
+    if (data.state === 'playing' || data.state === 'paused' || data.time) {
+      if (children().some((child) => child.contentWindow === event.source)) send(data)
     }
   })
+
+  // The film's time, every two seconds while it plays and at once when it
+  // ends: the app saves it every five, and the end starts the next-episode
+  // countdown. Only the film's own element, so an advert's clip is not taken
+  // for the episode.
+  let reportedAt = 0
+  const reportTime = (video, force) => {
+    if (video !== film()) return
+    const now = Date.now()
+    if (!force && now - reportedAt < 2000) return
+    reportedAt = now
+    send({ [TAG]: 1, time: {
+      seconds: Number(video.currentTime),
+      duration: Number(video.duration),
+      ended: !!video.ended,
+      playing: !video.paused && !video.ended,
+    } })
+  }
+  document.addEventListener('timeupdate', (event) => {
+    if (event.target instanceof HTMLVideoElement) reportTime(event.target, false)
+  }, true)
+  document.addEventListener('ended', (event) => {
+    if (event.target instanceof HTMLVideoElement) reportTime(event.target, true)
+  }, true)
 
   // Media events do not bubble; the capture phase still sees them.
   document.addEventListener('playing', (event) => {
     if (event.target instanceof HTMLVideoElement) up('playing')
   }, true)
   document.addEventListener('pause', (event) => {
-    if (event.target instanceof HTMLVideoElement) up('paused')
+    if (event.target instanceof HTMLVideoElement) {
+      // The exact place first: the app saves the moment it hears "paused",
+      // and messages from one frame arrive in the order they were posted.
+      reportTime(event.target, true)
+      up('paused')
+    }
   }, true)
 })()`
 }

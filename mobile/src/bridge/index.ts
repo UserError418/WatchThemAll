@@ -399,6 +399,12 @@ export async function createBridge(): Promise<WtaApi> {
     candidateReported: boolean
     /** When a reading was last written as the position; see `POSITION_WRITE_MS`. */
     writtenAt: number
+    /**
+     * The episode the provider's own messages last named. Kept apart from
+     * `reading`, because the relay's readings name none and would otherwise
+     * hide a provider moving on by itself.
+     */
+    namedEpisode: { season: number; episode: number } | null
   }
 
   let progress: Progress | null = null
@@ -453,29 +459,32 @@ export async function createBridge(): Promise<WtaApi> {
        */
       if (reading.tmdbId !== null && reading.tmdbId !== session.req.tmdbId) return
 
-      const held = progress.reading
-
       /**
        * The provider moved on by itself.
        *
-       * Its own "next episode" button is outside the app entirely, so the only
-       * notice we get is the episode number in the next reading changing. The
-       * episode being left has to be settled *here* — by the time the player is
-       * closed, the held reading is about the new one and the old episode would
-       * never be marked watched despite having been watched to the end.
+       * Its own "next episode" button, or its own autoplay, is outside the app
+       * entirely, so the only notice we get is the episode a reading names
+       * changing. The episode being left is settled *here*, while
+       * `session.req` still names it, and then the session follows the
+       * provider: from 1.9.8 the relay's readings name no episode, so filing
+       * them under anything but the session would put the new episode's
+       * position on the old one, and auto-next must count from where the
+       * viewer actually is.
        */
+      const named = progress.namedEpisode
+      const names = reading.season !== null && reading.episode !== null
       const advanced =
-        held !== null &&
-        held.season !== null &&
-        held.episode !== null &&
-        reading.season !== null &&
-        reading.episode !== null &&
-        (held.season !== reading.season || held.episode !== reading.episode)
+        names &&
+        named !== null &&
+        (named.season !== reading.season || named.episode !== reading.episode)
 
       if (advanced) {
         settleProgress(session.req)
+        session = { ...session, req: { ...session.req, season: reading.season, episode: reading.episode } }
         progress.episodeOpenedAt = Date.now()
+        emitPlayerState()
       }
+      if (names) progress.namedEpisode = { season: reading.season!, episode: reading.episode! }
 
       progress.reading = reading
       progress.candidateReported = true
@@ -934,6 +943,7 @@ export async function createBridge(): Promise<WtaApi> {
     session = { req, candidates: selection.candidates, index: 0 }
     if (progress) {
       progress.reading = null
+      progress.namedEpisode = null
       progress.episodeOpenedAt = Date.now()
     }
     showCandidate(0)
@@ -1481,6 +1491,7 @@ export async function createBridge(): Promise<WtaApi> {
         candidateShownAt: now,
         candidateReported: false,
         writtenAt: now,
+        namedEpisode: null,
       }
       showCandidate(0)
       chrome.open()
