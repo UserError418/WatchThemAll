@@ -44,6 +44,15 @@ let memory: Cache | null = null
 /** In flight, so two episodes starting at once do not both download 5.8 MB. */
 let loading: Promise<Cache | null> | null = null
 
+/**
+ * When the last download failed, and how long to believe it.
+ *
+ * Without this, a failure left nothing behind, so every later episode start
+ * (offline, or GitHub having a bad hour) tried the 5.8 MB download again.
+ */
+let failedAt = -Infinity
+const RETRY_AFTER_MS = 60 * 60 * 1000
+
 export type FetchLike = typeof fetch
 
 /** Reduce the published file to the three fields this app uses. */
@@ -128,6 +137,8 @@ export async function load(
   now: number = Date.now(),
 ): Promise<Cache | null> {
   if (memory && now - memory.fetchedAt < MAX_AGE_MS) return memory
+  // Whatever there is — a stale copy, or nothing — until the retry is due.
+  if (now - failedAt < RETRY_AFTER_MS) return memory
   if (loading) return loading
 
   loading = (async () => {
@@ -137,6 +148,7 @@ export async function load(
       return cached
     }
     const fresh = await download(dir, fetchImpl, now)
+    if (!fresh) failedAt = now
     memory = fresh ?? cached
     return memory
   })().finally(() => {
@@ -161,4 +173,5 @@ export async function malIdFor(
 export function resetForTests(): void {
   memory = null
   loading = null
+  failedAt = -Infinity
 }

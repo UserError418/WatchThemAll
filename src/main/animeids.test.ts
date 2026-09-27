@@ -164,4 +164,32 @@ describe('the cache', () => {
     const dir = await mkdtemp(join(tmpdir(), 'wta-anime-'))
     expect(await malIdFor(dir, 1429, 1, stub({}, false).fetchImpl)).toBeNull()
   })
+
+  /** Every episode start used to try the 5.8 MB download again while offline. */
+  it('does not retry a failed download for an hour', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wta-anime-'))
+    const down = stub({}, false)
+    const start = Date.now()
+
+    await load(dir, down.fetchImpl, start)
+    await load(dir, down.fetchImpl, start + 59 * 60 * 1000)
+    expect(down.calls).toBe(1)
+
+    const up = stub(PUBLISHED)
+    const cache = await load(dir, up.fetchImpl, start + 61 * 60 * 1000)
+    expect(up.calls).toBe(1)
+    expect(cache ? lookup(cache.rows, 1429, 2) : null).toBe(25777)
+  })
+
+  it('keeps answering from a stale cache meanwhile', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wta-anime-'))
+    const ancient = Date.now() - 400 * 24 * 60 * 60 * 1000
+    await writeFile(join(dir, 'anime-ids.json'), JSON.stringify({ fetchedAt: ancient, rows: [[123, 456, 1]] }), 'utf8')
+    const down = stub({}, false)
+
+    expect(await malIdFor(dir, 456, 1, down.fetchImpl)).toBe(123)
+    expect(await malIdFor(dir, 456, 1, down.fetchImpl)).toBe(123)
+    expect(down.calls).toBe(1)
+  })
 })
+
