@@ -178,6 +178,15 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
   /** Identifies the run, so a cancelled scan's stragglers cannot write. */
   let token = 0
   let running = false
+  /**
+   * The latest run, settled once its probes are closed and playback is back.
+   *
+   * A new run waits for it. Cancelling was never enough on its own: the old
+   * run's cleanup closes *every* probe session and resumes playback, and it
+   * ran while the new run's probes were loading — killing them, which read as
+   * a row of reds stored for days, and restarting the video mid-scan.
+   */
+  let lastRun: Promise<unknown> = Promise.resolve()
 
   return {
     busy: () => running,
@@ -187,126 +196,139 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       running = false
     },
 
-    async run(titleKey, request) {
+    run(titleKey, request) {
       token += 1
       const mine = token
-      running = true
-      const cancelled = (): boolean => token !== mine
+      const previous = lastRun
+      const current = previous.then(() => scan(titleKey, request, mine))
+      lastRun = current.catch(() => {})
+      return current
+    },
+  }
 
-      const providers = options.providers()
-      const verdicts: Record<string, ProbeVerdict> = {}
-      /** Milliseconds to the first sign of a stream, for streaming providers only. */
-      const timings: Record<string, number> = {}
-      /** Best quality class offered, for streaming providers whose playlists say. */
-      const qualities: Record<string, number> = {}
-      /** Why each provider that did not stream failed. */
-      const reasons: Record<string, ScanReason> = {}
-      /** When each provider's standing result was measured. */
-      const testedAt: Record<string, number> = {}
-      /** How each streaming provider's video arrived. */
-      const delivery: Record<string, StreamDelivery> = {}
-      const total = providers.length
+  async function scan(
+    titleKey: string,
+    request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+    mine: number,
+  ): Promise<ProviderScan> {
+    // Superseded while it waited: nothing measured, nothing to record.
+    if (token !== mine) return { titleKey, at: Date.now(), verdicts: {} }
+    running = true
+    const cancelled = (): boolean => token !== mine
 
-      /** What is under test right now, by provider, in the order it started. */
-      const testing = new Map<string, ScanInFlight>()
-      const begin = (provider: Provider, recheck: boolean): void => {
-        testing.set(provider.id, { providerId: provider.id, providerName: provider.name, recheck })
-        publish(false)
-      }
-      const end = (provider: Provider): void => {
-        testing.delete(provider.id)
-        publish(false)
-      }
-      const publish = (finished: boolean): void => {
-        options.onProgress({
-          titleKey,
-          testing: [...testing.values()],
-          done: Object.keys(verdicts).length,
-          total,
-          verdicts: { ...verdicts },
-          timings: { ...timings },
-          qualities: { ...qualities },
-          reasons: { ...reasons },
-          delivery: { ...delivery },
-          finished,
-          cancelled: finished && token !== mine,
-        })
-      }
+    const providers = options.providers()
+    const verdicts: Record<string, ProbeVerdict> = {}
+    /** Milliseconds to the first sign of a stream, for streaming providers only. */
+    const timings: Record<string, number> = {}
+    /** Best quality class offered, for streaming providers whose playlists say. */
+    const qualities: Record<string, number> = {}
+    /** Why each provider that did not stream failed. */
+    const reasons: Record<string, ScanReason> = {}
+    /** When each provider's standing result was measured. */
+    const testedAt: Record<string, number> = {}
+    /** How each streaming provider's video arrived. */
+    const delivery: Record<string, StreamDelivery> = {}
+    const total = providers.length
 
-      const settle = (provider: Provider, measured: Measured): void => {
-        verdicts[provider.id] = measured.verdict
-        testedAt[provider.id] = Date.now()
-        if (measured.reason !== null) reasons[provider.id] = measured.reason
-        else delete reasons[provider.id]
-        if (measured.ms !== null) timings[provider.id] = measured.ms
-        else delete timings[provider.id]
-        if (measured.quality !== null) qualities[provider.id] = measured.quality
-        else delete qualities[provider.id]
-        if (measured.delivery !== null) delivery[provider.id] = measured.delivery
-        else delete delivery[provider.id]
-      }
-
-      const measure = (provider: Provider, budgetMs: number): Promise<Measured> => {
-        const url = renderTemplate(provider, request)
-        // The provider cannot express this request at all — no template for
-        // this media type, or an id it needs and the title lacks. Nothing to
-        // load, and nothing transient about it.
-        if (url === null) return Promise.resolve({ verdict: 'dead', ms: null, quality: null, reason: { kind: 'unsupported' }, delivery: null })
-        return probeOne(url, budgetMs, cancelled)
-      }
-
-      options.suspendPlayback()
+    /** What is under test right now, by provider, in the order it started. */
+    const testing = new Map<string, ScanInFlight>()
+    const begin = (provider: Provider, recheck: boolean): void => {
+      testing.set(provider.id, { providerId: provider.id, providerName: provider.name, recheck })
       publish(false)
+    }
+    const end = (provider: Provider): void => {
+      testing.delete(provider.id)
+      publish(false)
+    }
+    const publish = (finished: boolean): void => {
+      options.onProgress({
+        titleKey,
+        testing: [...testing.values()],
+        done: Object.keys(verdicts).length,
+        total,
+        verdicts: { ...verdicts },
+        timings: { ...timings },
+        qualities: { ...qualities },
+        reasons: { ...reasons },
+        delivery: { ...delivery },
+        finished,
+        cancelled: finished && token !== mine,
+      })
+    }
 
-      try {
-        /**
-         * A shared queue rather than pairs, as on the desktop: a dead host
-         * fails in a second while a working provider can use its whole
-         * budget, and a pair waits for its slower half.
-         */
-        let next = 0
-        const worker = async (): Promise<void> => {
-          while (!cancelled()) {
-            const provider = providers[next]
-            next += 1
-            if (!provider) return
+    const settle = (provider: Provider, measured: Measured): void => {
+      verdicts[provider.id] = measured.verdict
+      testedAt[provider.id] = Date.now()
+      if (measured.reason !== null) reasons[provider.id] = measured.reason
+      else delete reasons[provider.id]
+      if (measured.ms !== null) timings[provider.id] = measured.ms
+      else delete timings[provider.id]
+      if (measured.quality !== null) qualities[provider.id] = measured.quality
+      else delete qualities[provider.id]
+      if (measured.delivery !== null) delivery[provider.id] = measured.delivery
+      else delete delivery[provider.id]
+    }
 
-            begin(provider, false)
-            const measured = await measure(provider, PROBE_MS)
-            // Checked after the await: a cancelled run must not write.
-            if (cancelled()) return
-            settle(provider, measured)
-            end(provider)
-          }
-        }
-        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker))
+    const measure = (provider: Provider, budgetMs: number): Promise<Measured> => {
+      const url = renderTemplate(provider, request)
+      // The provider cannot express this request at all — no template for
+      // this media type, or an id it needs and the title lacks. Nothing to
+      // load, and nothing transient about it.
+      if (url === null) return Promise.resolve({ verdict: 'dead', ms: null, quality: null, reason: { kind: 'unsupported' }, delivery: null })
+      return probeOne(url, budgetMs, cancelled)
+    }
 
-        // Every red again, alone, with the longer budget. See the header.
-        for (const provider of providers) {
-          if (cancelled()) break
-          if (verdicts[provider.id] !== 'dead' || reasons[provider.id]?.kind === 'unsupported') continue
+    options.suspendPlayback()
+    publish(false)
 
-          begin(provider, true)
-          const second = await measure(provider, SOLO_PROBE_MS)
-          if (cancelled()) break
-          if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
-            settle(provider, second)
-          }
+    try {
+      /**
+       * A shared queue rather than pairs, as on the desktop: a dead host
+       * fails in a second while a working provider can use its whole
+       * budget, and a pair waits for its slower half.
+       */
+      let next = 0
+      const worker = async (): Promise<void> => {
+        while (!cancelled()) {
+          const provider = providers[next]
+          next += 1
+          if (!provider) return
+
+          begin(provider, false)
+          const measured = await measure(provider, PROBE_MS)
+          // Checked after the await: a cancelled run must not write.
+          if (cancelled()) return
+          settle(provider, measured)
           end(provider)
         }
-      } finally {
-        // Each probe closes its own session; this is for one a crash or a
-        // cancellation left behind, since every session is a decoding WebView.
-        await closeAllProbes().catch(() => 0)
-        options.resumePlayback()
-        if (token === mine) running = false
       }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker))
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
-      testing.clear()
-      publish(true)
-      return scan
-    },
+      // Every red again, alone, with the longer budget. See the header.
+      for (const provider of providers) {
+        if (cancelled()) break
+        if (verdicts[provider.id] !== 'dead' || reasons[provider.id]?.kind === 'unsupported') continue
+
+        begin(provider, true)
+        const second = await measure(provider, SOLO_PROBE_MS)
+        if (cancelled()) break
+        if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
+          settle(provider, second)
+        }
+        end(provider)
+      }
+    } finally {
+      // Each probe closes its own session; this is for one a crash or a
+      // cancellation left behind, since every session is a decoding WebView.
+      await closeAllProbes().catch(() => 0)
+      options.resumePlayback()
+      if (token === mine) running = false
+    }
+
+    const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
+    testing.clear()
+    publish(true)
+    return result
   }
 }
 

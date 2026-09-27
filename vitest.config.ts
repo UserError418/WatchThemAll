@@ -15,7 +15,8 @@ export default defineConfig({
    */
   plugins: [svelte({ hot: false })],
   resolve: {
-    alias: { '@shared': resolve('src/shared') },
+    // `@main` as the phone build resolves it, for the bridge's tests.
+    alias: { '@shared': resolve('src/shared'), '@main': resolve('src/main') },
     // Svelte's browser build is what the runes runtime lives in; the default
     // node condition resolves to a server build with no reactivity.
     conditions: ['browser'],

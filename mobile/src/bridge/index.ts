@@ -465,6 +465,13 @@ export async function createBridge(): Promise<WtaApi> {
    * rebuilt per call would lose track of a server it had already started.
    */
   const castBridge = createCastBridge()
+  /**
+   * Whether the picture is on the television, so the phone's is blanked.
+   *
+   * A scan blanks and restores the same surface, and its restore used to put
+   * the phone's own video back mid-cast — the film twice, audio in two rooms.
+   */
+  let onTv = false
 
   /**
    * Move what is playing onto the television, and stand the phone down.
@@ -481,6 +488,7 @@ export async function createBridge(): Promise<WtaApi> {
 
     const result = await castBridge.beam(now)
     if (result.ok) {
+      onTv = true
       surface.blank()
       standUpright()
     }
@@ -542,6 +550,7 @@ export async function createBridge(): Promise<WtaApi> {
         duration: status.duration,
       })
     }
+    onTv = false
     surface.restore()
     releaseOrientation()
   }
@@ -1135,10 +1144,27 @@ export async function createBridge(): Promise<WtaApi> {
    */
   const scanRunner = createScanRunner({
     providers: enabledProviders,
-    suspendPlayback: () => surface.blank(),
-    resumePlayback: () => surface.restore(),
+    // Left alone while casting: the television has the picture, and bringing
+    // the phone's back when the scan ends would play the film twice.
+    suspendPlayback: () => {
+      if (!onTv) surface.blank()
+    },
+    resumePlayback: () => {
+      if (!onTv) surface.restore()
+    },
     onProgress: (payload) => providerScan.emit(payload),
   })
+
+  /**
+   * A scan stops when the app leaves the foreground.
+   *
+   * Android throttles a backgrounded WebView, and a probe starved of it looks
+   * exactly like a provider that does not stream: a scan left running with the
+   * screen off stored a row of false reds that steered Automatic for days.
+   * Cancelled, it records only what it finished measuring in the foreground,
+   * and the user can scan again.
+   */
+  void CapacitorApp.addListener('pause', () => scanRunner.cancel())
 
   /**
    * Run a scan and write down what it found.
