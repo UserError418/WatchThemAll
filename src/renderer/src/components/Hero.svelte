@@ -15,6 +15,7 @@
   import { library } from '../lib/library.svelte'
   import { backdropUrl, posterUrl } from '../lib/images'
   import { countdown, episodeCode } from '../lib/format'
+  import { titleFacts } from '../lib/titlefacts.svelte'
 
   interface Props {
     fallback: MediaSummary | null
@@ -86,7 +87,6 @@
     return null
   })
 
-  let backdropPath = $state<string | null>(null)
 
   /**
    * The billboard does not autoplay a trailer, and that is deliberate.
@@ -103,30 +103,27 @@
    * *not* chosen, where motion answers "what is this" and the user asked by
    * pointing at it. The distinction is who picked the subject.
    */
+  /**
+   * Landscape art, from the title facts when the subject has none.
+   *
+   * Library entries store only a poster path, and the billboard needs
+   * landscape art to fill the width. It used to ask TMDB for the detail
+   * itself, from an effect keyed on the subject *object*, which is rebuilt on
+   * every library change. Each one reset the art to nothing (the entry has
+   * none), dropped the picture and asked again: 21 times during a release
+   * sweep. The facts are shared with the rows, deduplicated and kept for a
+   * week, and a reload yields the same path, so the picture stays put.
+   */
   $effect(() => {
     const media = subject?.media
-    if (!media) return
+    if (media && media.tmdbId !== 0 && !media.backdropPath) titleFacts.want(media.type, media.tmdbId)
+  })
 
-    backdropPath = media.backdropPath
-    if (media.tmdbId === 0) return
-
-    let cancelled = false
-
-    // Still worth the request: library entries store only a poster path, and
-    // the billboard needs landscape art to fill the width.
-    void window.wta.tmdb
-      .detail(media.tmdbId, media.type)
-      .then((detail) => {
-        if (cancelled || !detail) return
-        backdropPath = detail.backdropPath ?? media.backdropPath
-      })
-      .catch(() => {
-        // The hero degrades to whatever art the summary carried.
-      })
-
-    return () => {
-      cancelled = true
-    }
+  const backdropPath = $derived.by(() => {
+    const media = subject?.media
+    if (!media) return null
+    const facts = media.tmdbId !== 0 ? titleFacts.get(media.type, media.tmdbId) : null
+    return facts?.backdropPath ?? media.backdropPath
   })
 
   const backdrop = $derived(backdropUrl(backdropPath, 'original'))
