@@ -114,6 +114,8 @@
   let ready = $state(false)
   let loadError = $state<string | null>(null)
   let toast = $state<string | null>(null)
+  /** One timer for whichever toast is up, so a newer one gets its full six seconds. */
+  let toastTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * The nav floats over the hero and gains a background once the user scrolls.
    * Only Browse has a hero, so on every other surface it is solid immediately.
@@ -206,7 +208,8 @@
           list.length === 1
             ? `${list[0]?.title} has a new episode`
             : `${list.length} tracked series have new episodes`
-        setTimeout(() => (toast = null), 6000)
+        if (toastTimer) clearTimeout(toastTimer)
+        toastTimer = setTimeout(() => (toast = null), 6000)
       }),
       window.wta.on.episodeWatched(({ tmdbId, type, season, episode }) => {
         /**

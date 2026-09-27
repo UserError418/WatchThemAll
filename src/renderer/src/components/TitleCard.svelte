@@ -206,6 +206,17 @@
   }
 
   const audioId = previewId('card')
+
+  /**
+   * A card can go while hovered — a row reloads, the view changes under the
+   * pointer — and then `onLeave` never runs. Its expansion timer fired on a
+   * card that no longer existed, and a card holding the sound kept it, so the
+   * billboard, which only takes the sound back when it is free, stayed silent.
+   */
+  $effect(() => () => {
+    clearTimers()
+    previewAudio.release(audioId)
+  })
   /**
    * Silent unless the user wants sound *and* this card is the surface that
    * currently owns it — otherwise a hovered card and the billboard behind it
