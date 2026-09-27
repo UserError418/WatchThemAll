@@ -1304,10 +1304,8 @@ export async function createBridge(): Promise<WtaApi> {
       forYouPlan: (req: ForYouPlanRequest) => forYouPlan(store.read(), req.seed, tmdbNetwork),
       forYouRow: (req: ForYouRowRequest) => forYouRow(store.read(), req, tmdbNetwork),
 
-      search: (query: string, page: number) => tmdb.search(query, page),
       detail: (id: number, type: MediaType): Promise<MediaDetail | null> => tmdb.detail(id, type),
       season: (id: number, s: number): Promise<Season | null> => tmdb.season(id, s),
-      genres: (type: MediaType) => tmdb.genres(type),
       trailer: (id: number, type: MediaType) => tmdb.trailer(id, type),
     },
 
@@ -1404,8 +1402,6 @@ export async function createBridge(): Promise<WtaApi> {
       },
 
       close: async () => closePlayer(),
-      goTo: playerGoTo,
-      switchProvider: playerSwitchProvider,
       dismissSuggestion: async () => {},
       reload: playerReload,
       setMini: async (next) => setMini(next),
@@ -1570,8 +1566,6 @@ export async function createBridge(): Promise<WtaApi> {
         await store.replaceDocument(current)
         return { ok: true }
       },
-
-      dir: () => store.describe(),
     },
 
     sync: {

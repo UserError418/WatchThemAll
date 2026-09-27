@@ -106,10 +106,6 @@ export interface IpcDeps {
   setPlayerBounds: (bounds: PlayerBounds) => void
   /** Stop playing and put the app's chrome back. */
   closePlayer: () => void
-  /** Move the player to another episode of the same title. */
-  navigatePlayer: (season: number, episode: number) => void
-  /** Load a different source. False if it cannot serve the current title. */
-  switchPlayerProvider: (providerId: string) => boolean
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
   /** The user, or the countdown, took the offer to switch. False if there was none. */
@@ -197,10 +193,8 @@ export function registerIpc(deps: IpcDeps): void {
     forYouRow(store.read(), req, tmdbNetwork),
   )
 
-  ipcMain.handle(CH.tmdbSearch, (_e, query: string, page: number) => tmdb.search(query, page))
   ipcMain.handle(CH.tmdbDetail, (_e, id: number, type: MediaType) => tmdb.detail(id, type))
   ipcMain.handle(CH.tmdbSeason, (_e, id: number, season: number) => tmdb.season(id, season))
-  ipcMain.handle(CH.tmdbGenres, (_e, type: MediaType) => tmdb.genres(type))
   ipcMain.handle(CH.tmdbTrailer, (_e, id: number, type: MediaType) => tmdb.trailer(id, type))
 
   ipcMain.handle(CH.search, (_e, query: string, page: number) => search.search(query, page))
@@ -290,7 +284,6 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(CH.providersScanCancel, () => deps.scan.cancel())
   ipcMain.handle(CH.providersBackgroundStatus, () => deps.backgroundStatus())
-  ipcMain.handle(CH.dataDir, () => store.dir)
 
   /**
    * Open a web address outside the app.
@@ -460,12 +453,6 @@ export function registerIpc(deps: IpcDeps): void {
    */
   ipcMain.handle(CH.playSetBounds, (_e, bounds: PlayerBounds) => deps.setPlayerBounds(bounds))
   ipcMain.handle(CH.playClose, () => deps.closePlayer())
-  ipcMain.handle(CH.playGoTo, (_e, season: number, episode: number) =>
-    deps.navigatePlayer(season, episode),
-  )
-  ipcMain.handle(CH.playSwitchProvider, (_e, providerId: string) =>
-    deps.switchPlayerProvider(providerId),
-  )
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
   ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())

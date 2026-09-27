@@ -96,15 +96,6 @@ class CapacitorPersistence implements StorePersistence {
       toDirectory: DIRECTORY,
     })
   }
-
-  async describe(): Promise<string> {
-    try {
-      const { uri } = await Filesystem.getUri({ path: FILE, directory: DIRECTORY })
-      return decodeURIComponent(uri.replace(/^file:\/\//, ''))
-    } catch {
-      return 'app storage'
-    }
-  }
 }
 
 export class MobileStore extends StoreCore {

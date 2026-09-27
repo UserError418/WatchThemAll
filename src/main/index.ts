@@ -915,12 +915,6 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       openPlayer,
       setPlayerBounds: (bounds) => player?.setBounds(bounds),
       closePlayer: () => closePlayer(),
-      navigatePlayer,
-      switchPlayerProvider: (providerId) => {
-        const ok = player?.switchTo(providerId) ?? false
-        if (ok) sendPlayerState()
-        return ok
-      },
       keepWaiting: () => player?.keepWaiting(),
       acceptSuggestion: () => player?.acceptSuggestion() ?? false,
       reloadPlayer: () => player?.reload(),

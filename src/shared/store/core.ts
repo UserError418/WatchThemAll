@@ -76,8 +76,6 @@ export interface StorePersistence {
    * still rescue most of.
    */
   quarantine(): Promise<void>
-  /** A human-readable location, shown in the app. */
-  describe(): Promise<string>
 }
 
 /** What the app shows when the library file exists and would not open. */
@@ -553,11 +551,6 @@ export class StoreCore {
     this.unsaved = true
     this.notify(null)
     await this.flush()
-  }
-
-  /** Where the document lives, for the app to show. */
-  describe(): Promise<string> {
-    return this.persistence.describe()
   }
 
   /** Write now. Call when the app is about to lose the chance to. */

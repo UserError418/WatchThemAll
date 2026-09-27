@@ -23,7 +23,6 @@ async function storeWith(document: Record<string, unknown>): Promise<StoreCore> 
         text = next
       },
       quarantine: async () => {},
-      describe: async () => 'memory',
     },
     migrate,
     'desktop',

@@ -41,10 +41,8 @@ const api: WtaApi = {
     row: (req: RowRequest | GenreRowRequest | DiscoverRequest) => ipcRenderer.invoke(CH.tmdbRow, req),
     forYouPlan: (req: ForYouPlanRequest) => ipcRenderer.invoke(CH.tmdbForYouPlan, req),
     forYouRow: (req: ForYouRowRequest) => ipcRenderer.invoke(CH.tmdbForYouRow, req),
-    search: (query: string, page: number) => ipcRenderer.invoke(CH.tmdbSearch, query, page),
     detail: (tmdbId: number, type: MediaType) => ipcRenderer.invoke(CH.tmdbDetail, tmdbId, type),
     season: (tmdbId: number, season: number) => ipcRenderer.invoke(CH.tmdbSeason, tmdbId, season),
-    genres: (type: MediaType) => ipcRenderer.invoke(CH.tmdbGenres, type),
     trailer: (tmdbId: number, type: MediaType) =>
       ipcRenderer.invoke(CH.tmdbTrailer, tmdbId, type),
   },
@@ -66,9 +64,6 @@ const api: WtaApi = {
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke(CH.playSetBounds, bounds),
     close: () => ipcRenderer.invoke(CH.playClose),
-    goTo: (season: number, episode: number) => ipcRenderer.invoke(CH.playGoTo, season, episode),
-    switchProvider: (providerId: string) =>
-      ipcRenderer.invoke(CH.playSwitchProvider, providerId),
     dismissSuggestion: () => ipcRenderer.invoke(CH.playDismissSuggestion),
     reload: () => ipcRenderer.invoke(CH.playReload),
     setMini: (mini: boolean) => ipcRenderer.invoke(CH.playSetMini, mini),
@@ -82,7 +77,6 @@ const api: WtaApi = {
   data: {
     export: () => ipcRenderer.invoke(CH.dataExport),
     import: (payload: unknown) => ipcRenderer.invoke(CH.dataImport, payload),
-    dir: () => ipcRenderer.invoke(CH.dataDir),
   },
   cast: {
     available: () => ipcRenderer.invoke(CH.castAvailable),

@@ -48,10 +48,6 @@ class NodePersistence implements StorePersistence {
     console.error(`[store] unreadable document moved to ${backup}`)
     return Promise.resolve()
   }
-
-  describe(): Promise<string> {
-    return Promise.resolve(this.file)
-  }
 }
 
 export class Store extends StoreCore {

@@ -44,10 +44,8 @@ export const CH = {
   storeWrite: 'store:write',
 
   tmdbRow: 'tmdb:row',
-  tmdbSearch: 'tmdb:search',
   tmdbDetail: 'tmdb:detail',
   tmdbSeason: 'tmdb:season',
-  tmdbGenres: 'tmdb:genres',
   tmdbTrailer: 'tmdb:trailer',
 
   /** Federated search across TMDB and IMDB. */
@@ -87,10 +85,6 @@ export const CH = {
   playSetBounds: 'play:set-bounds',
   /** Tear the player down. */
   playClose: 'play:close',
-  /** Jump to another episode of the same title. */
-  playGoTo: 'play:go-to',
-  /** Pick a source explicitly, from the app's own chrome. */
-  playSwitchProvider: 'play:switch-provider',
   /** "Keep waiting": stop offering to leave the provider currently loading. */
   playDismissSuggestion: 'play:dismiss-suggestion',
   playAcceptSuggestion: 'play:accept-suggestion',
@@ -114,7 +108,6 @@ export const CH = {
   malPreview: 'mal:preview',
   /** Commit a reviewed import. This is the part that reaches TMDB. */
   malImport: 'mal:import',
-  dataDir: 'data:dir',
   /**
    * Hand a URL to the platform's browser.
    *
@@ -791,10 +784,8 @@ export interface WtaApi {
     forYouPlan(req: ForYouPlanRequest): Promise<ForYouPlan>
     /** One page of a planned row. */
     forYouRow(req: ForYouRowRequest): Promise<Paged<MediaSummary>>
-    search(query: string, page: number): Promise<Paged<MediaSummary>>
     detail(tmdbId: number, type: MediaType): Promise<MediaDetail | null>
     season(tmdbId: number, season: number): Promise<Season | null>
-    genres(type: MediaType): Promise<Array<{ id: number; name: string }>>
     /** YouTube key for a card preview, or null when there is no usable trailer. */
     trailer(tmdbId: number, type: MediaType): Promise<string | null>
   }
@@ -871,8 +862,6 @@ export interface WtaApi {
     /** The rectangle, in the app window's content coordinates. */
     setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>
     close(): Promise<void>
-    goTo(season: number, episode: number): Promise<void>
-    switchProvider(providerId: string): Promise<boolean>
     /** "Keep waiting" — stop offering to leave the provider that is loading. */
     dismissSuggestion(): Promise<void>
     /** Reload the embed in place, without losing the episode position. */
@@ -906,7 +895,6 @@ export interface WtaApi {
   data: {
     export(): Promise<unknown>
     import(payload: unknown): Promise<{ ok: boolean; error?: string }>
-    dir(): Promise<string>
   }
   /**
    * Cross-device sync.
