@@ -214,6 +214,16 @@
           Play the next episode automatically
         </label>
 
+        <!-- `desktop-only`: the phone gets these controls in the v2 port; see mobile.css. -->
+        <label class="check desktop-only">
+          <input
+            type="checkbox"
+            checked={library.settings.ownControls}
+            onchange={(e) => library.setOwnControls(e.currentTarget.checked)}
+          />
+          Use WatchThemAll's player controls on every source
+        </label>
+
         <label class="check">
           <input
             type="checkbox"

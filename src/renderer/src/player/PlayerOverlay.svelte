@@ -1,0 +1,1159 @@
+<script lang="ts">
+  /**
+   * v2's own player controls, drawn in the `/__player` shell over the source.
+   *
+   * The source plays in the shell's iframe (`#provider`). This layer sits on
+   * top of it and does one of two things with the pointer:
+   *
+   * - **passes it through** (`pointer-events: none`) while the source still
+   *   needs its own page: its poster, an advert gate, a server picker, an
+   *   error screen. Also when our controls are switched off, when the user
+   *   asked for the source's own ("Source controls"), and when the film stops
+   *   reporting.
+   * - **takes it** once the film plays. The source's interface is then hidden
+   *   in every one of its frames (`hide`), and this is the player: one look,
+   *   one set of keys, whatever the source.
+   *
+   * The film is moved through the film relay (`FilmLink`, `@shared/filmrelay`).
+   * Keys, the top bar and the window go through main (`window.wtaPlayer`).
+   * The design is in `docs/internal/v2-player.md`.
+   */
+  import { fade } from 'svelte/transition'
+  import type { BarState, PlayerOverlayConfig } from '@shared/ipc'
+  import { actionForEvent, SEEK_STEP_SECONDS, VOLUME_STEP, type TransportAction } from '@shared/playerkeys'
+  import { clock } from '../lib/format'
+  import { FilmLink, type FilmView } from './filmlink'
+  import SeekBar from './SeekBar.svelte'
+  import { ICONS } from './icons'
+
+  const api = window.wtaPlayer
+  const frame = document.getElementById('provider') as HTMLIFrameElement | null
+
+  const link = new FilmLink((message) => frame?.contentWindow?.postMessage(message, '*'))
+
+  let config = $state<PlayerOverlayConfig>({ ownControls: false, fullscreen: false, mini: false })
+  let bar = $state<BarState>({ visible: true, away: false })
+  let view = $state<FilmView>(link.view())
+
+  /** The user asked for the source's own controls, for this load. */
+  let sourceChosen = $state(false)
+  /** The film has played at least once in this load; before that, the source's page rules. */
+  let started = $state(false)
+
+  const film = $derived(view.film)
+  const engaged = $derived(config.ownControls && !sourceChosen && started && film !== null)
+
+  /**
+   * The film is there but has not played yet: a source waiting on its poster
+   * for a click. Ours plays it directly, which worked on every source the
+   * study measured, even where a real click on the source's own poster did
+   * nothing (VidRock under test). Only the button takes the pointer; the rest
+   * of the source's page stays reachable, in case it wants something else
+   * first.
+   */
+  const offerPlay = $derived(
+    config.ownControls && !sourceChosen && !started && film !== null && film.paused && !film.ended && view.wanted !== false,
+  )
+
+  /* ── The film ──────────────────────────────────────────────────────────── */
+
+  /**
+   * Started means the film's time has moved while it played: two reports in a
+   * row, playing, the second further on. A bare 'play' event is not enough,
+   * because a source can abort that play at once with a load of its own
+   * (VidRock does), and hiding its page over a film that then stops would
+   * leave nothing to click.
+   */
+  let playingAt: number | null = null
+  function refresh(): void {
+    view = link.view()
+    // The smoothing clock starts from this report; it is not ticking while
+    // the controls are away, and a stale one would put the time behind it.
+    now = performance.now()
+    const f = view.film
+    if (started || f === null) return
+    if (f.paused) {
+      playingAt = null
+      return
+    }
+    if (playingAt !== null && f.seconds > playingAt + 0.2) started = true
+    playingAt = f.seconds
+  }
+
+  $effect(() => {
+    const onMessage = (event: MessageEvent): void => {
+      if (frame === null || event.source !== frame.contentWindow) return
+      if (link.receive(event.data)) refresh()
+    }
+    window.addEventListener('message', onMessage)
+    // A heartbeat as well as a request: every frame's relay answers `watch`
+    // with a report, so a paused film still reports, and a frame that stops
+    // answering drops out of the view.
+    link.watch()
+    const heartbeat = setInterval(() => {
+      link.watch()
+      refresh()
+    }, 2_000)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      clearInterval(heartbeat)
+    }
+  })
+
+  // The source's interface is hidden exactly while ours is in charge.
+  $effect(() => {
+    link.setHidden(engaged)
+  })
+
+  /**
+   * The keyboard is ours while our controls are. A source that needed a click
+   * on its own poster has the focus in its frame after that click, and its
+   * player then takes the keys: on VidSrc → became VidSrc's own +2 s. So the
+   * focus comes back here on taking over, and again whenever the source's
+   * frame takes it. It is left alone when it goes anywhere else, such as the
+   * top bar, and whenever the source's controls are the ones in use.
+   */
+  let root = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    if (!engaged) return
+    root?.focus({ preventScroll: true })
+    const onBlur = (): void => {
+      setTimeout(() => {
+        if (document.activeElement === frame) root?.focus({ preventScroll: true })
+      }, 0)
+    }
+    window.addEventListener('blur', onBlur)
+    return () => window.removeEventListener('blur', onBlur)
+  })
+
+  /**
+   * The play head, smoothed. Reports arrive four times a second at most; in
+   * between, the time moves on at the film's rate from the last report, one
+   * step per animation frame, while the controls are there to be seen.
+   */
+  let now = $state(performance.now())
+  /** Paused as shown: what the viewer just asked for, until the source catches up. */
+  const paused = $derived(film === null ? true : (view.wanted ?? film.paused))
+  const playing = $derived(film !== null && !film.paused && !film.ended && !film.waiting)
+  const shownSeconds = $derived(
+    film === null
+      ? 0
+      : Math.min(film.duration, film.seconds + (playing ? (Math.max(0, now - view.at) / 1000) * film.rate : 0)),
+  )
+
+  /* ── Showing the controls ──────────────────────────────────────────────── */
+
+  let hoverControls = $state(false)
+  let scrubbing = $state(false)
+  let menu = $state<'none' | 'subtitles'>('none')
+  /** A move just now, before the bar's own state has come back from main. */
+  let recentMove = $state(false)
+  let moveTimer: ReturnType<typeof setTimeout> | undefined
+
+  const hold = $derived((film !== null && paused) || scrubbing || hoverControls || menu !== 'none')
+  const controlsVisible = $derived(engaged && !config.mini && !bar.away && (bar.visible || hold || recentMove))
+
+  $effect(() => {
+    if (!controlsVisible || !playing) return
+    let handle = requestAnimationFrame(function tick(time) {
+      now = time
+      handle = requestAnimationFrame(tick)
+    })
+    return () => cancelAnimationFrame(handle)
+  })
+
+  let lastActivity = 0
+  function onPointerMove(): void {
+    recentMove = true
+    clearTimeout(moveTimer)
+    moveTimer = setTimeout(() => (recentMove = false), 600)
+    const time = performance.now()
+    if (time - lastActivity < 150) return
+    lastActivity = time
+    api?.activity(hold)
+  }
+
+  // The top bar is held while ours is, and let go when ours is.
+  $effect(() => {
+    if (engaged) api?.activity(hold)
+  })
+
+  /* ── Clicks on the picture ─────────────────────────────────────────────── */
+
+  /**
+   * One click plays or pauses, two go fullscreen. The single click waits
+   * a moment to be sure it is not the first of two, so a double-click does
+   * not also stutter the film.
+   */
+  let clickTimer: ReturnType<typeof setTimeout> | undefined
+  function onStageClick(): void {
+    if (menu !== 'none') {
+      menu = 'none'
+      return
+    }
+    clearTimeout(clickTimer)
+    clickTimer = setTimeout(() => perform('togglePlay'), 220)
+  }
+  function onStageDoubleClick(): void {
+    // In the corner the picture is a thumbnail: two clicks are two clicks.
+    if (config.mini) return
+    clearTimeout(clickTimer)
+    api?.action('fullscreen')
+  }
+
+  /* ── Doing things, with something to see ───────────────────────────────── */
+
+  /** The big icon that pops in the middle on play and pause. */
+  let flash = $state<{ id: number; icon: 'play' | 'pause' } | null>(null)
+  /** The ripple at a side on a jump; repeated presses add up (−10, −20, …). */
+  let nudge = $state<{ id: number; side: 'back' | 'forward'; seconds: number } | null>(null)
+  let nudgeTimer: ReturnType<typeof setTimeout> | undefined
+  /** The volume readout, shown for a moment after a change. */
+  let hud = $state<{ id: number; level: number; muted: boolean } | null>(null)
+  let hudTimer: ReturnType<typeof setTimeout> | undefined
+  let ids = 0
+
+  function showNudge(side: 'back' | 'forward'): void {
+    const seconds = nudge !== null && nudge.side === side ? nudge.seconds + SEEK_STEP_SECONDS : SEEK_STEP_SECONDS
+    nudge = { id: ++ids, side, seconds }
+    clearTimeout(nudgeTimer)
+    nudgeTimer = setTimeout(() => (nudge = null), 700)
+  }
+
+  function showHud(level: number, muted: boolean): void {
+    hud = { id: ++ids, level, muted }
+    clearTimeout(hudTimer)
+    hudTimer = setTimeout(() => (hud = null), 900)
+  }
+
+  function setVolume(level: number): void {
+    const next = Math.round(Math.min(1, Math.max(0, level)) * 100) / 100
+    link.setVolume(next)
+    showHud(next, false)
+  }
+
+  function perform(action: TransportAction): void {
+    if (film === null) return
+    switch (action) {
+      case 'togglePlay':
+        flash = { id: ++ids, icon: paused ? 'play' : 'pause' }
+        link.setPaused(!paused)
+        refresh()
+        break
+      case 'seekBack':
+        link.seekBy(-SEEK_STEP_SECONDS)
+        showNudge('back')
+        break
+      case 'seekForward':
+        link.seekBy(SEEK_STEP_SECONDS)
+        showNudge('forward')
+        break
+      case 'volumeUp':
+        setVolume((film.muted ? 0 : film.volume) + VOLUME_STEP)
+        break
+      case 'volumeDown':
+        setVolume((film.muted ? 0 : film.volume) - VOLUME_STEP)
+        break
+      case 'mute':
+        link.setMuted(!film.muted)
+        showHud(film.volume, !film.muted)
+        break
+    }
+  }
+
+  $effect(() => api?.onTransport((action) => perform(action)))
+  $effect(() =>
+    api?.onConfig((next) => {
+      config = next
+    }),
+  )
+  $effect(() =>
+    api?.onBarState((next) => {
+      bar = next
+    }),
+  )
+
+  function onKeydown(event: KeyboardEvent): void {
+    const action = actionForEvent(event)
+    if (action === null) return
+    event.preventDefault()
+    api?.action(action)
+  }
+
+  /* ── Volume ────────────────────────────────────────────────────────────── */
+
+  const volumeIcon = $derived(
+    film === null || film.muted || film.volume === 0
+      ? ICONS.volumeOff
+      : film.volume < 0.5
+        ? ICONS.volumeLow
+        : ICONS.volumeHigh,
+  )
+  const volumeLevel = $derived(film === null || film.muted ? 0 : film.volume)
+
+  function onVolumeInput(event: Event): void {
+    setVolume(Number((event.currentTarget as HTMLInputElement).value))
+  }
+
+  /* ── Subtitles ─────────────────────────────────────────────────────────── */
+
+  let trackIndex = $state(-1)
+  function chooseTrack(index: number): void {
+    trackIndex = index
+    link.chooseTrack(index)
+    menu = 'none'
+  }
+  const cues = $derived(engaged && trackIndex >= 0 ? view.cues : [])
+
+  /* ── The source's own controls, on request ─────────────────────────────── */
+
+  function useSourceControls(): void {
+    menu = 'none'
+    sourceChosen = true
+  }
+
+  /* ── A source change the player made by itself ─────────────────────────── */
+
+  let toast = $state<{ id: number; text: string } | null>(null)
+  $effect(() =>
+    api?.onProviderChanged((change) => {
+      toast = { id: ++ids, text: `Switched to ${change.providerName}: the previous source failed (${change.reason})` }
+      setTimeout(() => (toast = null), 4_500)
+    }),
+  )
+</script>
+
+<svelte:window onkeydown={onKeydown} />
+
+<div
+  class="overlay"
+  class:engaged
+  class:mini={config.mini}
+  class:show={controlsVisible}
+  role="presentation"
+  tabindex="-1"
+  bind:this={root}
+  onpointermove={engaged ? onPointerMove : undefined}
+>
+  {#if engaged}
+    <!-- The picture itself: a click plays or pauses, a double-click goes fullscreen. -->
+    <button
+      class="stage"
+      aria-label={paused ? 'Play' : 'Pause'}
+      tabindex="-1"
+      onclick={onStageClick}
+      ondblclick={onStageDoubleClick}
+    ></button>
+
+    {#if film !== null && film.waiting && !paused}
+      <div class="spinner" transition:fade={{ duration: 200 }} aria-hidden="true"></div>
+    {/if}
+  {/if}
+
+  {#if offerPlay}
+    <button
+      class="big-play"
+      aria-label="Play"
+      title="Play (Space)"
+      transition:fade={{ duration: 200 }}
+      onclick={() => perform('togglePlay')}
+    >
+      <svg viewBox="0 0 24 24"><path d={ICONS.play} /></svg>
+    </button>
+  {/if}
+
+  {#if flash}
+    {#key flash.id}
+      <div class="flash" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d={flash.icon === 'play' ? ICONS.play : ICONS.pause} /></svg>
+      </div>
+    {/key}
+  {/if}
+
+  {#if nudge}
+    {#key nudge.id}
+      <div class="nudge {nudge.side}" aria-hidden="true">
+        <div class="ripple"></div>
+        <div class="nudge-label">
+          <span class="chevrons">{nudge.side === 'back' ? '‹‹' : '››'}</span>
+          {nudge.seconds} seconds
+        </div>
+      </div>
+    {/key}
+  {/if}
+
+  {#if hud}
+    {#key hud.id}
+      <div class="hud" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d={hud.muted || hud.level === 0 ? ICONS.volumeOff : hud.level < 0.5 ? ICONS.volumeLow : ICONS.volumeHigh} />
+        </svg>
+        <div class="hud-bar"><span style:width="{(hud.muted ? 0 : hud.level) * 100}%"></span></div>
+        <span class="hud-value">{hud.muted ? 'Muted' : `${Math.round(hud.level * 100)}%`}</span>
+      </div>
+    {/key}
+  {/if}
+
+  {#if cues.length > 0}
+    <div class="cues" class:lifted={controlsVisible}>
+      {#each cues as line, index (index)}
+        <span>{line}</span>
+      {/each}
+    </div>
+  {/if}
+
+  {#if engaged && film !== null}
+    <div class="scrim" aria-hidden="true"></div>
+    <div
+      class="controls"
+      role="group"
+      aria-label="Player controls"
+      onpointerenter={() => (hoverControls = true)}
+      onpointerleave={() => (hoverControls = false)}
+    >
+      <SeekBar
+        current={shownSeconds}
+        duration={film.duration}
+        buffered={film.buffered}
+        onseek={(seconds) => link.seekTo(seconds)}
+        onscrub={(on) => (scrubbing = on)}
+      />
+
+      <div class="row">
+        <button class="control play" aria-label={paused ? 'Play' : 'Pause'} title={paused ? 'Play (Space)' : 'Pause (Space)'} onclick={() => perform('togglePlay')}>
+          <svg viewBox="0 0 24 24" class="morph" class:on={paused}><path d={ICONS.play} /></svg>
+          <svg viewBox="0 0 24 24" class="morph" class:on={!paused}><path d={ICONS.pause} /></svg>
+        </button>
+
+        <button class="control jump" aria-label="Back 10 seconds" title="Back 10 seconds (←)" onclick={() => perform('seekBack')}>
+          <svg viewBox="0 0 24 24">
+            <path d={ICONS.replay} />
+            <text x="12" y="15.9" text-anchor="middle">10</text>
+          </svg>
+        </button>
+
+        <button class="control jump" aria-label="Forward 10 seconds" title="Forward 10 seconds (→)" onclick={() => perform('seekForward')}>
+          <svg viewBox="0 0 24 24">
+            <path d={ICONS.replay} transform="matrix(-1 0 0 1 24 0)" />
+            <text x="12" y="15.9" text-anchor="middle">10</text>
+          </svg>
+        </button>
+
+        <div class="volume">
+          <button class="control" aria-label={film.muted ? 'Unmute' : 'Mute'} title={film.muted ? 'Unmute (M)' : 'Mute (M)'} onclick={() => perform('mute')}>
+            <svg viewBox="0 0 24 24"><path d={volumeIcon} /></svg>
+          </button>
+          <input
+            class="volume-slider"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={volumeLevel}
+            style:--level="{volumeLevel * 100}%"
+            aria-label="Volume"
+            oninput={onVolumeInput}
+          />
+        </div>
+
+        <span class="time">
+          {clock(shownSeconds)}<span class="of">&nbsp;/&nbsp;{clock(film.duration)}</span>
+        </span>
+
+        <span class="spacer"></span>
+
+        {#if view.tracks.length > 0}
+          <div class="menu-anchor">
+            <button
+              class="control"
+              class:active={trackIndex >= 0 || menu === 'subtitles'}
+              aria-label="Subtitles"
+              title="Subtitles"
+              onclick={() => (menu = menu === 'subtitles' ? 'none' : 'subtitles')}
+            >
+              <svg viewBox="0 0 24 24"><path d={ICONS.subtitles} /></svg>
+            </button>
+            {#if menu === 'subtitles'}
+              <div class="menu" transition:fade={{ duration: 140 }}>
+                <button class="item" class:chosen={trackIndex < 0} onclick={() => chooseTrack(-1)}>
+                  <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>Off
+                </button>
+                {#each view.tracks as track (track.index)}
+                  <button class="item" class:chosen={trackIndex === track.index} onclick={() => chooseTrack(track.index)}>
+                    <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>{track.label || track.language || `Track ${track.index + 1}`}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <button class="control" aria-label="Use the source's own controls" title="Use the source's own controls" onclick={useSourceControls}>
+          <svg viewBox="0 0 24 24"><path d={ICONS.tune} /></svg>
+        </button>
+
+        <button
+          class="control"
+          aria-label={config.fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
+          title={config.fullscreen ? 'Leave fullscreen (F)' : 'Fullscreen (F)'}
+          onclick={() => api?.action('fullscreen')}
+        >
+          <svg viewBox="0 0 24 24"><path d={config.fullscreen ? ICONS.fullscreenExit : ICONS.fullscreen} /></svg>
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  {#if config.ownControls && sourceChosen}
+    <!-- The way back from the source's own controls. Takes its own clicks while everything else passes through. -->
+    <button class="back-to-ours" transition:fade={{ duration: 180 }} onclick={() => (sourceChosen = false)}>
+      <svg viewBox="0 0 24 24"><path d={ICONS.tune} /></svg>
+      WatchThemAll controls
+    </button>
+  {/if}
+
+  {#if toast}
+    {#key toast.id}
+      <div class="toast" transition:fade={{ duration: 220 }}>{toast.text}</div>
+    {/key}
+  {/if}
+</div>
+
+<style>
+  /*
+    The layer over the source. It passes the pointer through unless engaged,
+    and each thing it draws while not engaged (the way back, the toast) takes
+    only its own clicks.
+  */
+  .overlay {
+    --accent: #f0b45a;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    color: #f4f4f6;
+    font:
+      500 14px/1.2 Inter,
+      system-ui,
+      sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .overlay.engaged {
+    pointer-events: auto;
+  }
+
+  /* Focus sits here so the keys are ours; it is not a control to outline. */
+  .overlay:focus {
+    outline: none;
+  }
+
+  /* No pointer over the picture while the controls are away, as in any
+     player; but always one over the small picture in the corner. */
+  .overlay.engaged:not(.show):not(.mini) {
+    cursor: none;
+  }
+
+  .stage {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: inherit;
+  }
+
+  .stage:focus {
+    outline: none;
+  }
+
+  /* ── The bottom bar ───────────────────────────────────────────────────── */
+
+  .scrim {
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 190px;
+    background: linear-gradient(to top, rgba(4, 4, 8, 0.82), rgba(4, 4, 8, 0.35) 55%, rgba(4, 4, 8, 0));
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 260ms ease;
+  }
+
+  .controls {
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 0 22px 14px;
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 220ms ease,
+      transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    pointer-events: none;
+  }
+
+  .show .scrim {
+    opacity: 1;
+  }
+
+  .show .controls {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .control {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    transition: transform 140ms ease;
+  }
+
+  /* A soft disc grows in behind the icon on hover. */
+  .control::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.14);
+    transform: scale(0.6);
+    opacity: 0;
+    transition:
+      transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 180ms ease;
+  }
+
+  .control:hover::before,
+  .control.active::before {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  .control.active {
+    color: var(--accent);
+  }
+
+  .control:active {
+    transform: scale(0.9);
+  }
+
+  .control:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .control svg {
+    position: relative;
+    width: 26px;
+    height: 26px;
+    fill: currentColor;
+    overflow: visible;
+  }
+
+  .control text {
+    font:
+      800 7.2px/1 Inter,
+      system-ui,
+      sans-serif;
+    letter-spacing: -0.3px;
+    fill: currentColor;
+  }
+
+  .jump svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* Play and pause turn into each other rather than swapping. */
+  .play {
+    width: 50px;
+    height: 50px;
+  }
+
+  .play .morph {
+    position: absolute;
+    width: 32px;
+    height: 32px;
+    opacity: 0;
+    transform: scale(0.5) rotate(-90deg);
+    transition:
+      opacity 180ms ease,
+      transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1.2);
+  }
+
+  .play .morph.on {
+    opacity: 1;
+    transform: none;
+  }
+
+  .time {
+    margin-left: 8px;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .time .of {
+    color: rgba(244, 244, 246, 0.6);
+  }
+
+  /* ── Volume: the slider slides out of the button ───────────────────────── */
+
+  .volume {
+    display: flex;
+    align-items: center;
+  }
+
+  .volume-slider {
+    width: 0;
+    height: 18px;
+    margin: 0;
+    opacity: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    cursor: pointer;
+    transition:
+      width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 200ms ease,
+      margin 240ms ease;
+  }
+
+  .volume:hover .volume-slider,
+  .volume-slider:focus-visible {
+    width: 88px;
+    margin: 0 6px 0 2px;
+    opacity: 1;
+  }
+
+  .volume-slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #f4f4f6 var(--level), rgba(255, 255, 255, 0.25) var(--level));
+  }
+
+  .volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4px;
+    border-radius: 50%;
+    background: #f4f4f6;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  /* ── Subtitles ────────────────────────────────────────────────────────── */
+
+  .menu-anchor {
+    position: relative;
+  }
+
+  .menu {
+    position: absolute;
+    right: 0;
+    bottom: 52px;
+    min-width: 180px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 12px;
+    background: rgba(10, 10, 14, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .item svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--accent);
+    visibility: hidden;
+  }
+
+  .item.chosen {
+    color: var(--accent);
+  }
+
+  .item.chosen svg {
+    visibility: visible;
+  }
+
+  .cues {
+    position: absolute;
+    left: 50%;
+    bottom: 56px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    max-width: 80%;
+    text-align: center;
+    pointer-events: none;
+    transition: bottom 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .cues.lifted {
+    bottom: 118px;
+  }
+
+  .cues span {
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.62);
+    font-size: clamp(16px, 2.6vw, 30px);
+    font-weight: 600;
+    line-height: 1.3;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+
+  /* ── Feedback in the middle of the picture ────────────────────────────── */
+
+  .flash {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 96px;
+    height: 96px;
+    margin: -48px 0 0 -48px;
+    border-radius: 50%;
+    background: rgba(10, 10, 14, 0.55);
+    animation: pop 620ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+    pointer-events: none;
+  }
+
+  .flash svg {
+    width: 44px;
+    height: 44px;
+    fill: #fff;
+  }
+
+  @keyframes pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    25% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.35);
+    }
+  }
+
+  .nudge {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 32%;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .nudge.back {
+    left: 0;
+  }
+
+  .nudge.forward {
+    right: 0;
+  }
+
+  /* A half-disc of light sweeping in from the side that was jumped towards. */
+  .ripple {
+    position: absolute;
+    top: 50%;
+    width: 160%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-50%);
+    animation: sweep 700ms ease-out forwards;
+  }
+
+  .back .ripple {
+    right: 10%;
+  }
+
+  .forward .ripple {
+    left: 10%;
+  }
+
+  @keyframes sweep {
+    0% {
+      opacity: 0;
+    }
+    30% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  .nudge-label {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 15px;
+    font-weight: 600;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+    animation: drift 700ms ease-out forwards;
+  }
+
+  .chevrons {
+    font-size: 30px;
+    letter-spacing: -4px;
+    line-height: 1;
+  }
+
+  @keyframes drift {
+    0% {
+      opacity: 0;
+      transform: scale(0.85);
+    }
+    25% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  .hud {
+    position: absolute;
+    left: 50%;
+    top: 18%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px;
+    border-radius: 14px;
+    background: rgba(10, 10, 14, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transform: translateX(-50%);
+    animation: hud 900ms ease forwards;
+    pointer-events: none;
+  }
+
+  .hud svg {
+    width: 24px;
+    height: 24px;
+    fill: #fff;
+  }
+
+  .hud-bar {
+    width: 140px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.22);
+    overflow: hidden;
+  }
+
+  .hud-bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width 120ms ease;
+  }
+
+  .hud-value {
+    min-width: 48px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  @keyframes hud {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -6px);
+    }
+    15%,
+    75% {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  .spinner {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 54px;
+    height: 54px;
+    margin: -27px 0 0 -27px;
+    border-radius: 50%;
+    border: 4px solid rgba(255, 255, 255, 0.18);
+    border-top-color: var(--accent);
+    animation: spin 900ms linear infinite;
+    pointer-events: none;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* ── Before the film has played ───────────────────────────────────────── */
+
+  .big-play {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 92px;
+    height: 92px;
+    margin: -46px 0 0 -46px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(10, 10, 14, 0.72);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+    pointer-events: auto;
+    transition:
+      transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1.2),
+      background 180ms ease;
+  }
+
+  /* A slow ring breathing out of it: this is where to press. */
+  .big-play::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid rgba(240, 180, 90, 0.7);
+    animation: breathe 2.2s ease-out infinite;
+  }
+
+  .big-play:hover {
+    transform: scale(1.08);
+    background: rgba(240, 180, 90, 0.9);
+    color: #17110a;
+  }
+
+  .big-play:active {
+    transform: scale(0.96);
+  }
+
+  .big-play svg {
+    width: 44px;
+    height: 44px;
+    margin-left: 5px;
+    fill: currentColor;
+  }
+
+  @keyframes breathe {
+    0% {
+      opacity: 0.9;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.5);
+    }
+  }
+
+  /* ── Outside our controls ─────────────────────────────────────────────── */
+
+  .back-to-ours {
+    position: absolute;
+    left: 16px;
+    top: 64px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 8px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(10, 10, 14, 0.78);
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.6;
+    transition:
+      opacity 180ms ease,
+      background 180ms ease;
+  }
+
+  .back-to-ours:hover {
+    opacity: 1;
+    background: rgba(30, 30, 38, 0.92);
+  }
+
+  .back-to-ours svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--accent);
+  }
+
+  .toast {
+    position: absolute;
+    left: 50%;
+    bottom: 120px;
+    max-width: min(640px, 80%);
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(10, 10, 14, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+</style>

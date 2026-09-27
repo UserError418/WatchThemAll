@@ -485,6 +485,14 @@ body {
   row-gap: var(--space-2);
 }
 
+/*
+  Settings the phone does not act on yet. v2's own player controls are
+  desktop-only until the phone port.
+*/
+:root .desktop-only {
+  display: none !important;
+}
+
 /* ── Watchlist rows ────────────────────────────────────────────────────────
  *
  * Each band — Nearly finished, Continue watching, and the rest — is one row

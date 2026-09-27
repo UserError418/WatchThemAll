@@ -37,6 +37,7 @@ import type {
  */
 export type { ProbeVerdict, ProviderScan, ScanReason }
 import type { SyncStatus } from './sync/types'
+import type { PlayerAction, TransportAction } from './playerkeys'
 
 /** Invoke channels: renderer → main, with a reply. */
 export const CH = {
@@ -97,6 +98,8 @@ export const CH = {
   playSetMini: 'play:set-mini',
   /** Pause or resume the video itself, for the mini player's button. */
   playSetPaused: 'play:set-paused',
+  /** A player key pressed while the app window has the focus; see `playerkeys.ts`. */
+  playAction: 'play:action',
   releasesCheck: 'releases:check',
 
   dataExport: 'data:export',
@@ -259,6 +262,30 @@ export const EV = {
    * The only process that can see it is the one inside the view.
    */
   playerPointerTop: 'evt:player-pointer-top',
+
+  /**
+   * v2's own controls, drawn in the `/__player` shell (`PlayerOverlay.svelte`).
+   *
+   * - `playerKey`: shell or chrome → main, a key pressed there, already
+   *   mapped to an action.
+   * - `playerTransport`: main → shell, the actions the overlay carries out on
+   *   the film itself, wherever the key was pressed.
+   * - `playerActivity` and `chromeActivity`: the pointer moved over the
+   *   picture, so the bar comes up. Shell → main → chrome, because only the
+   *   shell sees the pointer there.
+   * - `playerBarState`: main → shell, whether the bar is showing or was sent
+   *   away. The bottom controls follow it, so both come and go together.
+   * - `chromeOpenPanel`: main → chrome, Enter or C opening the episodes or
+   *   cast panel.
+   * - `playerOverlayConfig`: main → shell, whether our controls are on.
+   */
+  playerKey: 'player:key',
+  playerTransport: 'evt:player-transport',
+  playerActivity: 'player:activity',
+  chromeActivity: 'evt:chrome-activity',
+  playerBarState: 'evt:player-bar-state',
+  chromeOpenPanel: 'evt:chrome-open-panel',
+  playerOverlayConfig: 'evt:player-overlay-config',
   syncStatus: 'evt:sync-status',
 
   /**
@@ -918,6 +945,8 @@ export interface WtaApi {
      * rather than being assumed.
      */
     setPaused(paused: boolean): Promise<void>
+    /** A player key pressed in the app window; main routes it. */
+    action(action: PlayerAction): Promise<void>
   }
   mal: {
     /** Opens a file picker. Null when the user cancelled. */
@@ -1089,6 +1118,13 @@ export interface WtaApi {
 export interface OverlayArea {
   height: number
   width: number | null
+  /**
+   * Whether the bar itself is showing, and whether it was sent away (Hide).
+   * The height cannot say it: the hot strip and a failure banner have height
+   * too. The shell's controls follow these.
+   */
+  barVisible?: boolean
+  away?: boolean
 }
 
 /**
@@ -1154,6 +1190,12 @@ export interface WtaChromeApi {
   onMini(cb: (mini: boolean) => void): () => void
   /** Pointer near the top of the picture, reported by the view that can see it. */
   onPointerTop(cb: (nearTop: boolean) => void): () => void
+  /** The pointer moved over the picture; `hold` keeps the bar up (paused, or using the controls). */
+  onActivity(cb: (hold: boolean) => void): () => void
+  /** Enter or C, from wherever the key was pressed. */
+  onOpenPanel(cb: (panel: 'episodes' | 'cast') => void): () => void
+  /** A player key pressed in the chrome; main routes it. */
+  action(action: PlayerAction): void
 
   /**
    * Casting, from the one place it makes sense to offer it.
@@ -1201,5 +1243,42 @@ declare global {
   interface Window {
     wta: WtaApi
     wtaChrome: WtaChromeApi
+    /** Only in the `/__player` shell; see `WtaPlayerApi`. */
+    wtaPlayer?: WtaPlayerApi
   }
+}
+
+/** What main tells the shell's controls about the bar above them. */
+export interface BarState {
+  visible: boolean
+  away: boolean
+}
+
+/** Whether v2's controls are on (`Settings.ownControls`), and the window's state around them. */
+export interface PlayerOverlayConfig {
+  ownControls: boolean
+  fullscreen: boolean
+  /** Shrunk into the app's corner: no controls over a picture that small. */
+  mini: boolean
+}
+
+/**
+ * What the `/__player` shell's own controls can do (`PlayerOverlay.svelte`).
+ *
+ * The shell is our own page, the player view's main frame. The provider plays
+ * in a cross-origin iframe below it, and the overlay reaches the film through
+ * the film relay (`filmrelay.ts`), not through this API. What comes through
+ * here is everything that involves main: keys, the bar, the setting.
+ */
+export interface WtaPlayerApi {
+  onConfig(cb: (config: PlayerOverlayConfig) => void): () => void
+  onContext(cb: (context: PlayerContext) => void): () => void
+  onTransport(cb: (action: TransportAction) => void): () => void
+  onBarState(cb: (state: BarState) => void): () => void
+  /** Playback moved to another source by itself; the reason, for the toast. */
+  onProviderChanged(cb: (change: { providerName: string; reason: string }) => void): () => void
+  /** A key pressed in the shell, mapped; main routes it. */
+  action(action: PlayerAction): void
+  /** The pointer moved over the picture. `hold`: keep the bar up. */
+  activity(hold: boolean): void
 }

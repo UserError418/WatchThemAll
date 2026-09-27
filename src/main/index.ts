@@ -161,6 +161,19 @@ let catalogTimer: ReturnType<typeof setInterval> | null = null
  */
 let player: InlinePlayer | null = null
 
+/**
+ * The own-controls switch applies to what is playing, not only to the next
+ * thing played: the shell is told as soon as the setting changes.
+ */
+let ownControlsWas: boolean | null = null
+store.subscribe((key) => {
+  if (key !== 'settings') return
+  const now = store.read().settings.ownControls
+  if (now === ownControlsWas) return
+  ownControlsWas = now
+  player?.refreshConfig()
+})
+
 const getMainWindow = (): BrowserWindow | null =>
   mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
 
@@ -211,8 +224,9 @@ const scan = createScanService({
    * gets checked against real providers instead of reasoning.
    */
   concurrency: Number(process.env.WTA_SCAN_CONCURRENCY) || undefined,
+  // The bare shell: a test measures the source, not v2's controls over it.
   frameUrl: (providerUrl) =>
-    rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl) : providerUrl,
+    rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl, { bare: true }) : providerUrl,
   onProgress: (progress) => {
     send(EV.providerScan, progress)
     // The player chrome is a separate document with its own preload, so the
@@ -464,6 +478,7 @@ function openPlayer(
       window has to be told and has to make room.
     */
     onBack: () => setPlayerMini(true),
+    ownControls: () => store.read().settings.ownControls,
     // The mini player hears about a failing source too, since the chrome
     // that normally shows the offer is out of sight while it is small.
     onSuggest: (suggestion) => send(EV.playerSuggestion, suggestion),
@@ -1097,6 +1112,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       reloadPlayer: () => player?.reload(),
       setPlayerMini,
       setPlayerPaused: (paused) => player?.setPaused(paused),
+      playerAction: (action) => player?.action(action),
       setOnTv,
       upNextNow: () => upNext.playNow(),
       upNextCancel: () => upNext.cancel(),

@@ -332,7 +332,7 @@ export async function runProbeCli(providers: Provider[], argv: string[]): Promis
    * static file path.
    */
   const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
-  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl)
+  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl, { bare: true })
 
   const results: StreamProbeResult[] = []
 
@@ -595,7 +595,7 @@ export async function runUiProbeCli(providers: Provider[], argv: string[]): Prom
   console.log('A tick means the video reported a position that advanced.\n')
 
   const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
-  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl)
+  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl, { bare: true })
   const dirname = join(app.getAppPath(), 'out/main')
 
   /**
@@ -725,7 +725,7 @@ export async function runQualityCli(providers: Provider[], argv: string[]): Prom
   )
 
   const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
-  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl)
+  const frameUrl = (providerUrl: string): string => playerShellUrl(shellBaseUrl, providerUrl, { bare: true })
   const results: QualityProbeResult[] = []
 
   for (const [index, provider] of targets.entries()) {

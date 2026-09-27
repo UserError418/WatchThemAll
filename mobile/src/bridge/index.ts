@@ -1682,6 +1682,8 @@ export async function createBridge(): Promise<WtaApi> {
       reload: playerReload,
       setMini: async (next) => setMini(next),
       setPaused: async (paused) => surface.setPaused(paused),
+      // Player keys are v2's, desktop-only until the phone port.
+      action: async () => {},
     },
 
     cast: {

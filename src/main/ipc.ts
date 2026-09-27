@@ -52,6 +52,7 @@ import type { SyncStatus } from '@shared/sync/types'
 import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
 import { unreadableLibrary } from '@shared/store/core'
+import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 
 /** Shown when a cast is asked for with no player open. */
 const NOTHING_PLAYING_REASON = 'Nothing is playing.'
@@ -124,6 +125,8 @@ export interface IpcDeps {
   setPlayerMini: (mini: boolean) => void
   /** Pause or resume the provider's video. */
   setPlayerPaused: (paused: boolean) => void
+  /** A player key pressed in the app window (`playerkeys.ts`). */
+  playerAction: (action: PlayerAction) => void
   /**
    * Casting to a television.
    *
@@ -474,6 +477,9 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   // Strictly booleans: anything else from a renderer is a bug, not a request.
   ipcMain.handle(CH.playSetMini, (_e, mini: unknown) => deps.setPlayerMini(mini === true))
   ipcMain.handle(CH.playSetPaused, (_e, paused: unknown) => deps.setPlayerPaused(paused === true))
+  ipcMain.handle(CH.playAction, (_e, action: unknown) => {
+    if (isPlayerAction(action)) deps.playerAction(action)
+  })
 
   ipcMain.handle(CH.dataExport, async () => {
     const payload = exportStore(store.read())

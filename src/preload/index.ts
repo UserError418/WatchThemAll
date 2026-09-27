@@ -24,6 +24,7 @@ import type {
   WtaApi,
 } from '@shared/ipc'
 import type { MediaSummary, MediaType, StoreShape } from '@shared/types'
+import type { PlayerAction } from '@shared/playerkeys'
 
 function subscribe(channel: string, cb: (...args: never[]) => void): () => void {
   const listener = (_event: unknown, ...args: unknown[]) =>
@@ -70,6 +71,7 @@ const api: WtaApi = {
     reload: () => ipcRenderer.invoke(CH.playReload),
     setMini: (mini: boolean) => ipcRenderer.invoke(CH.playSetMini, mini),
     setPaused: (paused: boolean) => ipcRenderer.invoke(CH.playSetPaused, paused),
+    action: (action: PlayerAction) => ipcRenderer.invoke(CH.playAction, action),
   },
   mal: {
     preview: () => ipcRenderer.invoke(CH.malPreview),

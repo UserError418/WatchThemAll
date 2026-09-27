@@ -25,7 +25,7 @@
 
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join, normalize, sep, extname } from 'node:path'
 
 /** Content types for what a Vite build actually emits. */
@@ -80,12 +80,41 @@ let server: Server | null = null
 
 const PLAYER_SHELL_PATH = '/__player'
 
-/** The URL to load in a player view, for a given provider URL. */
-export function playerShellUrl(baseUrl: string, providerUrl: string): string {
-  return `${baseUrl}${PLAYER_SHELL_PATH}?src=${encodeURIComponent(providerUrl)}`
+/**
+ * The URL to load in a player view, for a given provider URL.
+ *
+ * `bare` asks for the shell without v2's controls: the source in a frame and
+ * nothing else, as before v2. The source tests load it: a hidden probe has no
+ * one to show controls to, and must measure the source, not our layer.
+ */
+export function playerShellUrl(baseUrl: string, providerUrl: string, options: { bare?: boolean } = {}): string {
+  const bare = options.bare === true ? '&bare=1' : ''
+  return `${baseUrl}${PLAYER_SHELL_PATH}?src=${encodeURIComponent(providerUrl)}${bare}`
 }
 
-function servePlayerShell(res: ServerResponse, src: string | null): void {
+/** Where the built `player.html` put its placeholder for the provider's frame. */
+const FRAME_MARKER = '<!--wta:provider-frame-->'
+
+/**
+ * The shell as built (`src/renderer/player.html`), or null when it is not
+ * there: a dev build served by Vite has none in the renderer directory, and
+ * the bare shell stands in.
+ */
+async function builtShell(root: string): Promise<string | null> {
+  try {
+    const html = await readFile(join(root, 'player.html'), 'utf8')
+    return html.includes(FRAME_MARKER) ? html : null
+  } catch {
+    return null
+  }
+}
+
+async function servePlayerShell(
+  res: ServerResponse,
+  src: string | null,
+  bare: boolean,
+  root: string,
+): Promise<void> {
   // Only http(s), and only a URL that parses. The parameter arrives from this
   // app's own main process, but a shell that will frame whatever it is handed
   // is one bug away from being told to frame something else.
@@ -98,7 +127,15 @@ function servePlayerShell(res: ServerResponse, src: string | null): void {
     return
   }
 
-  const html = `<!doctype html>
+  const frame = `<iframe id="provider" src="${escapeAttribute(target.toString())}"
+        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+        allowfullscreen></iframe>`
+
+  const built = bare ? null : await builtShell(root)
+  const html =
+    built !== null
+      ? built.replace(FRAME_MARKER, frame)
+      : `<!doctype html>
 <html><head><meta charset="utf-8">
 <title>Player</title>
 <style>
@@ -106,9 +143,7 @@ function servePlayerShell(res: ServerResponse, src: string | null): void {
   iframe { display: block; width: 100vw; height: 100vh; border: 0; }
 </style>
 </head><body>
-<iframe src="${escapeAttribute(target.toString())}"
-        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-        allowfullscreen></iframe>
+${frame}
 </body></html>`
 
   res.writeHead(200, {
@@ -150,7 +185,7 @@ export function startRendererServer(rendererDir: string): Promise<string> {
           const { pathname, searchParams } = new URL(req.url ?? '/', 'http://127.0.0.1')
 
           if (pathname === PLAYER_SHELL_PATH) {
-            servePlayerShell(res, searchParams.get('src'))
+            await servePlayerShell(res, searchParams.get('src'), searchParams.get('bare') === '1', root)
             return
           }
           const requested = decodeURIComponent(pathname === '/' ? '/index.html' : pathname)

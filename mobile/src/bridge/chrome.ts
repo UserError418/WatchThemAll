@@ -157,5 +157,11 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     onMini: (cb) => deps.subscribeMini(cb),
     onSkipOffer: never<SkipOffer | null>,
     onPointerTop: never<boolean>,
+    // v2's own controls are desktop-only until the phone port: nothing here
+    // moves a pointer over the picture, presses a player key, or opens a panel
+    // by key.
+    onActivity: never<boolean>,
+    onOpenPanel: never<'episodes' | 'cast'>,
+    action: () => {},
   }
 }

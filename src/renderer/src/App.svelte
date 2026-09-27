@@ -453,7 +453,7 @@
   {#if mini}
     <MiniPlayer player={playing} paused={videoPaused} stalled={offerStanding} {upNext} />
   {:else}
-    <PlayerFrame player={playing} onback={() => void window.wta.player.setMini(true)} />
+    <PlayerFrame />
   {/if}
 {/if}
 

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Player</title>
+    <!--
+      The `/__player` shell: the source's page in a frame, and v2's own
+      controls over it.
+
+      The local server serves this file with the provider's iframe put in
+      place of the marker below (`localserver.ts`). The frame starts loading
+      with the page instead of waiting for this bundle, and the check on its
+      URL stays in one place. Why the source is framed at all is written up
+      there too.
+
+      The CSP allows frames from anywhere, since a source can be on any host,
+      and nothing else that is not ours.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; frame-src http: https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #provider {
+        position: fixed;
+        inset: 0;
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!--wta:provider-frame-->
+    <div id="overlay"></div>
+    <script type="module" src="/src/player.ts"></script>
+  </body>
+</html>

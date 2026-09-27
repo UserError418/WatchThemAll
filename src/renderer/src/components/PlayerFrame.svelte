@@ -22,19 +22,7 @@
    * up the space rather than being covered. The slot's ResizeObserver already
    * reports that, so it costs no new plumbing.
    */
-  import type { PlayerState } from '@shared/ipc'
-
-  interface Props {
-    /**
-     * Named `player`, not `state`: a local binding called `state` makes every
-     * `$state(...)` in this file parse as a store subscription on it.
-     */
-    player: PlayerState
-    /** Escape: the keyboard's Back, which shrinks the player into the corner. */
-    onback: () => void
-  }
-
-  const { onback }: Props = $props()
+  import { actionForEvent } from '@shared/playerkeys'
 
   let slot = $state<HTMLDivElement | null>(null)
 
@@ -77,8 +65,17 @@
     }
   })
 
+  /**
+   * The player's keys, while the app window has the focus: right after Play
+   * was pressed, before anything in the player was clicked. Main routes them
+   * (`playerkeys.ts`). Escape goes the same way: main leaves fullscreen first,
+   * then shrinks the player into the corner as it always did.
+   */
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onback()
+    const action = actionForEvent(event)
+    if (action === null) return
+    event.preventDefault()
+    void window.wta.player.action(action)
   }
 </script>
 

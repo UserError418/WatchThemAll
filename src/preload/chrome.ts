@@ -27,6 +27,7 @@ import type {
   WtaChromeApi,
 } from '@shared/ipc'
 import type { Season } from '@shared/types'
+import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 
 const api: WtaChromeApi = {
   /**
@@ -59,10 +60,13 @@ const api: WtaChromeApi = {
    * its bounds, so an overlay sized to the whole window would make the video
    * unclickable. The document measures itself and main follows.
    */
-  setOverlayArea: ({ height, width }: OverlayArea): void => {
+  setOverlayArea: ({ height, width, barVisible, away }: OverlayArea): void => {
     ipcRenderer.send(EV.chromeOverlayArea, {
       height: Math.max(0, Math.round(height)),
       width: width === null ? null : Math.max(0, Math.round(width)),
+      // Whether the bar shows, for the shell's controls to follow (v2).
+      barVisible: barVisible !== false,
+      away: away === true,
     })
   },
 
@@ -93,6 +97,27 @@ const api: WtaChromeApi = {
     const listener = (_event: unknown, nearTop: boolean): void => callback(nearTop)
     ipcRenderer.on(EV.playerPointerTop, listener)
     return () => ipcRenderer.removeListener(EV.playerPointerTop, listener)
+  },
+
+  /** The pointer moved over the picture, as the shell saw it (v2). */
+  onActivity: (callback: (hold: boolean) => void): (() => void) => {
+    const listener = (_event: unknown, hold: unknown): void => callback(hold === true)
+    ipcRenderer.on(EV.chromeActivity, listener)
+    return () => ipcRenderer.removeListener(EV.chromeActivity, listener)
+  },
+
+  /** Enter or C, pressed wherever the focus was. */
+  onOpenPanel: (callback: (panel: 'episodes' | 'cast') => void): (() => void) => {
+    const listener = (_event: unknown, panel: unknown): void => {
+      if (panel === 'episodes' || panel === 'cast') callback(panel)
+    }
+    ipcRenderer.on(EV.chromeOpenPanel, listener)
+    return () => ipcRenderer.removeListener(EV.chromeOpenPanel, listener)
+  },
+
+  /** A player key pressed here; main routes it (`playerkeys.ts`). */
+  action: (action: PlayerAction): void => {
+    if (isPlayerAction(action)) ipcRenderer.send(EV.playerKey, action)
   },
 
   /** Episodes for one season, with stills and runtimes, from TMDB via main. */

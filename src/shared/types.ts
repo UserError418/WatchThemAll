@@ -897,6 +897,13 @@ export interface Settings {
    */
   autoNext: boolean
   /**
+   * v2: the app's own player controls over every source, with the source's
+   * own interface hidden once the video plays. Off shows each source's own
+   * controls, as before v2. On by default (the owner, 2026-09-27). Desktop
+   * only until the phone port.
+   */
+  ownControls: boolean
+  /**
    * How sources are ordered within each group — works, may work, does not
    * work — for the source lists and for Automatic alike. Every key, once, in
    * priority order. `list` orders completely, so anything after it never gets

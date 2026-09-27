@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => ({
       emptyOutDir: true,
       rollupOptions: {
         /*
-          Two documents, not one.
+          Three documents, not one.
 
           `chrome.html` is the player's floating controls. It has to be its own
           entry because it is mounted into a separate WebContentsView stacked
@@ -74,6 +74,8 @@ export default defineConfig(({ mode }) => ({
         input: {
           index: resolve('src/renderer/index.html'),
           chrome: resolve('src/renderer/chrome.html'),
+          // v2: the `/__player` shell, with our own controls over the source.
+          player: resolve('src/renderer/player.html'),
         },
       },
     },

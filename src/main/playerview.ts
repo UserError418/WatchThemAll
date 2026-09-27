@@ -39,7 +39,9 @@
 import { WebContentsView, BrowserWindow, ipcMain, webFrameMain, type Session } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
-import type { OverlayArea, PlayRequest, PlayerSuggestion } from '@shared/ipc'
+import type { BarState, OverlayArea, PlayRequest, PlayerSuggestion } from '@shared/ipc'
+import { filmRelayScript } from '@shared/filmrelay'
+import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 import { applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { pressPlay as pressPlayIn } from './pressplay'
@@ -162,6 +164,17 @@ export interface InlinePlayer {
    * than the real player is measuring the wrong thing.
    */
   pressPlay: () => Promise<void>
+  /**
+   * A player key, from whichever document had the focus (`playerkeys.ts`).
+   *
+   * Main is the router because the three documents that can have the focus
+   * each own a different part of the answer. The shell's controls move the
+   * film, the chrome opens its panels, and the window's fullscreen and the
+   * way back are main's.
+   */
+  action: (action: PlayerAction) => void
+  /** The own-controls setting changed while playing; tell the shell. */
+  refreshConfig: () => void
 }
 
 /**
@@ -295,6 +308,8 @@ export interface InlinePlayerOptions {
    * started.
    */
   onBack?: () => void
+  /** v2: draw the app's own controls and hide the source's (`Settings.ownControls`). */
+  ownControls?: () => boolean
   /** Fired once this view has torn itself down, from `destroy`. */
   onClosed?: () => void
   /**
@@ -490,6 +505,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     takeProgressMs: () => 0,
     destroy: () => {},
     currentProviderId: () => null,
+    // Replaced below, once the views they route to exist.
+    action: () => {},
+    refreshConfig: () => {},
   }
 
   const currentCandidate = (): PlayCandidate | undefined => player.candidates[player.candidateIndex]
@@ -710,6 +728,78 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     console.log(`[navguard] kept ${frame.origin} from navigating to ${new URL(details.url).origin}`)
     details.preventDefault()
   })
+
+  /* ── v2: the film relay, and what the shell is told ────────────────────── */
+
+  /**
+   * The shell's origin: the one parent the outermost provider frame's relay
+   * will take commands from. Null when there is no shell (`frameUrl` unset,
+   * a dev build without the local server), and then there are no own
+   * controls either.
+   */
+  const shellOrigin = ((): string | null => {
+    try {
+      const url = options.frameUrl?.('https://example.invalid/')
+      return url ? new URL(url).origin : null
+    } catch {
+      return null
+    }
+  })()
+  const relayScript = shellOrigin === null ? null : filmRelayScript(shellOrigin)
+
+  /**
+   * Put the relay into one provider frame. Idempotent in the frame, so it is
+   * installed on every event that might be the first: early, when a new
+   * frame's DOM is ready, and again when any frame finishes loading, since a
+   * cross-origin navigation gives a frame a new document without a new
+   * `frame-created`.
+   */
+  const installRelay = (frame: Electron.WebFrameMain | null | undefined): void => {
+    if (relayScript === null || !frame || frame === contents.mainFrame) return
+    try {
+      void frame.executeJavaScript(relayScript).catch(() => {})
+    } catch {
+      // Disposed between the event and this call; its successor gets one.
+    }
+  }
+  contents.on('frame-created', (_event, { frame }) => {
+    frame?.on('dom-ready', () => installRelay(frame))
+  })
+  contents.on('did-frame-finish-load', (_event, isMainFrame, processId, routingId) => {
+    if (!isMainFrame) installRelay(webFrameMain.fromId(processId, routingId))
+  })
+
+  /** A source change to announce once the next shell is up; see `advance`. */
+  let pendingChange: { providerId: string; providerName: string; reason: string } | null = null
+  /** Whether the bar is up, as the chrome last said; the shell's controls follow it. */
+  let barState: BarState = { visible: true, away: false }
+
+  const sendConfig = (): void => {
+    if (!alive()) return
+    contents.send(EV.playerOverlayConfig, {
+      ownControls: options.ownControls?.() ?? false,
+      fullscreen: !win.isDestroyed() && win.isFullScreen(),
+      mini,
+    })
+  }
+  // However fullscreen was entered or left: F, Escape, the window manager, the menu.
+  win.on('enter-full-screen', sendConfig)
+  win.on('leave-full-screen', sendConfig)
+
+  /**
+   * On the shell's DOM being ready, not on `did-finish-load`: the latter waits
+   * for the provider's iframe to finish loading, adverts and all, and the
+   * controls would sit unconfigured meanwhile.
+   */
+  contents.on('dom-ready', () => {
+    sendConfig()
+    contents.send(EV.playerBarState, barState)
+    if (pendingChange !== null) {
+      contents.send(EV.playerProviderChanged, pendingChange)
+      pendingChange = null
+    }
+  })
+  player.refreshConfig = sendConfig
 
   /**
    * The success signal, and the only honest one.
@@ -1398,11 +1488,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         `falling back to ${next.provider.name}`,
     )
     applyIdentityFor(next)
-    contents.send(EV.playerProviderChanged, {
-      providerId: next.provider.id,
-      providerName: next.provider.name,
-      reason,
-    })
+    // Held for the next shell rather than sent now: the shell on screen is
+    // replaced by the `loadURL` below, and a message sent to it now would be
+    // dropped with it. For a while no "switched source" toast ever appeared.
+    pendingChange = { providerId: next.provider.id, providerName: next.provider.name, reason }
     beginLoad()
     void contents.loadURL(framed(next.url))
     options.onProviderChanged?.()
@@ -1692,6 +1781,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   player.setMini = (next: boolean): void => {
     if (closed || win.isDestroyed()) return
     mini = next
+    // A fullscreen window with the film in its corner is nobody's intent.
+    if (next) leaveFullscreen()
+    sendConfig()
     placeOverlay(overlayArea)
     placeSkip()
     player.notifyChrome(EV.playerMini, next)
@@ -1776,6 +1868,14 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     clearInterval(positionTimer)
     stopCounting()
     announceSuggestion(null)
+
+    ipcMain.removeListener(EV.playerKey, onPlayerKey)
+    ipcMain.removeListener(EV.playerActivity, onActivity)
+    leaveFullscreen()
+    if (!win.isDestroyed()) {
+      win.removeListener('enter-full-screen', sendConfig)
+      win.removeListener('leave-full-screen', sendConfig)
+    }
 
     if (overlay !== null) {
       ipcMain.removeListener(EV.chromeOverlayArea, onOverlayArea)
@@ -1950,6 +2050,11 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (overlay === null || event.sender !== overlay.webContents) return
     overlayArea = area
     placeOverlay(area)
+    const next: BarState = { visible: area.barVisible ?? true, away: area.away ?? false }
+    if (next.visible !== barState.visible || next.away !== barState.away) {
+      barState = next
+      if (alive()) contents.send(EV.playerBarState, next)
+    }
   }
   const onBack = (event: Electron.IpcMainEvent): void => {
     if (overlay === null || event.sender !== overlay.webContents) return
@@ -1973,6 +2078,69 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // Withdrawn immediately rather than at the next poll four seconds later.
     announceSkip(null)
   }
+  /**
+   * Fullscreen is the window's. The player already fills the window, so a
+   * fullscreen window is a fullscreen picture, and every view keeps being
+   * placed from the slot the app reports. Left again when the player is, if
+   * it was the player that entered it.
+   */
+  let fullscreenByPlayer = false
+  const setFullscreen = (on: boolean): void => {
+    if (win.isDestroyed() || win.isFullScreen() === on) return
+    fullscreenByPlayer = on
+    win.setFullScreen(on)
+  }
+  function leaveFullscreen(): void {
+    if (fullscreenByPlayer) setFullscreen(false)
+  }
+
+  player.action = (action: PlayerAction): void => {
+    if (!alive()) return
+    switch (action) {
+      case 'fullscreen':
+        setFullscreen(!win.isFullScreen())
+        return
+      case 'escape':
+        if (!win.isDestroyed() && win.isFullScreen()) {
+          setFullscreen(false)
+          return
+        }
+        options.onBack?.()
+        return
+      case 'back':
+        options.onBack?.()
+        return
+      case 'reload':
+        player.reload()
+        return
+      case 'episodes':
+      case 'cast':
+        if (overlay !== null && !overlay.webContents.isDestroyed()) {
+          overlay.webContents.send(EV.chromeOpenPanel, action)
+        }
+        return
+      default:
+        // Play, seek, volume: the shell's controls act on the film.
+        contents.send(EV.playerTransport, action)
+    }
+  }
+
+  // Scoped by sender, like the chrome's messages: during a switch two players
+  // exist, and a key meant for one must not move the other.
+  const onPlayerKey = (event: Electron.IpcMainEvent, action: unknown): void => {
+    const fromShell = event.sender === contents
+    const fromChrome = overlay !== null && event.sender === overlay.webContents
+    if ((fromShell || fromChrome) && isPlayerAction(action)) player.action(action)
+  }
+  const onActivity = (event: Electron.IpcMainEvent, hold: unknown): void => {
+    if (event.sender !== contents) return
+    if (overlay !== null && !overlay.webContents.isDestroyed()) {
+      overlay.webContents.send(EV.chromeActivity, hold === true)
+    }
+  }
+  ipcMain.on(EV.playerKey, onPlayerKey)
+  ipcMain.on(EV.playerActivity, onActivity)
+
   if (overlay !== null) {
     ipcMain.on(EV.chromeOverlayArea, onOverlayArea)
     ipcMain.on(EV.chromeBack, onBack)

@@ -40,6 +40,7 @@
   import type { Episode, StreamDelivery } from '@shared/types'
   import { airDate, clock, episodeCode, hasAired, runtime } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
+  import { actionForEvent } from '@shared/playerkeys'
   import {
     nextEpisode,
     nudgeTarget,
@@ -893,6 +894,45 @@
   )
 
   /**
+   * v2: movement anywhere over the picture brings the bar up, as it brings up
+   * the shell's own controls below. The shell is the only document that sees
+   * that movement (`PlayerOverlay.svelte`), and main passes it on. Each report
+   * restarts the hide clock. `hold` keeps the bar up while the film is paused
+   * or the bottom controls are in use, so the top and bottom go together.
+   */
+  let activityTick = $state(0)
+  let heldByShell = $state(false)
+  $effect(() =>
+    api?.onActivity((hold) => {
+      heldByShell = hold
+      if (awayUntil !== null) return
+      barVisible = true
+      activityTick += 1
+    }),
+  )
+
+  /** Enter and C open Episodes and Cast, wherever the key was pressed. */
+  $effect(() =>
+    api?.onOpenPanel((which) => {
+      if (awayUntil !== null) comeBack()
+      barVisible = true
+      if (which === 'episodes' && context?.type === 'tv') openEpisodes()
+      if (which === 'cast' && castAvailable) {
+        if (casting) remoteHidden = false
+        else openCast()
+      }
+    }),
+  )
+
+  /** A player key pressed while this document has the focus; main routes it. */
+  function onKeydown(event: KeyboardEvent): void {
+    const action = actionForEvent(event)
+    if (action === null) return
+    event.preventDefault()
+    api?.action(action)
+  }
+
+  /**
    * A standing offer pins the chrome open.
    *
    * Two reasons. The source has just failed, so the controls are the thing the
@@ -916,8 +956,11 @@
     if (upNext) return
     if (castChoosing) return
     // Hovering the chrome holds it open — including hovering a panel, which is
-    // a child of it. Nothing else does.
+    // a child of it — and so does the shell while paused or in use.
     if (hoveringChrome) return
+    if (heldByShell) return
+    // Read so that each report of activity restarts the clock.
+    void activityTick
     const timer = setTimeout(
       () => (barVisible = false),
       panel === 'none' ? HIDE_AFTER_MS : PANEL_HIDE_AFTER_MS,
@@ -975,10 +1018,12 @@
     showRemote
       ? { height: WHOLE_SLOT, width: null }
       : awayUntil !== null
-        ? { height: AWAY_PILL.top + AWAY_PILL.height, width: AWAY_PILL.width }
+        ? { height: AWAY_PILL.top + AWAY_PILL.height, width: AWAY_PILL.width, barVisible: false, away: true }
         : {
             height: (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
             width: null,
+            barVisible,
+            away: false,
           },
   )
 
@@ -1235,6 +1280,8 @@
     void loadSeason(context.season)
   })
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 {#snippet upNextBanner(offer: UpNextOffer)}
   <!--
