@@ -76,42 +76,122 @@ export interface DriveBackendOptions {
   fetchImpl?: FetchLike
 }
 
+/** The document's file, as a listing or an upload describes it. */
+interface DriveFile {
+  id: string
+  /** Drive's checksum of the content; absent if Drive did not report one. */
+  md5Checksum?: string
+}
+
 /**
- * Find the document's file id, or `null` if this account has never synced.
+ * Find the document's file, or `null` if this account has never synced.
  *
- * Searching by name rather than remembering an id: the id is per-account, and
- * remembering one would have to be invalidated whenever the user signs in as
- * somebody else or clears the app folder from Drive's settings. One extra
- * request per sync is a fair price for having no stale-id case at all.
+ * Searched by name on every sync rather than remembered across them: the id is
+ * per-account, and remembering one would have to be invalidated whenever the
+ * user signs in as somebody else or clears the app folder from Drive's
+ * settings. One listing per sync is a fair price for having no stale-id case.
  */
-async function findFileId(
-  fetchImpl: FetchLike,
-  accessToken: string,
-): Promise<string | null> {
+async function findFile(fetchImpl: FetchLike, accessToken: string): Promise<DriveFile | null> {
   // No `spaces` filter is needed and none would help: under `drive.file` a
   // listing only ever contains files this app created, so the name is already
   // searched within our own small world.
   const query = new URLSearchParams({
     q: `name = '${DOCUMENT_NAME}' and trashed = false`,
-    fields: 'files(id,modifiedTime)',
+    fields: 'files(id,md5Checksum)',
     pageSize: '1',
   })
   const response = await driveFetch(fetchImpl, accessToken, `${FILES_URL}?${query}`)
-  const body = (await response.json()) as { files?: { id?: string }[] }
-  return body.files?.[0]?.id ?? null
+  const body = (await response.json()) as { files?: Partial<DriveFile>[] }
+  const file = body.files?.[0]
+  return file?.id ? { id: file.id, md5Checksum: file.md5Checksum } : null
 }
+
+/** Asked of every upload, so its answer says what the file now holds. */
+const UPLOAD_FIELDS = 'fields=id,md5Checksum'
 
 export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
   const { accessToken, fetchImpl = fetch } = options
 
+  /**
+   * The file as this backend last saw it: found by the pull, and then what the
+   * push put there.
+   *
+   * Most syncs find the remote exactly as this device left it — nothing
+   * happened elsewhere since — and the listing's checksum says so, so the
+   * download of the whole library is skipped and this text is used instead. A
+   * different or missing checksum always downloads; the cache can only ever
+   * save a request, never supply a stale document. Kept as text rather than
+   * the parsed document, because the parsed one goes on to become the live
+   * library and would change under the cache.
+   */
+  let lastSeen: { id: string; md5Checksum: string; text: string } | null = null
+  /** The id this sync's pull found; `undefined` before any pull, `null` for none. */
+  let pulledId: string | null | undefined
+
+  const remember = (file: DriveFile | null, text: string): void => {
+    lastSeen = file?.md5Checksum ? { id: file.id, md5Checksum: file.md5Checksum, text } : null
+  }
+
+  /**
+   * What an upload says the file now is, or `null` if it did not say.
+   *
+   * Only ever an optimisation: the upload has already succeeded by the time
+   * this runs, and failing the sync over an unreadable answer would report a
+   * saved library as unsaved.
+   */
+  const described = async (response: Response): Promise<DriveFile | null> => {
+    const body = (await response.json().catch(() => null)) as Partial<DriveFile> | null
+    return body?.id ? { id: body.id, md5Checksum: body.md5Checksum } : null
+  }
+
+  const upload = async (token: string, id: string | null, payload: string): Promise<DriveFile | null> => {
+    if (id !== null) {
+      const response = await driveFetch(fetchImpl, token, `${UPLOAD_URL}/${id}?uploadType=media&${UPLOAD_FIELDS}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      })
+      return described(response)
+    }
+
+    /**
+     * Creating the file takes a multipart body, because the first part is the
+     * metadata that gives it its name. Without that it would be created as
+     * "Untitled", which is both unfindable for the user and unmatched by the
+     * lookup above — so every sync would make another one.
+     */
+    const boundary = `wta-${Math.random().toString(36).slice(2)}`
+    const metadata = JSON.stringify({ name: DOCUMENT_NAME })
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n${payload}\r\n` +
+      `--${boundary}--`
+
+    const response = await driveFetch(fetchImpl, token, `${UPLOAD_URL}?uploadType=multipart&${UPLOAD_FIELDS}`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body,
+    })
+    return described(response)
+  }
+
   return {
     async pull(): Promise<RemoteDocument | null> {
       const token = await accessToken()
-      const id = await findFileId(fetchImpl, token)
-      if (id === null) return null
+      const file = await findFile(fetchImpl, token)
+      pulledId = file?.id ?? null
+      if (file === null) return null
 
-      const response = await driveFetch(fetchImpl, token, `${FILES_URL}/${id}?alt=media`)
-      const text = await response.text()
+      let text: string
+      if (lastSeen && lastSeen.id === file.id && lastSeen.md5Checksum === file.md5Checksum) {
+        text = lastSeen.text
+      } else {
+        const response = await driveFetch(fetchImpl, token, `${FILES_URL}/${file.id}?alt=media`)
+        text = await response.text()
+        // The listing's checksum, which the file may have moved past between
+        // the two requests. That only makes the next sync download again.
+        remember(file, text)
+      }
 
       let document: StoreDocument
       try {
@@ -130,36 +210,22 @@ export function createDriveBackend(options: DriveBackendOptions): SyncBackend {
 
     async push(document: StoreDocument, _expected: string | null): Promise<void> {
       const token = await accessToken()
-      const id = await findFileId(fetchImpl, token)
       const payload = JSON.stringify(document)
+      // The pull that always precedes a push found the file seconds ago, so it
+      // is not listed a second time. Deleted since then, the update 404s and
+      // the file is created afresh, as a listing would have concluded.
+      const id = pulledId !== undefined ? pulledId : ((await findFile(fetchImpl, token))?.id ?? null)
 
-      if (id !== null) {
-        await driveFetch(fetchImpl, token, `${UPLOAD_URL}/${id}?uploadType=media`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload,
-        })
-        return
+      let file: DriveFile | null
+      try {
+        file = await upload(token, id, payload)
+      } catch (err) {
+        if (!(err instanceof DriveError && err.status === 404) || id === null) throw err
+        file = await upload(token, null, payload)
       }
-
-      /**
-       * Creating the file takes a multipart body, because the first part is the
-       * metadata that gives it its name. Without that it would be created as
-       * "Untitled", which is both unfindable for the user and unmatched by the
-       * lookup above — so every sync would make another one.
-       */
-      const boundary = `wta-${Math.random().toString(36).slice(2)}`
-      const metadata = JSON.stringify({ name: DOCUMENT_NAME })
-      const body =
-        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
-        `--${boundary}\r\nContent-Type: application/json\r\n\r\n${payload}\r\n` +
-        `--${boundary}--`
-
-      await driveFetch(fetchImpl, token, `${UPLOAD_URL}?uploadType=multipart`, {
-        method: 'POST',
-        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-        body,
-      })
+      // Unknown if the upload did not describe itself; the next push lists.
+      pulledId = file?.id
+      remember(file, payload)
     },
   }
 }

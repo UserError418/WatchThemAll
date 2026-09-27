@@ -92,8 +92,9 @@ export async function syncOnce(
    * honest about *both* directions. Counting records would miss an edit, and a
    * timestamp would miss a merge that changed nothing.
    */
-  const localUnchanged = JSON.stringify(merged) === JSON.stringify(local)
-  const remoteUnchanged = JSON.stringify(merged) === JSON.stringify(remote.document)
+  const mergedText = JSON.stringify(merged)
+  const localUnchanged = mergedText === JSON.stringify(local)
+  const remoteUnchanged = mergedText === JSON.stringify(remote.document)
 
   if (!localUnchanged) await host.write(merged)
   if (!remoteUnchanged) await backend.push(merged, remote.version)
