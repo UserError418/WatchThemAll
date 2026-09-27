@@ -71,6 +71,7 @@ class FakeVideo extends Marked {
   playbackRate = 1
   buffered = { length: 0, start: () => 0, end: () => 0 }
   textTracks = new FakeTrackList()
+  videoWidth = 1280
   videoHeight = 720
   constructor(
     public duration = 2_885,
@@ -87,6 +88,18 @@ class FakeVideo extends Marked {
   }
   getBoundingClientRect(): { width: number; height: number } {
     return this.size
+  }
+  private readonly listeners = new Map<string, Set<() => void>>()
+  addEventListener(type: string, listener: () => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set())
+    this.listeners.get(type)!.add(listener)
+  }
+  removeEventListener(type: string, listener: () => void): void {
+    this.listeners.get(type)?.delete(listener)
+  }
+  /** An event on the element itself, as a stream loading into it fires. */
+  emit(type: string): void {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener()
   }
 }
 
@@ -405,11 +418,16 @@ describe('reports up the frames', () => {
 })
 
 /** An hls.js as far as the relay can tell: levels, the one playing, and an automatic mode. */
-function engineFor(video: FakeVideo): { levels: Array<{ height: number; bitrate: number }>; currentLevel: number; autoLevelEnabled: boolean; media: FakeVideo } {
+function engineFor(video: FakeVideo): {
+  levels: Array<{ width: number; height: number; bitrate: number }>
+  currentLevel: number
+  autoLevelEnabled: boolean
+  media: FakeVideo
+} {
   return {
     levels: [
-      { height: 360, bitrate: 800_000 },
-      { height: 720, bitrate: 2_500_000 },
+      { width: 640, height: 360, bitrate: 800_000 },
+      { width: 1280, height: 720, bitrate: 2_500_000 },
     ],
     currentLevel: 1,
     autoLevelEnabled: true,
@@ -431,11 +449,13 @@ describe('quality', () => {
     command(w, { command: 'levels', duration: 2_885 })
     expect(qualityOf(w.heard)).toEqual({
       levels: [
-        { index: 0, height: 360, bitrate: 800_000 },
-        { index: 1, height: 720, bitrate: 2_500_000 },
+        { index: 0, width: 640, height: 360, bitrate: 800_000 },
+        { index: 1, width: 1280, height: 720, bitrate: 2_500_000 },
       ],
       current: 1,
       auto: true,
+      canAuto: true,
+      width: 1280,
       height: 720,
     })
     command(w, { command: 'level', index: 0, duration: 2_885 })
@@ -457,13 +477,95 @@ describe('quality', () => {
     expect(qualityOf(w.heard)?.levels).toHaveLength(2)
   })
 
-  it('still reports the picture height when no engine can be found', () => {
+  /**
+   * Videasy creates its hls.js in a component beside the video that renders
+   * nothing, and keeps it in that component's useRef: not above the video.
+   */
+  it('finds an engine in a ref of a component beside the video', () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    const engine = engineFor(film)
+    const root: Record<string, unknown> = { memoizedState: null, return: null }
+    const playerBox: Record<string, unknown> = { memoizedState: null, return: root }
+    const videoFiber: Record<string, unknown> = { memoizedState: null, return: playerBox }
+    const qualityComponent = { memoizedState: { memoizedState: { current: engine }, next: null }, return: root, child: null, sibling: null }
+    root.child = playerBox
+    playerBox.child = videoFiber
+    playerBox.sibling = qualityComponent
+    ;(film as unknown as Record<string, unknown>)['__reactFiber$x1'] = videoFiber
+    w.player.videos.push(film)
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)?.levels).toHaveLength(2)
+  })
+
+  /**
+   * Videasy's hls.js holds one rendition with no size; its qualities are whole
+   * streams in React state, switched by the function its own menu calls.
+   */
+  it('offers a list of whole streams, switches to one, and puts the time back', () => {
+    vi.useFakeTimers()
+    try {
+      const w = world()
+      const film = new FakeVideo(3_619)
+      const oneRendition = { levels: [{ height: 0 }], currentLevel: 0, autoLevelEnabled: true, media: film }
+      const sources = [
+        { quality: '1440p', url: 'https://cdn.example/1440.m3u8', type: 'm3u8' },
+        { quality: '1080p', url: 'https://cdn.example/1080.m3u8', type: 'm3u8' },
+      ]
+      const chosen: unknown[] = []
+      const hooks = (...states: unknown[]): Record<string, unknown> | null =>
+        states.reduceRight<Record<string, unknown> | null>((next, memoizedState) => ({ memoizedState, next }), null)
+      const root: Record<string, unknown> = { memoizedState: null, return: null }
+      const videoFiber: Record<string, unknown> = { memoizedState: null, return: root }
+      const player = {
+        memoizedState: hooks({ current: oneRendition }, { sources }, { currentSource: sources[1] }),
+        return: root,
+        child: null,
+        sibling: null as unknown,
+      }
+      const menu = {
+        memoizedState: hooks({ handleChangeQuality: (source: unknown) => chosen.push(source) }),
+        return: root,
+        child: null,
+        sibling: null,
+      }
+      root.child = videoFiber
+      videoFiber.sibling = player
+      player.sibling = menu
+      ;(film as unknown as Record<string, unknown>)['__reactFiber$x1'] = videoFiber
+      w.player.videos.push(film)
+      command(w, { command: 'watch' })
+      command(w, { command: 'levels', duration: 3_619 })
+      expect(qualityOf(w.heard)).toMatchObject({
+        levels: [
+          { index: 0, height: 1440 },
+          { index: 1, height: 1080 },
+        ],
+        current: 1,
+        canAuto: false,
+      })
+
+      film.currentTime = 1_234
+      command(w, { command: 'level', index: 0, duration: 3_619 })
+      expect(chosen).toEqual([sources[0]])
+      // The new stream starts from nothing, and the relay puts the time back.
+      film.currentTime = 0
+      film.emit('loadedmetadata')
+      vi.advanceTimersByTime(400)
+      expect(film.currentTime).toBe(1_234)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still reports the picture size when no engine can be found', () => {
     const w = world()
     const film = new FakeVideo(2_885)
     w.player.videos.push(film)
     command(w, { command: 'watch' })
     command(w, { command: 'levels', duration: 2_885 })
-    expect(qualityOf(w.heard)).toEqual({ levels: [], current: -1, auto: true, height: 720 })
+    expect(qualityOf(w.heard)).toEqual({ levels: [], current: -1, auto: true, canAuto: false, width: 1280, height: 720 })
   })
 
   it("ignores an engine attached to another video", () => {

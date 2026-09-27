@@ -286,8 +286,11 @@ export const EV = {
    * - `playerBarState`: main → shell, whether the bar is showing or was sent
    *   away. The bottom controls follow it, so both come and go together.
    * - `chromeOpenPanel`: main → chrome, Enter or C opening the episodes or
-   *   cast panel.
+   *   cast panel, or the shell's own Sources and Episodes buttons.
    * - `playerOverlayConfig`: main → shell, whether our controls are on.
+   * - `playerOwned` and `chromeOwned`: shell → main → chrome, whether our
+   *   controls have the film. While they do, the chrome's top bar keeps only
+   *   Back, Cast and Reload, and its panels open at the bottom.
    */
   playerKey: 'player:key',
   playerTransport: 'evt:player-transport',
@@ -296,6 +299,8 @@ export const EV = {
   playerBarState: 'evt:player-bar-state',
   chromeOpenPanel: 'evt:chrome-open-panel',
   playerOverlayConfig: 'evt:player-overlay-config',
+  playerOwned: 'player:owned',
+  chromeOwned: 'evt:chrome-owned',
   /** shell → main: the source has no film yet; press its own play control in its frames. */
   playerPressPlay: 'player:press-play',
   /** main → chrome: the arrows and Enter, while the episode strip is open. */
@@ -1141,6 +1146,8 @@ export interface OverlayArea {
   away?: boolean
   /** The episode strip is open: ←/→ and Enter belong to it, not to the film. */
   episodesOpen?: boolean
+  /** The source list is open: Back and Escape close it, not the player. */
+  sourcesOpen?: boolean
 }
 
 /** A key for the episode strip: move the highlight, play it, or close the strip. */
@@ -1211,8 +1218,10 @@ export interface WtaChromeApi {
   onPointerTop(cb: (nearTop: boolean) => void): () => void
   /** The pointer moved over the picture; `hold` keeps the bar up (paused, or using the controls). */
   onActivity(cb: (hold: boolean) => void): () => void
-  /** Enter or C, from wherever the key was pressed. */
-  onOpenPanel(cb: (panel: 'episodes' | 'cast') => void): () => void
+  /** Enter or C from wherever the key was pressed, or the shell's Sources and Episodes buttons. */
+  onOpenPanel(cb: (panel: 'episodes' | 'cast' | 'sources') => void): () => void
+  /** Whether our own controls have the film (v2); see `EV.chromeOwned`. */
+  onOwned(cb: (owned: boolean) => void): () => void
   /** The arrows and Enter while the episode strip is open. */
   onEpisodeNav(cb: (nav: EpisodeNav) => void): () => void
   /** A player key pressed in the chrome; main routes it. */
@@ -1306,6 +1315,8 @@ export interface WtaPlayerApi {
   activity(hold: boolean): void
   /** Press the source's own play control, in its frames (behind our cover). */
   pressPlay(): void
+  /** Whether our controls have the film now; the chrome lays itself out by it. */
+  owned(owned: boolean): void
   subtitles: {
     languages(): Promise<SubtitleLanguage[]>
     /** The best file in `code` for a film this long; remembered as the language to start with. */

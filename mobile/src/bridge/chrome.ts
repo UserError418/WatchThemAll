@@ -161,7 +161,9 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     // moves a pointer over the picture, presses a player key, or opens a panel
     // by key.
     onActivity: never<boolean>,
-    onOpenPanel: never<'episodes' | 'cast'>,
+    onOpenPanel: never<'episodes' | 'cast' | 'sources'>,
+    // The phone has no shell of its own controls yet: its bar keeps every button.
+    onOwned: never<boolean>,
     onEpisodeNav: never<'prev' | 'next' | 'play' | 'close'>,
     action: () => {},
   }

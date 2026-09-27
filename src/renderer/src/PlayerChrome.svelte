@@ -51,7 +51,6 @@
     type RemotePhase,
   } from './lib/castremote'
 
-  const BAR_HEIGHT = 56
   /**
    * The desktop strip's height, border included.
    *
@@ -137,10 +136,23 @@
 
   const { touch = false }: Props = $props()
 
+  /** The bar: 64 on the desktop since its buttons grew (2026-09-27); the phone keeps 56 until its port. */
+  const BAR_HEIGHT = $derived(touch ? 56 : 64)
+
   const api = window.wtaChrome
 
   let context = $state<PlayerContext | null>(null)
   let panel = $state<'none' | 'episodes' | 'sources'>('none')
+  /**
+   * Our own controls have the film (v2, told by the shell through main).
+   * Then the bar keeps only Back, Cast and Reload, in that order, and the
+   * source list and the episode strip open at the bottom, from the buttons in
+   * our controls (the owner, 2026-09-27). Until then (a source still starting,
+   * or its own page showing), and on the phone until its port, the bar keeps
+   * every button, because nothing else offers them.
+   */
+  let owned = $state(false)
+  const bottomPanels = $derived(owned && !touch)
   let barVisible = $state(true)
   let hoveringChrome = $state(false)
 
@@ -958,15 +970,28 @@
     }),
   )
 
-  /** Enter and C open Episodes and Cast, wherever the key was pressed. */
+  /** Enter and C open Episodes and Cast, wherever the key was pressed; so do the shell's buttons, and Sources. */
   $effect(() =>
     api?.onOpenPanel((which) => {
       if (awayUntil !== null) comeBack()
       barVisible = true
       if (which === 'episodes' && context?.type === 'tv') openEpisodes()
       if (which === 'cast' && castAvailable) openRemote()
+      if (which === 'sources') openSources()
     }),
   )
+
+  $effect(() =>
+    api?.onOwned((value) => {
+      owned = value
+    }),
+  )
+
+  // A panel open when the layout changes would jump from the bottom to the top.
+  $effect(() => {
+    void bottomPanels
+    untrack(() => (panel = 'none'))
+  })
 
   /** A player key pressed while this document has the focus; main routes it. */
   function onKeydown(event: KeyboardEvent): void {
@@ -1044,6 +1069,13 @@
   const WHOLE_SLOT = 10_000
 
   /**
+   * How far above the picture's bottom edge a panel opened from our controls
+   * sits: clear of the shell's seek bar and button row (`PlayerOverlay.svelte`),
+   * so the time and the buttons stay in sight while a panel is open.
+   */
+  const ABOVE_OUR_CONTROLS = 120
+
+  /**
    * How much of the window this overlay may cover.
    *
    * Everything it draws, and — when it draws nothing — the strip it needs to
@@ -1056,13 +1088,25 @@
       ? { height: WHOLE_SLOT, width: null }
       : awayUntil !== null
         ? { height: AWAY_PILL.top + AWAY_PILL.height, width: AWAY_PILL.width, barVisible: false, away: true }
-        : {
-            height: (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
-            width: null,
-            barVisible,
-            away: false,
-            episodesOpen: barVisible && panel === 'episodes',
-          },
+        : bottomPanels && barVisible && panel !== 'none'
+          ? // A panel at the bottom: the view is one rectangle from the top, so
+            // it takes the whole slot, and a click beside the panel closes it.
+            {
+              height: WHOLE_SLOT,
+              width: null,
+              barVisible: true,
+              away: false,
+              episodesOpen: panel === 'episodes',
+              sourcesOpen: panel === 'sources',
+            }
+          : {
+              height: (barVisible ? BAR_HEIGHT + panelHeight : HOT_ZONE_PX) + suggestionHeight,
+              width: null,
+              barVisible,
+              away: false,
+              episodesOpen: barVisible && panel === 'episodes',
+              sourcesOpen: barVisible && panel === 'sources',
+            },
   )
 
   $effect(() => {
@@ -1208,10 +1252,14 @@
 
   $effect(() =>
     api?.onEpisodeNav((nav) => {
+      // Back and Escape close the source list too (`SOURCE_KEYS` in main).
+      if (nav === 'close') {
+        panel = 'none'
+        return
+      }
       if (panel !== 'episodes') return
       if (nav === 'prev') moveHighlight(-1)
       else if (nav === 'next') moveHighlight(1)
-      else if (nav === 'close') panel = 'none'
       else if (highlighted !== null && browsingSeason !== null) {
         api.goTo(browsingSeason, highlighted)
         panel = 'none'
@@ -1629,6 +1677,8 @@
 {:else}
   <div
     class="chrome"
+    class:bottom-panels={bottomPanels}
+    style:--above-controls="{ABOVE_OUR_CONTROLS}px"
     role="group"
     aria-label="Player controls"
     onmouseenter={() => (hoveringChrome = true)}
@@ -1656,6 +1706,7 @@
 
       <span class="spacer"></span>
 
+      {#snippet reloadButton()}
       <button
         class="tool"
         title="Reload this source"
@@ -1668,37 +1719,9 @@
           />
         </svg>
       </button>
+      {/snippet}
 
-      <!-- Not on a phone: the bar never hides there, so it has no way back. -->
-      {#if !touch}
-        <button
-          class="tool"
-          title="Hide these controls for 5 seconds"
-          aria-label="Hide these controls for 5 seconds"
-          onclick={sendAway}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M12 7a5 5 0 0 1 4.64 6.83l2.92 2.92A11.8 11.8 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16A4.85 4.85 0 0 1 12 7zM2 4.27l2.74 2.74A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84L19.73 22 21 20.73 3.27 3zM7.53 9.8l1.55 1.55A3 3 0 0 0 12.65 15l1.55 1.55A5 5 0 0 1 7.53 9.8zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3z"
-            />
-          </svg>
-        </button>
-      {/if}
-
-      {#if context?.type === 'tv'}
-        <button
-          class="tool"
-          class:active={panel === 'episodes'}
-          title="Episodes"
-          aria-label="Episodes"
-          onclick={openEpisodes}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v8l6-4z" />
-          </svg>
-        </button>
-      {/if}
-
+      {#snippet castButton()}
       {#if castAvailable}
         <!--
           Two states. A cast that is running is the more important fact on this
@@ -1730,19 +1753,68 @@
           </svg>
         </button>
       {/if}
+      {/snippet}
 
-      <button
-        class="tool source-button"
-        class:active={panel === 'sources'}
-        title="Choose the source"
-        onclick={openSources}
-      >
-        <span class="source-name">{context?.providerName ?? 'Source'}</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"
-          ><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z" /></svg
+      {#if bottomPanels}
+        <!-- Back, Cast, Reload (the owner, 2026-09-27): the source list and the
+             episodes are in our controls at the bottom, and Hide has nothing
+             left to uncover. -->
+        {@render castButton()}
+        {@render reloadButton()}
+      {:else}
+        {@render reloadButton()}
+
+        <!-- Not on a phone: the bar never hides there, so it has no way back. -->
+        {#if !touch}
+          <button
+            class="tool"
+            title="Hide these controls for 5 seconds"
+            aria-label="Hide these controls for 5 seconds"
+            onclick={sendAway}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 7a5 5 0 0 1 4.64 6.83l2.92 2.92A11.8 11.8 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16A4.85 4.85 0 0 1 12 7zM2 4.27l2.74 2.74A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84L19.73 22 21 20.73 3.27 3zM7.53 9.8l1.55 1.55A3 3 0 0 0 12.65 15l1.55 1.55A5 5 0 0 1 7.53 9.8zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3z"
+              />
+            </svg>
+          </button>
+        {/if}
+
+        {#if context?.type === 'tv'}
+          <button
+            class="tool"
+            class:active={panel === 'episodes'}
+            title="Episodes"
+            aria-label="Episodes"
+            onclick={openEpisodes}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v8l6-4z" />
+            </svg>
+          </button>
+        {/if}
+
+        {@render castButton()}
+
+        <button
+          class="tool source-button"
+          class:active={panel === 'sources'}
+          title="Choose the source"
+          onclick={openSources}
         >
-      </button>
+          <span class="source-name">{context?.providerName ?? 'Source'}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"
+            ><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z" /></svg
+          >
+        </button>
+      {/if}
     </div>
+
+    {#if bottomPanels && panel !== 'none'}
+      <!-- Beside a panel at the bottom, the view covers the picture: a click
+           there closes the panel, as a click outside a menu does. -->
+      <button class="backdrop" tabindex="-1" aria-label="Close" onclick={() => (panel = 'none')}></button>
+    {/if}
 
     {#if panel === 'episodes'}
       <!--
@@ -1764,6 +1836,7 @@
       -->
       <div
         class="panel episodes"
+        class:bottom={bottomPanels}
         class:touch
         style:height={touch ? null : `${EPISODE_PANEL_HEIGHT}px`}
         style:--below-bar="{BAR_HEIGHT + PANEL_GAP}px"
@@ -1836,7 +1909,7 @@
     {/if}
 
     {#if panel === 'sources'}
-      <div class="panel sources">
+      <div class="panel sources" class:bottom={bottomPanels}>
         <!--
           Pinned at the head, as in the detail view's picker: at the foot it was
           easy to miss, and it is what fills the dots in. Sticky, so it stays in
@@ -2142,7 +2215,8 @@
   }
 
   /*
-    The bar's buttons: 40px squares with a 22px icon, dark enough to read over
+    The bar's buttons: 46px squares with a 26px icon (40 and 22 until the
+    owner asked for them a bit larger, 2026-09-27), dark enough to read over
     a bright picture. They were 30px pills of white at 8% over the bar's
     gradient, which on a bright frame went pale grey and hard to tell apart.
     Near-black at 70% keeps them the darkest thing in the corner whatever is
@@ -2156,9 +2230,9 @@
     align-items: center;
     justify-content: center;
     gap: 4px;
-    height: 40px;
-    min-width: 40px;
-    padding: 0 8px;
+    height: 46px;
+    min-width: 46px;
+    padding: 0 10px;
     background: var(--surface-button);
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -2169,8 +2243,8 @@
   }
 
   .tool svg {
-    width: 22px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
     fill: currentColor;
     flex-shrink: 0;
   }
@@ -2198,6 +2272,42 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* v2: the panels open at the bottom, from the buttons in our own controls.
+     The view then covers the whole picture (`neededArea`), so the bar and the
+     panel are lifted over the backdrop that catches a click beside them. */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+
+  .bottom-panels .bar {
+    position: relative;
+    z-index: 2;
+  }
+
+  .panel.bottom {
+    position: fixed;
+    z-index: 3;
+    bottom: var(--above-controls);
+    margin: 0;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+  }
+
+  .episodes.bottom {
+    left: 14px;
+    right: 14px;
+  }
+
+  .sources.bottom {
+    right: 14px;
+    max-height: min(420px, calc(100vh - var(--above-controls) - 80px));
   }
 
   .panel {

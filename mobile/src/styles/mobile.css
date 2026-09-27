@@ -682,6 +682,14 @@ body {
 #wta-player-chrome .tool {
   height: 44px;
   min-width: 44px;
+  padding: 0 8px;
+}
+
+/* The desktop's icons grew to 26px (2026-09-27); the phone's bar is measured
+   to fit 412px at 22, and keeps them until the v2 port. */
+#wta-player-chrome .tool svg {
+  width: 22px;
+  height: 22px;
 }
 
 #wta-player-chrome .ghost {

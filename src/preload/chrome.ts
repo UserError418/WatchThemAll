@@ -61,7 +61,7 @@ const api: WtaChromeApi = {
    * its bounds, so an overlay sized to the whole window would make the video
    * unclickable. The document measures itself and main follows.
    */
-  setOverlayArea: ({ height, width, barVisible, away, episodesOpen }: OverlayArea): void => {
+  setOverlayArea: ({ height, width, barVisible, away, episodesOpen, sourcesOpen }: OverlayArea): void => {
     ipcRenderer.send(EV.chromeOverlayArea, {
       height: Math.max(0, Math.round(height)),
       width: width === null ? null : Math.max(0, Math.round(width)),
@@ -70,6 +70,8 @@ const api: WtaChromeApi = {
       away: away === true,
       // Whether the arrows and Enter belong to the episode strip (v2).
       episodesOpen: episodesOpen === true,
+      // Whether Back and Escape close the source list (v2).
+      sourcesOpen: sourcesOpen === true,
     })
   },
 
@@ -109,13 +111,20 @@ const api: WtaChromeApi = {
     return () => ipcRenderer.removeListener(EV.chromeActivity, listener)
   },
 
-  /** Enter or C, pressed wherever the focus was. */
-  onOpenPanel: (callback: (panel: 'episodes' | 'cast') => void): (() => void) => {
+  /** Enter or C, pressed wherever the focus was, or the shell's Sources and Episodes buttons. */
+  onOpenPanel: (callback: (panel: 'episodes' | 'cast' | 'sources') => void): (() => void) => {
     const listener = (_event: unknown, panel: unknown): void => {
-      if (panel === 'episodes' || panel === 'cast') callback(panel)
+      if (panel === 'episodes' || panel === 'cast' || panel === 'sources') callback(panel)
     }
     ipcRenderer.on(EV.chromeOpenPanel, listener)
     return () => ipcRenderer.removeListener(EV.chromeOpenPanel, listener)
+  },
+
+  /** Whether our own controls have the film (v2): the bar lays itself out by it. */
+  onOwned: (callback: (owned: boolean) => void): (() => void) => {
+    const listener = (_event: unknown, owned: unknown): void => callback(owned === true)
+    ipcRenderer.on(EV.chromeOwned, listener)
+    return () => ipcRenderer.removeListener(EV.chromeOwned, listener)
   },
 
   onEpisodeNav: (callback: (nav: EpisodeNav) => void): (() => void) => {

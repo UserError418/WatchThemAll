@@ -31,6 +31,8 @@ export const PLAYER_ACTIONS = [
   'cast',
   'reload',
   'fullscreen',
+  /** The source list. No key: the button in our bar asks for it. */
+  'sources',
 ] as const
 
 export type PlayerAction = (typeof PLAYER_ACTIONS)[number]

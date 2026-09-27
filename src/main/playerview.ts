@@ -790,6 +790,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let barState: BarState = { visible: true, away: false }
   /** The episode strip is open, as the chrome last said; see `player.action`. */
   let episodesOpen = false
+  /** The source list is open, as the chrome last said; see `player.action`. */
+  let sourcesOpen = false
 
   const sendConfig = (): void => {
     if (!alive()) return
@@ -1890,6 +1892,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
     ipcMain.removeListener(EV.playerKey, onPlayerKey)
     ipcMain.removeListener(EV.playerActivity, onActivity)
+    ipcMain.removeListener(EV.playerOwned, onOwned)
     ipcMain.removeListener(EV.playerPressPlay, onPressPlay)
     leaveFullscreen()
     if (!win.isDestroyed()) {
@@ -2071,6 +2074,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     overlayArea = area
     placeOverlay(area)
     episodesOpen = area.episodesOpen === true
+    sourcesOpen = area.sourcesOpen === true
     const next: BarState = { visible: area.barVisible ?? true, away: area.away ?? false }
     if (next.visible !== barState.visible || next.away !== barState.away) {
       barState = next
@@ -2127,10 +2131,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     back: 'close',
     escape: 'close',
   }
+  /** While the source list is open, Back and Escape close it rather than leave the player. */
+  const SOURCE_KEYS: Partial<Record<PlayerAction, EpisodeNav>> = {
+    back: 'close',
+    escape: 'close',
+  }
 
   player.action = (action: PlayerAction): void => {
     if (!alive()) return
-    const nav = episodesOpen ? EPISODE_KEYS[action] : undefined
+    const nav = episodesOpen ? EPISODE_KEYS[action] : sourcesOpen ? SOURCE_KEYS[action] : undefined
     if (nav !== undefined && overlay !== null && !overlay.webContents.isDestroyed()) {
       overlay.webContents.send(EV.chromeEpisodeNav, nav)
       return
@@ -2154,6 +2163,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         return
       case 'episodes':
       case 'cast':
+      case 'sources':
         if (overlay !== null && !overlay.webContents.isDestroyed()) {
           overlay.webContents.send(EV.chromeOpenPanel, action)
           // The cast remote covers the whole picture, so the keys belong to it:
@@ -2182,6 +2192,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       overlay.webContents.send(EV.chromeActivity, hold === true)
     }
   }
+  /** Whether the shell's controls have the film: the chrome's bar lays itself out by it. */
+  const onOwned = (event: Electron.IpcMainEvent, owned: unknown): void => {
+    if (event.sender !== contents) return
+    if (overlay !== null && !overlay.webContents.isDestroyed()) {
+      overlay.webContents.send(EV.chromeOwned, owned === true)
+    }
+  }
   /**
    * The shell's cover is over the source, so a mouse click at the centre
    * would land on the cover. What reaches the source's poster is a DOM click
@@ -2193,6 +2210,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
   ipcMain.on(EV.playerKey, onPlayerKey)
   ipcMain.on(EV.playerActivity, onActivity)
+  ipcMain.on(EV.playerOwned, onOwned)
   ipcMain.on(EV.playerPressPlay, onPressPlay)
 
   if (overlay !== null) {

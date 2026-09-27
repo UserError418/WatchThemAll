@@ -24,6 +24,8 @@
   import { actionForEvent, SEEK_STEP_SECONDS, VOLUME_STEP, type TransportAction } from '@shared/playerkeys'
   import { clock } from '../lib/format'
   import { cuesAt, type Cue, type SubtitleLanguage } from '@shared/subtitles'
+  import { qualityClass } from '@shared/streamquality'
+  import { formatQuality } from '@shared/scanrank'
   import { FilmLink, type FilmView } from './filmlink'
   import SeekBar from './SeekBar.svelte'
   import { ICONS } from './icons'
@@ -43,8 +45,6 @@
 
   let context = $state<PlayerContext | null>(null)
 
-  /** The user asked for the source's own controls, for this load. */
-  let sourceChosen = $state(false)
   /** The film's time has moved in this load: it is playing, not just loaded. */
   let started = $state(false)
   /**
@@ -56,8 +56,12 @@
   let revealed = $state(false)
 
   const film = $derived(view.film)
-  /** Our controls rather than the source's: on, and not handed back by the viewer. */
-  const playerMode = $derived(config.ownControls && !sourceChosen)
+  /**
+   * Our controls rather than the source's. Only the Settings switch turns
+   * them off: the bar's "Use the source's own controls" button went at the
+   * owner's request (2026-09-27), with the pill that led back.
+   */
+  const playerMode = $derived(config.ownControls)
   const engaged = $derived(playerMode && started && film !== null && !revealed)
   /**
    * Our cover over the source's page, from its first frame (the owner,
@@ -504,18 +508,50 @@
   /* ── Quality ───────────────────────────────────────────────────────────── */
 
   /**
-   * The source's own quality ladder, where its engine can be reached
-   * (`findEngine` in the relay): one entry per height, the best bitrate of
-   * each, highest first. Asked for when the film starts and when the menu
-   * opens; the picture's own height comes with it either way.
+   * Qualities are named by `qualityClass`, the rule the source tests use, so
+   * the menu and the source list never disagree. Films are rarely 16:9: Silo
+   * plays at 1913×800, which is 1080p, and its height alone read "800p".
    */
-  const heights = $derived.by(() => {
-    const byBitrate = [...(view.quality?.levels ?? [])].sort((a, b) => b.bitrate - a.bitrate)
-    // The first of each height, by bitrate, is its best. A ladder has a handful of rungs.
-    const best = byBitrate.filter((level, i) => byBitrate.findIndex((l) => l.height === level.height) === i)
-    return best.sort((a, b) => b.height - a.height)
+  const classOf = (width: number, height: number): number => qualityClass({ width: width > 0 ? width : null, height })
+
+  /**
+   * The source's own quality ladder, where its engine can be reached
+   * (`findEngine` in the relay): one rung per class, the best bitrate of
+   * each, highest first. Asked for when the film starts and when the menu
+   * opens; the picture's own size comes with it either way.
+   */
+  const rungs = $derived.by(() => {
+    const byBitrate = (view.quality?.levels ?? [])
+      .map((level) => ({ index: level.index, quality: classOf(level.width, level.height), bitrate: level.bitrate }))
+      .sort((a, b) => b.bitrate - a.bitrate)
+    // The first of each class, by bitrate, is its best. A ladder has a handful of rungs.
+    const best = byBitrate.filter((rung, i) => byBitrate.findIndex((r) => r.quality === rung.quality) === i)
+    return best.sort((a, b) => b.quality - a.quality)
   })
-  const heightLabel = (height: number): string => (height > 0 ? `${height}p` : 'Auto')
+
+  /** What is on screen now; null before the first frame. */
+  const playingQuality = $derived(
+    view.quality && view.quality.height > 0 ? classOf(view.quality.width, view.quality.height) : null,
+  )
+
+  /**
+   * The class chosen, or null for automatic: two encodes of one class are one
+   * choice. A list of whole streams has no automatic mode, so one of them is
+   * always the choice.
+   */
+  const chosenQuality = $derived.by(() => {
+    const quality = view.quality
+    if (!quality || (quality.canAuto && quality.auto)) return null
+    const level = quality.levels.find((l) => l.index === quality.current)
+    return level ? classOf(level.width, level.height) : null
+  })
+
+  /**
+   * The button's label: a choice the viewer made, in the menu's own terms,
+   * or else what is on screen. Videasy calls a 1148×480 stream "480p", which
+   * the picture's size would name 720p; the menu and the button must agree.
+   */
+  const shownQuality = $derived(chosenQuality ?? playingQuality)
 
   $effect(() => {
     if (engaged) link.askQuality()
@@ -531,12 +567,13 @@
     menu = 'none'
   }
 
-  /* ── The source's own controls, on request ─────────────────────────────── */
-
-  function useSourceControls(): void {
-    menu = 'none'
-    sourceChosen = true
-  }
+  /**
+   * The chrome lays its bar out by whether we have the film: while we do, its
+   * source list and episode strip open from the buttons in our bar instead.
+   */
+  $effect(() => {
+    api?.owned(engaged)
+  })
 
   /* ── A source change the player made by itself ─────────────────────────── */
 
@@ -706,6 +743,19 @@
 
         <span class="spacer"></span>
 
+        <!-- The source list and the episodes, moved down from the top bar (the
+             owner, 2026-09-27). The chrome draws both, above this row. -->
+        <button class="control source" aria-label="Choose the source" title="Choose the source" onclick={() => api?.action('sources')}>
+          <span class="source-name">{context?.providerName ?? 'Source'}</span>
+          <svg viewBox="0 0 24 24"><path d={ICONS.expandLess} /></svg>
+        </button>
+
+        {#if context?.type === 'tv'}
+          <button class="control" aria-label="Episodes" title="Episodes (Enter)" onclick={() => api?.action('episodes')}>
+            <svg viewBox="0 0 24 24"><path d={ICONS.episodes} /></svg>
+          </button>
+        {/if}
+
         <div class="menu-anchor">
           <button
             class="control"
@@ -763,37 +813,35 @@
             title="Quality"
             onclick={toggleQualityMenu}
           >
-            <span class="quality-label">{heightLabel(view.quality?.height ?? 0)}</span>
+            <span class="quality-label">{shownQuality === null ? 'Auto' : formatQuality(shownQuality)}</span>
           </button>
           {#if menu === 'quality'}
             <div class="menu" transition:fade={{ duration: 140 }}>
-              {#if heights.length > 1}
-                <button class="item" class:chosen={view.quality?.auto !== false} onclick={() => chooseLevel(-1)}>
-                  <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
-                  <span class="item-name">Auto</span>
-                </button>
-                {#each heights as level (level.index)}
-                  <button
-                    class="item"
-                    class:chosen={view.quality?.auto === false && view.quality.current === level.index}
-                    onclick={() => chooseLevel(level.index)}
-                  >
+              {#if rungs.length > 1}
+                {#if view.quality?.canAuto}
+                  <button class="item" class:chosen={chosenQuality === null} onclick={() => chooseLevel(-1)}>
                     <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
-                    <span class="item-name">{level.height}p</span>
+                    <span class="item-name">Auto</span>
+                    {#if chosenQuality === null && playingQuality !== null}
+                      <span class="item-note">{formatQuality(playingQuality)}</span>
+                    {/if}
+                  </button>
+                {/if}
+                {#each rungs as rung (rung.index)}
+                  <button class="item" class:chosen={chosenQuality === rung.quality} onclick={() => chooseLevel(rung.index)}>
+                    <svg viewBox="0 0 24 24"><path d={ICONS.check} /></svg>
+                    <span class="item-name">{formatQuality(rung.quality)}</span>
                   </button>
                 {/each}
+              {:else if rungs.length === 1}
+                <p class="menu-hint">{context?.providerName ?? 'This source'} offers only {formatQuality(rungs[0]!.quality)}</p>
               {:else}
-                <p class="menu-hint">
-                  {context?.providerName ?? 'This source'} offers {view.quality?.height ? `only ${view.quality.height}p` : 'no choice of quality'}
-                </p>
+                <!-- No engine within reach: say so, rather than claim there is nothing to choose. -->
+                <p class="menu-hint">{context?.providerName ?? 'This source'} chooses the quality itself</p>
               {/if}
             </div>
           {/if}
         </div>
-
-        <button class="control" aria-label="Use the source's own controls" title="Use the source's own controls" onclick={useSourceControls}>
-          <svg viewBox="0 0 24 24"><path d={ICONS.tune} /></svg>
-        </button>
 
         <button
           class="control"
@@ -805,14 +853,6 @@
         </button>
       </div>
     </div>
-  {/if}
-
-  {#if config.ownControls && sourceChosen}
-    <!-- The way back from the source's own controls. Takes its own clicks while everything else passes through. -->
-    <button class="back-to-ours" transition:fade={{ duration: 180 }} onclick={() => (sourceChosen = false)}>
-      <svg viewBox="0 0 24 24"><path d={ICONS.tune} /></svg>
-      WatchThemAll controls
-    </button>
   {/if}
 
   {#if toast}
@@ -920,8 +960,8 @@
     position: relative;
     display: grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: 52px;
+    height: 52px;
     padding: 0;
     border: 0;
     border-radius: 50%;
@@ -966,8 +1006,8 @@
 
   .control svg {
     position: relative;
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
     fill: currentColor;
     overflow: visible;
   }
@@ -982,20 +1022,20 @@
   }
 
   .jump svg {
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
   }
 
   /* Play and pause turn into each other rather than swapping. */
   .play {
-    width: 50px;
-    height: 50px;
+    width: 58px;
+    height: 58px;
   }
 
   .play .morph {
     position: absolute;
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     opacity: 0;
     transform: scale(0.5) rotate(-90deg);
     transition:
@@ -1010,7 +1050,7 @@
 
   .time {
     margin-left: 8px;
-    font-size: 14px;
+    font-size: 16px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -1120,11 +1160,42 @@
   }
 
   /* The resolution itself is the icon: what is playing, at a glance. */
+  /* The source's name is information, not a label, so it stays words (as on
+     the top bar it came from): a pill rather than a disc. */
+  .control.source {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    width: auto;
+    padding: 0 8px 0 16px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .control.source::before {
+    border-radius: 999px;
+  }
+
+  .control.source svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .source-name {
+    position: relative;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .control.quality {
     width: auto;
-    min-width: 44px;
-    padding: 0 8px;
-    border-radius: 22px;
+    min-width: 52px;
+    padding: 0 10px;
+    border-radius: 26px;
   }
 
   .control.quality::before {
@@ -1133,7 +1204,7 @@
 
   .quality-label {
     position: relative;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 700;
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
@@ -1515,41 +1586,6 @@
       opacity: 0;
       transform: scale(1.5);
     }
-  }
-
-  /* ── Outside our controls ─────────────────────────────────────────────── */
-
-  .back-to-ours {
-    position: absolute;
-    left: 16px;
-    top: 64px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 14px 8px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(10, 10, 14, 0.78);
-    color: inherit;
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-    pointer-events: auto;
-    opacity: 0.6;
-    transition:
-      opacity 180ms ease,
-      background 180ms ease;
-  }
-
-  .back-to-ours:hover {
-    opacity: 1;
-    background: rgba(30, 30, 38, 0.92);
-  }
-
-  .back-to-ours svg {
-    width: 18px;
-    height: 18px;
-    fill: var(--accent);
   }
 
   .toast {

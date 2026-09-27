@@ -67,6 +67,7 @@ const api: WtaPlayerApi = {
   },
   activity: (hold) => ipcRenderer.send(EV.playerActivity, hold === true),
   pressPlay: () => ipcRenderer.send(EV.playerPressPlay),
+  owned: (owned) => ipcRenderer.send(EV.playerOwned, owned === true),
   subtitles: {
     languages: () => ipcRenderer.invoke(CH.subtitleLanguages),
     load: (code, filmSeconds) => ipcRenderer.invoke(CH.subtitleLoad, code, filmSeconds),
