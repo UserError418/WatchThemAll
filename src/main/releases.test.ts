@@ -119,16 +119,20 @@ describe('checkAll', () => {
     lastChecked: 0,
   })
 
-  /** A store over a plain list, with `put` stamping nothing: the sweep's writes are what matter. */
-  function storeOf(trackers: ReleaseTracker[]): SweepableStore & { trackers: ReleaseTracker[]; puts: ReleaseTracker[] } {
+  /** A store over a plain list, with `putMany` stamping nothing: the sweep's writes are what matter. */
+  function storeOf(trackers: ReleaseTracker[]): SweepableStore & { trackers: ReleaseTracker[]; puts: ReleaseTracker[]; writes: number } {
     const state = {
       trackers,
       puts: [] as ReleaseTracker[],
+      writes: 0,
       read: () => ({ trackers: state.trackers }) as unknown as StoreShape,
       collection: () => ({
-        put: (next: ReleaseTracker) => {
-          state.puts.push(next)
-          state.trackers = state.trackers.map((t) => (t.id === next.id ? next : t))
+        putMany: (batch: ReleaseTracker[]) => {
+          state.writes += 1
+          for (const next of batch) {
+            state.puts.push(next)
+            state.trackers = state.trackers.map((t) => (t.id === next.id ? next : t))
+          }
         },
       }),
     }
@@ -190,5 +194,31 @@ describe('checkAll', () => {
     expect(second).toEqual([])
     expect(vi.mocked(tmdb.detail).mock.calls.length).toBeGreaterThanOrEqual(1)
     expect(store.puts).toHaveLength(1)
+  })
+
+  /** Every tracker's `lastChecked` moves, so one write per tracker was a full save each. */
+  it('writes every checked tracker in one go', async () => {
+    const store = storeOf([tracker('a', 1), tracker('b', 2), tracker('c', 3)])
+    detailWithNewEpisode()
+
+    const notices = await checkAll(store)
+
+    expect(store.writes).toBe(1)
+    expect(store.puts.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+    expect(notices).toHaveLength(3)
+  })
+
+  it('leaves out, and does not announce, a series untracked after its check', async () => {
+    const store = storeOf([tracker('a', 1), tracker('b', 2)])
+    let calls = 0
+    detailWithNewEpisode(() => {
+      // Untracked while the *next* series is being checked.
+      if (++calls === 2) store.trackers = store.trackers.filter((t) => t.id !== 'a')
+    })
+
+    const notices = await checkAll(store)
+
+    expect(store.puts.map((t) => t.id)).toEqual(['b'])
+    expect(notices).toHaveLength(1)
   })
 })

@@ -30,7 +30,7 @@ import type { Episode, EpisodeStub, ReleaseTracker, StoreShape, Synced } from '@
 export interface SweepableStore {
   read(): StoreShape
   collection(key: 'trackers'): {
-    put(tracker: Omit<Synced<ReleaseTracker>, 'updatedAt' | 'deletedAt'>): void
+    putMany(trackers: Array<Omit<Synced<ReleaseTracker>, 'updatedAt' | 'deletedAt'>>): void
   }
 }
 import * as tmdb from './tmdb'
@@ -212,20 +212,20 @@ export async function checkAll(store: SweepableStore): Promise<ReleaseNotice[]> 
 }
 
 async function sweep(store: SweepableStore): Promise<ReleaseNotice[]> {
-  const liveTracker = (id: string): ReleaseTracker | undefined =>
-    store.read().trackers.find((tracker) => tracker.id === id)
-  const notices: ReleaseNotice[] = []
+  const liveTrackers = (): Map<string, ReleaseTracker> =>
+    new Map(store.read().trackers.map((tracker) => [tracker.id, tracker]))
+  const results: Array<{ id: string; update: Partial<ReleaseTracker>; notice: ReleaseNotice | null }> = []
 
   for (const { id } of store.read().trackers) {
-    const before = liveTracker(id)
+    const before = liveTrackers().get(id)
     if (!before) continue
 
-    // Checked on a copy, and only the checked fields are written back onto
-    // the tracker as it stands *after* the check. The sweep used to change the
-    // records it read at the start and `put` them back, and `put` revives a
-    // deleted record. So a series untracked while TMDB answered (or removed by
-    // a sync that landed mid-sweep) came back, synced out as tracked again,
-    // and could raise a notification for a series the user had just dropped.
+    // Checked on a copy, and only the checked fields are kept. The sweep used
+    // to change the records it read at the start and `put` them back, and
+    // `put` revives a deleted record. So a series untracked while TMDB
+    // answered (or removed by a sync that landed mid-sweep) came back, synced
+    // out as tracked again, and could raise a notification for a series the
+    // user had just dropped.
     const checked: ReleaseTracker = { ...before }
     let notice: ReleaseNotice | null = null
     try {
@@ -236,17 +236,24 @@ async function sweep(store: SweepableStore): Promise<ReleaseNotice[]> {
       checked.lastChecked = Date.now()
     }
 
-    const after = liveTracker(id)
-    if (after) {
-      const update: Partial<ReleaseTracker> = {}
-      for (const field of CHECKED_FIELDS) Object.assign(update, { [field]: checked[field] })
-      store.collection('trackers').put({ ...after, ...update })
-      if (notice) notices.push(notice)
-    }
+    const update: Partial<ReleaseTracker> = {}
+    for (const field of CHECKED_FIELDS) Object.assign(update, { [field]: checked[field] })
+    results.push({ id, update, notice })
     await new Promise((resolve) => setTimeout(resolve, REQUEST_SPACING_MS))
   }
 
-  return notices
+  // Written once, at the end, onto each tracker as it stands now. Every
+  // tracker's `lastChecked` moves, so writing per tracker saved the whole
+  // library a dozen times per sweep and reloaded the renderer's copy each
+  // time. A tracker gone by now stays gone and announces nothing. Stopping
+  // mid-sweep loses only the `lastChecked` stamps, and the next sweep simply
+  // checks those series again.
+  const live = liveTrackers()
+  const kept = results.filter((result) => live.has(result.id))
+  if (kept.length > 0) {
+    store.collection('trackers').putMany(kept.map(({ id, update }) => ({ ...live.get(id)!, ...update })))
+  }
+  return kept.flatMap(({ notice }) => (notice ? [notice] : []))
 }
 
 /** Human-readable summary for a notification body. */
