@@ -53,10 +53,10 @@ import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
 import { unreadableLibrary } from '@shared/store/core'
 
-/** What the renderer sees when this build has no OAuth client at all. */
 /** Shown when a cast is asked for with no player open. */
 const NOTHING_PLAYING_REASON = 'Nothing is playing.'
 
+/** What the renderer sees when this build has no OAuth client at all. */
 const UNAVAILABLE_SYNC_STATUS: SyncStatus = {
   state: 'off',
   accountEmail: null,
@@ -399,15 +399,6 @@ export function registerIpc(deps: IpcDeps): void {
       return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }
     }
 
-    /**
-     * Order the fallback chain by what has actually worked.
-     *
-     * The user's explicit choice still wins — `buildPlayUrl` puts
-     * `req.providerId` first regardless — so this only decides what to try
-     * *after* it. The ordering comes from recorded playback outcomes rather
-     * than from reachability: a provider can answer every probe and still not
-     * carry the episode, and "it responded" was never the question.
-     */
     /**
      * Start where the user left off, by asking the provider to.
      *

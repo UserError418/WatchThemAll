@@ -135,7 +135,6 @@ let stopReleaseTimer: (() => void) | null = null
 /** Cleared on quit so a pending refresh cannot outlive the app. */
 let catalogTimer: ReturnType<typeof setInterval> | null = null
 
-/** Player windows keyed by URL, so replaying the same episode reuses one. */
 /**
  * The one player, or none.
  *
@@ -166,16 +165,6 @@ async function createMainWindow(): Promise<void> {
   })
 }
 
-/**
- * Start playing, inline.
- *
- * The video is a native view layered over the app window, so it needs a
- * rectangle before it can exist. The renderer has not drawn its player chrome
- * yet at this point, so the first bounds are a full-window placeholder and the
- * renderer corrects them the moment its slot is measured. Waiting for the
- * renderer instead would mean a visible gap between hitting play and anything
- * appearing.
- */
 /**
  * Casting to a television.
  *
@@ -286,6 +275,16 @@ store.subscribe(() => {
  */
 cast.onSessionEnded(() => player?.setMuted(false))
 
+/**
+ * Start playing, inline.
+ *
+ * The video is a native view layered over the app window, so it needs a
+ * rectangle before it can exist. The renderer has not drawn its player chrome
+ * yet at this point, so the first bounds are a full-window placeholder and the
+ * renderer corrects them the moment its slot is measured. Waiting for the
+ * renderer instead would mean a visible gap between hitting play and anything
+ * appearing.
+ */
 function openPlayer(
   url: string,
   title: string,
@@ -751,12 +750,6 @@ function recordOutcome(req: PlayRequest, providerId: string, outcome: 'stream' |
 }
 
 /**
- * Where the floating player chrome is served from, or undefined if nowhere.
- *
- * Undefined is a supported answer and not an error: the player then runs with
- * no overlay, exactly as it did before the chrome existed.
- */
-/**
  * Whether TMDB calls this series animation.
  *
  * A gate on one thing only: whether it is worth downloading the 5.8 MB anime
@@ -774,6 +767,12 @@ async function isAnimatedTitle(tmdbId: number): Promise<boolean> {
   }
 }
 
+/**
+ * Where the floating player chrome is served from, or undefined if nowhere.
+ *
+ * Undefined is a supported answer and not an error: the player then runs with
+ * no overlay, exactly as it did before the chrome existed.
+ */
 function chromeDocumentUrl(): string | undefined {
   const dev = process.env.ELECTRON_RENDERER_URL
   if (dev) return `${dev}/chrome.html`

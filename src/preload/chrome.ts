@@ -29,13 +29,6 @@ import type { Season } from '@shared/types'
 
 const api: WtaChromeApi = {
   /**
-   * Ask main to resize the overlay view to exactly this many CSS pixels tall.
-   *
-   * The load-bearing one. A `WebContentsView` swallows every mouse event inside
-   * its bounds, so an overlay sized to the whole window would make the video
-   * unclickable. The document measures itself and main follows.
-   */
-  /**
    * Casting, over the same channels the app window uses.
    *
    * The chrome is a separate document from the app's page, so it needs its own
@@ -58,6 +51,13 @@ const api: WtaChromeApi = {
     setMuted: (muted: boolean) => ipcRenderer.invoke(CH.castSetMuted, muted),
   },
 
+  /**
+   * Ask main to resize the overlay view to exactly this area, in CSS pixels.
+   *
+   * The load-bearing one. A `WebContentsView` swallows every mouse event inside
+   * its bounds, so an overlay sized to the whole window would make the video
+   * unclickable. The document measures itself and main follows.
+   */
   setOverlayArea: ({ height, width }: OverlayArea): void => {
     ipcRenderer.send(EV.chromeOverlayArea, {
       height: Math.max(0, Math.round(height)),

@@ -43,7 +43,7 @@ import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/ty
 
 const TOKEN_KEY = 'sync.credentials'
 
-/**
+/*
  * Every request in this file goes through `dualStackFetch` rather than `fetch`.
  *
  * Sync is the one feature here that talks to a host outside the app's control

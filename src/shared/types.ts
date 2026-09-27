@@ -222,7 +222,6 @@ export interface ProviderHealth {
 
 /* ── User data ──────────────────────────────────────────────────────────── */
 
-/** Something the user is watching, with a resume position. */
 /**
  * One episode's watched state, and when it was set.
  *
@@ -235,6 +234,7 @@ export interface EpisodeMark {
   at: number
 }
 
+/** Something the user is watching, with a resume position. */
 export interface WatchlistEntry {
   id: string
   tmdbId: number

@@ -72,7 +72,7 @@ import { probeQuality } from './qualityprobe'
 import { providerRank } from '@shared/scanrank'
 import { verdictForReason } from '@shared/scanreason'
 
-/**
+/*
  * What each network verdict means for the user's dot is decided by its reason,
  * in `scanreason.ts`: a stream is green, a bot check amber, and everything the
  * test saw fail — a backend error, a refused segment, a timeout — red.
@@ -83,6 +83,7 @@ import { verdictForReason } from '@shared/scanreason'
  * 2026-09-26 it became red. What keeps red safe is the re-check below: any
  * red is probed again alone, with a longer budget, before it is believed.
  */
+
 /** What one probe of one provider settles. */
 interface Measured {
   verdict: ProbeVerdict

@@ -467,14 +467,6 @@ export async function createBridge(): Promise<WtaApi> {
   const castBridge = createCastBridge()
 
   /**
-   * What `beam` should tell the receiver it is playing.
-   *
-   * Reads the live position rather than the stored resume point where one is
-   * available: the user presses Cast *during* playback, and starting the
-   * television from the last saved position would rewind them by however long
-   * they have been watching.
-   */
-  /**
    * Move what is playing onto the television, and stand the phone down.
    *
    * The blanking is not a nicety. While casting, the phone is *serving* the
@@ -565,6 +557,14 @@ export async function createBridge(): Promise<WtaApi> {
     if (state === 'ended' || state === 'failed') void reclaimFromTv()
   })
 
+  /**
+   * What `beam` should tell the receiver it is playing.
+   *
+   * Reads the live position rather than the stored resume point where one is
+   * available: the user presses Cast *during* playback, and starting the
+   * television from the last saved position would rewind them by however long
+   * they have been watching.
+   */
   const nowPlaying = (): { title: string; subtitle: string; providerName: string; startSeconds: number } | null => {
     if (!currentPlayerState || !session) return null
     const episode =
@@ -780,14 +780,6 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   /**
-   * Leave the player.
-   *
-   * One function rather than four repeated lines, because there are now three
-   * ways out — the Android back gesture, the chrome's own Back button, and
-   * `player.close` from the app renderer — and an exit that forgot to take the
-   * chrome down with it would leave a bar floating over the browse view.
-   */
-  /**
    * Settle whatever is on screen before anything replaces it.
    *
    * Split out because the two halves have different scopes and are needed in
@@ -800,6 +792,14 @@ export async function createBridge(): Promise<WtaApi> {
     if (current) settleOutcome(session.req, current.provider.id, switching)
   }
 
+  /**
+   * Leave the player.
+   *
+   * One function because there is more than one way out — the Android back
+   * gesture and `player.close` from the app renderer — and an exit that forgot
+   * to take the chrome down with it would leave a bar floating over the browse
+   * view.
+   */
   const closePlayer = (): void => {
     if (session) {
       leaveCandidate(false)

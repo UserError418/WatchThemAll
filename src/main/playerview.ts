@@ -306,8 +306,7 @@ export interface InlinePlayerOptions {
    * is merely *slow*. Deciding for the user was the old behaviour and it was
    * wrong: providers that resolve a stream after ten or fifteen seconds are
    * common, and the automatic switch fired while the page was visibly working.
-   */
-  /**
+   *
    * Observed rather than rendered: the offer itself is drawn by the floating
    * chrome, which `announceSuggestion` sends to directly. This hook is what
    * lets a probe or a test see the same decision without a window.
@@ -636,8 +635,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * `screen.getCursorScreenPoint()` was tried first and is not usable here:
    * measured on this machine it stops updating once the view is on top, so it
    * kept reporting the position the pointer held before playback began.
-   */
-  /**
+   *
    * The zone is 90px against a 52px bar, so the band just below the bar still
    * counts as reaching for it — a pointer aimed at a button rarely lands on the
    * first try, and a bar that closes as you approach is worse than one that
@@ -1516,14 +1514,6 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   /**
-   * Still automatic, unlike the two ambiguous signals above.
-   *
-   * A refused connection or an unresolvable host is not a provider being slow;
-   * there is no page, and no amount of waiting produces one. Asking the user
-   * whether to wait for a host that does not exist is a worse experience than
-   * silently trying the next source.
-   */
-  /**
    * The provider page killed its own renderer.
    *
    * Not hypothetical and not rare: one measured probe run over ten titles
@@ -1622,14 +1612,6 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   player.switchTo = switchTo
 
   /**
-   * "Keep waiting."
-   *
-   * Records the *index*, not a boolean, so it lapses the moment playback moves
-   * to a different source — a user who waited out MoviesAPI has said nothing
-   * about VidFast. It survives the current page reloading itself, which these
-   * players do while resolving a stream, because the index does not change.
-   */
-  /**
    * "Switch now", or the countdown running out.
    *
    * Through `advance`, not `switchTo`, because accepting an offer is a verdict
@@ -1646,6 +1628,14 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     return true
   }
 
+  /**
+   * "Keep waiting."
+   *
+   * Records the *index*, not a boolean, so it lapses the moment playback moves
+   * to a different source — a user who waited out MoviesAPI has said nothing
+   * about VidFast. It survives the current page reloading itself, which these
+   * players do while resolving a stream, because the index does not change.
+   */
   player.keepWaiting = (): void => {
     waitingOut = player.candidateIndex
     clearPendingVerdicts()

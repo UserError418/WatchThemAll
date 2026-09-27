@@ -486,7 +486,6 @@ function summarise(results: StreamProbeResult[]): void {
   }
 }
 
-/** True when the process was started to probe rather than to run the app. */
 /**
  * Read a candidate list from disk.
  *
@@ -837,6 +836,7 @@ function summariseQuality(results: QualityProbeResult[]): void {
   }
 }
 
+/** True when the process was started to probe rather than to run the app. */
 export function isProbeRun(argv: string[]): boolean {
   return (
     argv.includes('--probe-providers') ||

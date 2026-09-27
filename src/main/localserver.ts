@@ -47,13 +47,6 @@ const MIME: Record<string, string> = {
 
 let server: Server | null = null
 
-/**
- * Start the server and resolve with the base URL to load.
- *
- * Idempotent: calling it again returns the address of the running server, so
- * re-creating the window on `activate` does not start a second one.
- */
-
 /* ── The player shell ───────────────────────────────────────────────────────
  *
  * A page whose only content is a full-bleed iframe pointing at the provider.
@@ -131,6 +124,12 @@ function escapeAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
+/**
+ * Start the server and resolve with the base URL to load.
+ *
+ * Idempotent: calling it again returns the address of the running server, so
+ * re-creating the window on `activate` does not start a second one.
+ */
 export function startRendererServer(rendererDir: string): Promise<string> {
   const root = normalize(rendererDir)
 

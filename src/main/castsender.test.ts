@@ -374,12 +374,6 @@ describe('CastSession', () => {
   })
 
   /**
-   * The failure a user is most likely to hit, and the one a bare "LOAD_FAILED"
-   * explains worst: the receiver fetches from this machine over the LAN, so
-   * router client isolation, a firewall or the wrong interface all land exactly
-   * here and nowhere earlier.
-   */
-  /**
    * A refused playlist is about the stream, not the router.
    *
    * The proxy serves playlists with the CORS header the receiver needs, so a
@@ -396,6 +390,12 @@ describe('CastSession', () => {
     await expect(session.load(MEDIA)).rejects.toThrow(/will not play this stream/i)
   })
 
+  /**
+   * The failure a user is most likely to hit, and the one a bare "LOAD_FAILED"
+   * explains worst: the receiver fetches from this machine over the LAN, so
+   * router client isolation, a firewall or the wrong interface all land exactly
+   * here and nowhere earlier.
+   */
   it('blames the network when a plain file is refused, where it is the first suspect', async () => {
     receiver = new FakeReceiver()
     receiver.failLoad = true

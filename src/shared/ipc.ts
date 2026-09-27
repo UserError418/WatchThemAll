@@ -349,6 +349,20 @@ export interface DiscoverRequest {
 }
 
 /**
+ * The three lanes Browse keeps apart: live-action and western-animated series,
+ * the same for films, and anime (Japanese animation, films included). A lane
+ * row only ever shows its lane, so one kind of title cannot crowd out the
+ * others however much of the library it is. See `foryou/lanes.ts`.
+ */
+export type ForYouLane = 'series' | 'films' | 'anime'
+
+/** A title the plan names by id, for a row to recommend from. */
+export interface ForYouSeed {
+  tmdbId: number
+  type: MediaType
+}
+
+/**
  * One personalised row on Browse, as main planned it.
  *
  * The renderer does **not** decide what these rows are — it asks main for a
@@ -366,20 +380,6 @@ export interface DiscoverRequest {
  * Handed back to main verbatim to fetch a page, so main re-validates it rather
  * than trusting it — see `isForYouRow`.
  */
-/**
- * The three lanes Browse keeps apart: live-action and western-animated series,
- * the same for films, and anime (Japanese animation, films included). A lane
- * row only ever shows its lane, so one kind of title cannot crowd out the
- * others however much of the library it is. See `foryou/lanes.ts`.
- */
-export type ForYouLane = 'series' | 'films' | 'anime'
-
-/** A title the plan names by id, for a row to recommend from. */
-export interface ForYouSeed {
-  tmdbId: number
-  type: MediaType
-}
-
 export type ForYouRow =
   | {
       kind: 'topPicks'
@@ -897,14 +897,6 @@ export interface WtaApi {
     import(payload: unknown): Promise<{ ok: boolean; error?: string }>
   }
   /**
-   * Cross-device sync.
-   *
-   * `connect` resolves when pairing finishes, which can be minutes — the user
-   * has to walk to another device and type a code. The code itself arrives
-   * before then, through the `syncStatus` event, so the screen can show it
-   * while this promise is still outstanding.
-   */
-  /**
    * Putting the stream on a television.
    *
    * Android only in practice — `available()` is false everywhere else and the
@@ -941,6 +933,14 @@ export interface WtaApi {
     setVolume(level: number): Promise<void>
     setMuted(muted: boolean): Promise<void>
   }
+  /**
+   * Cross-device sync.
+   *
+   * `connect` resolves when pairing finishes, which can be minutes — the user
+   * has to walk to another device and type a code. The code itself arrives
+   * before then, through the `syncStatus` event, so the screen can show it
+   * while this promise is still outstanding.
+   */
   sync: {
     status(): Promise<SyncStatus>
     connect(): Promise<{ ok: boolean; error?: string }>
@@ -1045,14 +1045,6 @@ export interface WtaApi {
 }
 
 /**
- * What the player's floating chrome can do.
- *
- * A separate, much smaller surface than `WtaApi` because it is a separate
- * document: the controls are mounted in their own overlay view above the
- * video. Every entry is something the app's own chrome could already do — the
- * overlay replaced that chrome, it did not gain privileges.
- */
-/**
  * The part of the picture the chrome overlay covers, in CSS pixels.
  *
  * Always pinned to the top edge. `width: null` spans the whole picture, which
@@ -1065,6 +1057,14 @@ export interface OverlayArea {
   width: number | null
 }
 
+/**
+ * What the player's floating chrome can do.
+ *
+ * A separate, much smaller surface than `WtaApi` because it is a separate
+ * document: the controls are mounted in their own overlay view above the
+ * video. Every entry is something the app's own chrome could already do — the
+ * overlay replaced that chrome, it did not gain privileges.
+ */
 export interface WtaChromeApi {
   /**
    * Resize the overlay view to exactly the area it draws.

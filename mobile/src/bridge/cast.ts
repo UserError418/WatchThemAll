@@ -182,8 +182,6 @@ export const PEEK_LIMIT_BYTES = 16 * 1024
  */
 const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
 
-/** Content types that are worth casting without being a playlist. */
-
 /**
  * Headers we replay upstream, minus the ones that must not be.
  *
@@ -210,16 +208,13 @@ interface Identified {
 }
 
 /**
- * Find the first candidate that something other than this WebView could play.
- *
- * Newest first, because the newest media request is the one belonging to what is
- * on screen now. That ordering is the whole defence against casting the
- * *previous* title — the same class of error as a provider sweep crediting each
- * provider with its predecessor's stream — and `clearCandidates` on every
- * provider or episode change is the other half of it.
- */
-/**
  * Find the best candidate something other than this app could play.
+ *
+ * Candidates arrive newest first, because the newest media request is the one
+ * belonging to what is on screen now, and the first of each kind wins. That
+ * ordering and `clearCandidates` on every provider or episode change are what
+ * keep the *previous* title off the television — the same class of error as a
+ * provider sweep crediting each provider with its predecessor's stream.
  *
  * **A whole progressive file is taken before a playlist.** That order was set
  * on 2026-09-13 in the belief that a plain Chromecast refuses HLS; measured
