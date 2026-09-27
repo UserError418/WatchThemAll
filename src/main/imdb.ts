@@ -144,17 +144,3 @@ export async function search(query: string): Promise<Paged<MediaSummary>> {
 
   return { items, page: 1, totalPages: 1 }
 }
-
-/**
- * Look one title up by its IMDB id.
- *
- * The same endpoint answers an id as readily as a phrase, which makes it the
- * cheapest way to put a title back on screen for a library entry that has an
- * IMDB id but no TMDB id — every entry migrated from the original app.
- */
-export async function byId(imdbId: string): Promise<MediaSummary | null> {
-  if (!/^tt\d+$/.test(imdbId)) return null
-  const res = await get(`x/${encodeURIComponent(imdbId)}.json`)
-  const match = (res.d ?? []).find((item) => item.id === imdbId)
-  return match ? toSummary(match) : null
-}

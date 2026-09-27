@@ -11,7 +11,7 @@
  * forgetting to register one. This does.
  */
 
-import { BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { CH, EV } from '@shared/ipc'
 import { isOpenableExternally } from './externalurl'
@@ -597,12 +597,4 @@ function assertEveryChannelHandled(): void {
         'Every channel in CH must be handled in registerIpc().',
     )
   }
-}
-
-/** Notify the user that a tracked series has new content. */
-export function notifyRelease(title: string, body: string, onClick: () => void): void {
-  if (!Notification.isSupported()) return
-  const notification = new Notification({ title, body, urgency: 'normal' })
-  notification.on('click', onClick)
-  notification.show()
 }
