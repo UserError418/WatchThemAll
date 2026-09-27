@@ -166,9 +166,9 @@
    * The handshake is posted repeatedly for a short while rather than once on
    * `load`: an iframe fires `load` for the empty `about:blank` document it
    * starts with, before it has navigated to the embed, and a listener
-   * registered against that document is thrown away. Retrying costs nothing —
+   * registered against that document is thrown away. Retrying is harmless —
    * the API tolerates a repeated `listening` — and removes the ordering problem
-   * entirely.
+   * entirely. It stops at the player's first answer.
    */
   $effect(() => {
     const iframe = frame
@@ -235,6 +235,9 @@
       if (event.origin !== YOUTUBE_ORIGIN) return
       if (event.source !== iframe.contentWindow) return
       if (typeof event.data !== 'string') return
+      // The player only talks once it has taken the handshake, and each round
+      // is posted whole, so one answer means the subscriptions are in too.
+      clearInterval(retry)
 
       let payload: unknown
       try {
