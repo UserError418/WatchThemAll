@@ -58,6 +58,15 @@
     return () => clearTimeout(timer)
   })
 
+  /**
+   * A result's identity in the grid, which is keyed on it.
+   *
+   * TMDB repeats a title across pages now and then, and a keyed `{#each}`
+   * with a repeated key throws and takes the whole view down. So a page is
+   * appended without anything already shown, as `BrowseRow` does.
+   */
+  const resultKey = (media: MediaSummary): string => `${media.type}-${media.tmdbId || media.imdbId}`
+
   async function run(text: string, nextPage: number, replace: boolean): Promise<void> {
     const seq = ++requestSeq
     loading = true
@@ -67,9 +76,20 @@
       // the ids providers key on. `tmdb.search` alone cannot find everything.
       const result = await window.wta.search(text, nextPage)
       if (seq !== requestSeq) return // superseded by a newer query
-      results = replace ? result.items : [...results, ...result.items]
+      const kept = replace ? [] : results
+      const shown = new Set(kept.map(resultKey))
+      // Also the first of any repeat within the page itself (a page is ~20).
+      const fresh = result.items.filter(
+        (media, index, page) =>
+          !shown.has(resultKey(media)) && page.findIndex((other) => resultKey(other) === resultKey(media)) === index,
+      )
+      results = [...kept, ...fresh]
       page = result.page
       totalPages = result.totalPages
+      // After a success only: re-arming after a failure would retry at once,
+      // in a loop, for as long as the network is down. The observer answers
+      // in a later task, by when `loading` is false again.
+      rearmSentinel?.()
     } catch (err) {
       if (seq !== requestSeq) return
       error = err instanceof Error ? err.message : 'Search failed'
@@ -84,6 +104,17 @@
   }
 
 
+  /**
+   * Ask the sentinel's observer for its state again.
+   *
+   * An observer reports only when the sentinel *crosses* its margin. A page
+   * that adds few results (or none new) leaves the sentinel inside the
+   * margin, nothing crosses, and scrolling stopped loading for good.
+   * Observing afresh delivers the current state, so a sentinel still in view
+   * asks for the next page.
+   */
+  let rearmSentinel: (() => void) | null = null
+
   /** Infinite scroll: load the next page when the sentinel comes into view. */
   function whenVisible(node: HTMLElement) {
     const observer = new IntersectionObserver(
@@ -93,7 +124,16 @@
       { rootMargin: '300px' },
     )
     observer.observe(node)
-    return { destroy: () => observer.disconnect() }
+    rearmSentinel = () => {
+      observer.unobserve(node)
+      observer.observe(node)
+    }
+    return {
+      destroy: () => {
+        observer.disconnect()
+        rearmSentinel = null
+      },
+    }
   }
 </script>
 
@@ -119,7 +159,7 @@
         key and Svelte refuses to render the block at all — the surface goes
         blank rather than showing a duplicate.
       -->
-      {#each results as media (`${media.type}-${media.tmdbId || media.imdbId}`)}
+      {#each results as media (resultKey(media))}
         <PosterCard {media} {onselect} />
       {/each}
     </div>

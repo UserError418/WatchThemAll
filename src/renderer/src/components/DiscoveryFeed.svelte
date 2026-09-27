@@ -92,6 +92,10 @@
        */
       barren = fresh.length === 0 ? barren + 1 : 0
       if (barren >= 10) exhausted = true
+      // A page that added little leaves the sentinel inside the margin, and an
+      // observer reports only crossings; see `rearmSentinel`. After a success
+      // only, so a network failure does not retry in a loop.
+      else rearmSentinel?.()
     } catch (err) {
       error = err instanceof Error ? err.message : 'Could not load more'
     } finally {
@@ -100,6 +104,17 @@
   }
 
   let barren = 0
+
+  /**
+   * Ask the sentinel's observer for its state again.
+   *
+   * An observer reports only when the sentinel *crosses* its margin. A page
+   * whose titles were all shown already adds nothing, the sentinel stays
+   * inside the margin, nothing crosses, and the feed stopped for good long
+   * before the ten barren pages that are meant to end it. Observing afresh
+   * delivers the current state.
+   */
+  let rearmSentinel: (() => void) | null = null
 
   /** Load the next page when the sentinel scrolls into view. */
   function whenVisible(node: HTMLElement): { destroy: () => void } {
@@ -112,7 +127,16 @@
       { rootMargin: '600px' },
     )
     observer.observe(node)
-    return { destroy: () => observer.disconnect() }
+    rearmSentinel = () => {
+      observer.unobserve(node)
+      observer.observe(node)
+    }
+    return {
+      destroy: () => {
+        observer.disconnect()
+        rearmSentinel = null
+      },
+    }
   }
 </script>
 
