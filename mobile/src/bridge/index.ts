@@ -122,6 +122,7 @@ import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
 import type { SyncStatus } from '@shared/sync/types'
 import { unreadableLibrary } from '@shared/store/core'
+import { batchChanges } from '@shared/store/changebatch'
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
 const SYNC_AFTER_WRITE_MS = 8_000
@@ -130,7 +131,19 @@ export async function createBridge(): Promise<WtaApi> {
   const store = new MobileStore()
   await store.load()
 
-  const storeChanged = new Signal<void>()
+  const storeChanged = new Signal<Array<keyof StoreShape> | null>()
+  /**
+   * Every change to the library reaches the renderer, batched and naming what
+   * changed, as the desktop's main process does it.
+   *
+   * The bridge used to emit by hand after the writes it remembered, and the
+   * ones it forgot left the renderer's copy stale. The worst was the score
+   * backfill: the renderer later saved its old unscored copies over the
+   * backfilled ones, the revert synced to the desktop, and the next launch
+   * fetched the same TMDB details again. The renderer's own writes echo back
+   * too, which is what the desktop has always done.
+   */
+  store.subscribe(batchChanges((keys) => storeChanged.emit(keys)))
   const releaseFound = new Signal<Array<{ title: string; episode: EpisodeStub }>>()
   const malProgress = new Signal<{ done: number; total: number }>()
   const menuAction = new Signal<string>()
@@ -182,17 +195,7 @@ export async function createBridge(): Promise<WtaApi> {
         } finally {
           applyingRemote = false
         }
-        /**
-         * The one write the renderer did not ask for.
-         *
-         * Desktop emits `storeChanged` on every mutation because its store
-         * lives in another process; here the renderer's own writes go through
-         * `window.wta.store.write`, so it already knows about those. A merge
-         * pulled down from the other device is the exception — nothing in the
-         * renderer initiated it, and without this the user kept looking at the
-         * pre-sync library until they restarted the app.
-         */
-        storeChanged.emit()
+        // The merge reaches the renderer through the store subscription above.
       },
     },
     onStatus: (status) => syncStatus.emit(status),
@@ -271,7 +274,7 @@ export async function createBridge(): Promise<WtaApi> {
   const catalogStore = preferencesCatalogStore()
   void (async () => {
     cachedCatalog = await readCache(catalogStore)
-    if (cachedCatalog !== null) storeChanged.emit()
+    if (cachedCatalog !== null) storeChanged.emit(null)
 
     const fresh = Date.now() - (cachedCatalog?.fetchedAt ?? 0) < REFRESH_INTERVAL_MS
     if (fresh) return
@@ -279,8 +282,9 @@ export async function createBridge(): Promise<WtaApi> {
     const result = await refreshCatalog(catalogStore)
     if (result.status !== 'updated') return
     cachedCatalog = await readCache(catalogStore)
-    // The providers panel and the source picker both render off this list.
-    storeChanged.emit()
+    // The providers panel and the source picker both render off this list, and
+    // a new catalogue is not a store write: "everything" re-reads it.
+    storeChanged.emit(null)
   })()
 
   const enabledProviders = (): Provider[] => {
@@ -545,7 +549,6 @@ export async function createBridge(): Promise<WtaApi> {
         seconds: status.seconds,
         duration: status.duration,
       })
-      storeChanged.emit()
     }
     surface.restore()
     releaseOrientation()
@@ -709,7 +712,6 @@ export async function createBridge(): Promise<WtaApi> {
       seconds: reading!.seconds,
       duration: reading!.duration ?? 0,
     })
-    storeChanged.emit()
   }
 
   /**
@@ -916,7 +918,6 @@ export async function createBridge(): Promise<WtaApi> {
   const sweepReleases = async (): Promise<{ checked: number; found: number }> => {
     const before = store.read().trackers.length
     const notices = await checkAll(store)
-    storeChanged.emit()
 
     /**
      * The setting the Releases view offers, which this used to ignore.
@@ -1463,7 +1464,6 @@ export async function createBridge(): Promise<WtaApi> {
          * again without closing.
          */
         pendingMal = []
-        storeChanged.emit()
         return summary
       },
     },

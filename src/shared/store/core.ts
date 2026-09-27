@@ -111,6 +111,13 @@ const FLUSH_DELAY_MS = 300
 export type Unsubscribe = () => void
 
 /**
+ * Which part of the document a change touched, or null for all of it (a
+ * whole-document replace: an import or a sync merge). Listeners use it to
+ * skip what they do not show; see `library.reload`.
+ */
+export type ChangedKey = keyof StoreDocument | null
+
+/**
  * Defaults for a document that has never been written.
  *
  * Exported because the migration and the tests both need to say "and everything
@@ -221,7 +228,7 @@ export interface Collection<K extends CollectionKey> {
 export class StoreCore {
   private doc: StoreDocument = emptyDocument()
   private view: StoreView | null = null
-  private listeners = new Set<() => void>()
+  private listeners = new Set<(key: ChangedKey) => void>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private writing: Promise<void> = Promise.resolve()
   private loaded = false
@@ -306,8 +313,12 @@ export class StoreCore {
     return this.doc
   }
 
-  /** Fired after every mutation, coalesced with nothing — one call per change. */
-  subscribe(listener: () => void): Unsubscribe {
+  /**
+   * Fired after every mutation, coalesced with nothing — one call per change,
+   * naming the key it touched. A write that changes nothing is not a change
+   * and fires nothing.
+   */
+  subscribe(listener: (key: ChangedKey) => void): Unsubscribe {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
@@ -323,7 +334,7 @@ export class StoreCore {
 
     const write = (next: RecordOf<K>[]): void => {
       ;(this.doc as unknown as Record<string, unknown>)[key] = next
-      this.changed()
+      this.changed(key)
     }
 
     const stamped = (record: InputOf<K>, now: number): RecordOf<K> =>
@@ -403,6 +414,7 @@ export class StoreCore {
         const wanted = new Map(incoming.map((r) => [identify(key, r), r]))
         const next: RecordOf<K>[] = []
 
+        let changedAny = false
         for (const existing of records() as RecordOf<K>[]) {
           const id = identify(key, existing as unknown as InputOf<K>)
           const replacement = wanted.get(id)
@@ -426,15 +438,21 @@ export class StoreCore {
              */
             const unchanged = existing.deletedAt === null && sameContent(existing, replacement)
             next.push(unchanged ? existing : stamped(replacement, now))
+            if (!unchanged) changedAny = true
             wanted.delete(id)
           } else if (existing.deletedAt !== null) {
             next.push(existing)
           } else {
             // Present before, absent now: a deletion, not an omission.
             next.push({ ...existing, updatedAt: now, deletedAt: now })
+            changedAny = true
           }
         }
         for (const added of wanted.values()) next.push(stamped(added, now))
+        // The renderer sends whole collections back, often unchanged (a patch
+        // naming two keys where one changed). Writing anyway cost a disk write
+        // and, through `subscribe`, a reload of every view.
+        if (!changedAny && wanted.size === 0) return
         write(next)
       },
     }
@@ -476,9 +494,12 @@ export class StoreCore {
 
   /** Set one preference and stamp when. */
   setPreference<K extends PreferenceKey>(key: K, value: Preferences[K]): void {
+    // The same value again is not a change: stamping it would also make this
+    // device's copy look newer to the sync merge than it is.
+    if (deepEqual(this.doc[key], value)) return
     ;(this.doc as unknown as Record<string, unknown>)[key] = value
     this.doc.preferenceUpdatedAt = { ...this.doc.preferenceUpdatedAt, [key]: Date.now() }
-    this.changed()
+    this.changed(key)
   }
 
   /** Change some settings fields, leaving the rest alone. */
@@ -502,7 +523,7 @@ export class StoreCore {
    */
   setProviderScans(scans: ProviderScan[]): void {
     this.doc.providerScans = scans
-    this.changed()
+    this.changed('providerScans')
   }
 
   /**
@@ -516,7 +537,7 @@ export class StoreCore {
     // An imported backup may come from the other kind of device.
     this.doc = { ...keepTombstones(this.doc, next), deviceKind: this.deviceKind }
     this.invalidate()
-    this.notify()
+    this.notify(null)
     await this.flush()
   }
 
@@ -546,20 +567,20 @@ export class StoreCore {
     return this.writing
   }
 
-  private changed(): void {
+  private changed(key: ChangedKey): void {
     this.invalidate()
     this.scheduleFlush()
-    this.notify()
+    this.notify(key)
   }
 
   private invalidate(): void {
     this.view = null
   }
 
-  private notify(): void {
+  private notify(key: ChangedKey): void {
     for (const listener of this.listeners) {
       try {
-        listener()
+        listener(key)
       } catch (err) {
         // One bad subscriber must not stop the others from hearing about a
         // change they may be rendering from.

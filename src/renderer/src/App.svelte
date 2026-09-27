@@ -179,7 +179,7 @@
           void window.wta.data.import(null).then(() => library.reload())
         }
       }),
-      window.wta.on.storeChanged(() => void library.reload()),
+      window.wta.on.storeChanged((keys) => void library.reload(keys)),
       /**
        * Stop every preview while something is playing.
        *

@@ -1016,7 +1016,13 @@ export interface WtaApi {
         watched: boolean
       }) => void,
     ): () => void
-    storeChanged(cb: () => void): () => void
+    /**
+     * The library changed outside the renderer's own hands, or its own write
+     * landed. Batched over a few milliseconds: `keys` names what changed, or
+     * is null for everything (a sync merge, an import, a new provider
+     * catalogue). Keys the renderer does not mirror can be ignored.
+     */
+    storeChanged(cb: (keys: Array<keyof StoreShape> | null) => void): () => void
     playbackActive(cb: (active: boolean) => void): () => void
     playerState(cb: (state: PlayerState | null) => void): () => void
     /** True while the player is shrunk into the corner. */

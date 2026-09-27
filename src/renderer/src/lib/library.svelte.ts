@@ -31,6 +31,27 @@ import { legacyRatingOf, ratingForEntry, ratingForScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 import { DEFAULT_SETTINGS } from '@shared/store/core'
 
+/**
+ * The stored keys this library mirrors. A change to any other key (test
+ * results, stream outcomes, the store's own bookkeeping) reloads nothing,
+ * because nothing that reads the library shows it. Keep in step with
+ * `applyStore`.
+ */
+const MIRRORED_KEYS: ReadonlySet<keyof StoreShape> = new Set<keyof StoreShape>([
+  'watchlist',
+  'trackers',
+  'history',
+  'settings',
+  'activeProviderIds',
+  'knownProviderIds',
+  'favouriteProviderIds',
+  'providerOrder',
+  'resumePoints',
+  'customProviders',
+  'watched',
+  'ratings',
+])
+
 /** `crypto.randomUUID` needs a secure context; file:// in Electron qualifies. */
 const newId = (): string => crypto.randomUUID()
 
@@ -103,19 +124,18 @@ class Library {
       window.wta.store.read(),
       window.wta.providers.list(),
     ])
-    this.watchlist = store.watchlist
-    this.trackers = store.trackers
-    this.history = newestFirst(store.history)
-    this.settings = store.settings
+    this.applyEverything(store, providers)
+    this.loaded = true
+
+    void this.backfillArtwork()
+  }
+
+  /** The whole library and the provider list, as at launch. */
+  private applyEverything(store: StoreShape, providers: Provider[]): void {
+    this.applyStore(store, null)
     // `providers.list()` already returns catalog + custom merged; the separate
     // copy is what gets persisted, so the two must not be conflated.
     this.providers = providers
-    this.customProviders = store.customProviders
-    this.watched = store.watched ?? []
-    this.ratings = store.ratings ?? []
-    this.favouriteProviderIds = store.favouriteProviderIds ?? []
-    this.providerOrder = store.providerOrder ?? []
-    this.resumePoints = store.resumePoints ?? []
 
     /**
      * Which providers are switched on.
@@ -138,10 +158,29 @@ class Library {
         knownProviderIds: this.knownProviderIds,
       })
     }
+  }
 
-    this.loaded = true
-
-    void this.backfillArtwork()
+  /**
+   * Take the stored fields named in `keys` (all of them for null).
+   *
+   * Only those: every assignment hands a view a new array and re-runs what
+   * it derives, so a change to the trackers must not re-derive the Watched
+   * grid from an identical `watched`.
+   */
+  private applyStore(store: StoreShape, keys: ReadonlySet<keyof StoreShape> | null): void {
+    const wants = (key: keyof StoreShape): boolean => keys === null || keys.has(key)
+    if (wants('watchlist')) this.watchlist = store.watchlist
+    if (wants('trackers')) this.trackers = store.trackers
+    if (wants('history')) this.history = newestFirst(store.history)
+    if (wants('settings')) this.settings = store.settings
+    if (wants('activeProviderIds')) this.activeProviderIds = store.activeProviderIds
+    if (wants('knownProviderIds')) this.knownProviderIds = store.knownProviderIds ?? []
+    if (wants('favouriteProviderIds')) this.favouriteProviderIds = store.favouriteProviderIds ?? []
+    if (wants('providerOrder')) this.providerOrder = store.providerOrder ?? []
+    if (wants('resumePoints')) this.resumePoints = store.resumePoints ?? []
+    if (wants('customProviders')) this.customProviders = store.customProviders
+    if (wants('watched')) this.watched = store.watched ?? []
+    if (wants('ratings')) this.ratings = store.ratings ?? []
   }
 
   /**
@@ -192,21 +231,67 @@ class Library {
     if (repaired) void this.persist({ watchlist: this.watchlist, trackers: this.trackers })
   }
 
-  /** Re-read from disk. Used when the main process reports a background change. */
-  async reload(): Promise<void> {
-    const store = await window.wta.store.read()
-    this.watchlist = store.watchlist
-    this.trackers = store.trackers
-    this.history = newestFirst(store.history)
-    this.settings = store.settings
-    this.activeProviderIds = store.activeProviderIds
-    this.knownProviderIds = store.knownProviderIds ?? []
-    this.favouriteProviderIds = store.favouriteProviderIds ?? []
-    this.providerOrder = store.providerOrder ?? []
-    this.resumePoints = store.resumePoints ?? []
-    this.customProviders = store.customProviders
-    this.watched = store.watched ?? []
-    this.ratings = store.ratings ?? []
+  /** Keys changed since the running reload read, or null for everything; undefined for none. */
+  private reloadQueued: Set<keyof StoreShape> | null | undefined = undefined
+  private reloading: Promise<void> | null = null
+  /** Bumped by every `persist`, so a read that raced one is not applied. */
+  private localWrites = 0
+
+  /**
+   * Re-read what changed. Called when the platform reports a change
+   * (`on.storeChanged`, which names the keys) and after an import.
+   *
+   * Until 2026-09-27 every report re-read and reassigned the whole library,
+   * once per changed key, and re-derived every view: 21 times during a
+   * release sweep, and on each echo of the renderer's own writes. Now:
+   *
+   * - keys the renderer does not mirror (test results, stream outcomes) are
+   *   ignored;
+   * - only the named fields are reassigned; null means everything, including
+   *   the provider list (a new catalogue), which `reload` never re-read;
+   * - one read at a time, with whatever arrived meanwhile read after it;
+   * - a read that raced a local write is read again rather than applied, so
+   *   an optimistic update is not briefly reverted by an older copy.
+   */
+  async reload(keys: Array<keyof StoreShape> | null = null): Promise<void> {
+    const wanted = keys === null ? null : keys.filter((key) => MIRRORED_KEYS.has(key))
+    if (wanted !== null && wanted.length === 0) return
+    this.queueReload(wanted)
+    this.reloading ??= this.drainReloads().finally(() => (this.reloading = null))
+    return this.reloading
+  }
+
+  private queueReload(keys: Array<keyof StoreShape> | null): void {
+    if (keys === null) {
+      this.reloadQueued = null
+    } else if (this.reloadQueued !== null) {
+      this.reloadQueued ??= new Set()
+      for (const key of keys) this.reloadQueued.add(key)
+    }
+  }
+
+  private async drainReloads(): Promise<void> {
+    while (this.reloadQueued !== undefined) {
+      const keys = this.reloadQueued
+      this.reloadQueued = undefined
+      const writesBefore = this.localWrites
+      // The provider list merges the catalogue with the custom providers.
+      const needsProviders = keys === null || keys.has('customProviders')
+      const [store, providers] = await Promise.all([
+        window.wta.store.read(),
+        needsProviders ? window.wta.providers.list() : null,
+      ])
+      if (this.localWrites !== writesBefore) {
+        this.queueReload(keys === null ? null : [...keys])
+        continue
+      }
+      if (keys === null) {
+        this.applyEverything(store, providers!)
+      } else {
+        this.applyStore(store, keys)
+        if (providers) this.providers = providers
+      }
+    }
   }
 
   /**
@@ -220,6 +305,7 @@ class Library {
    * changes are gone.
    */
   private async persist(patch: StorePatch): Promise<void> {
+    this.localWrites += 1
     try {
       await window.wta.store.write($state.snapshot(patch) as StorePatch)
       this.persistError = null

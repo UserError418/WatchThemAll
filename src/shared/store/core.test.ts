@@ -187,3 +187,53 @@ describe('load', () => {
     expect(writes).toHaveLength(1)
   })
 })
+
+describe('subscribe', () => {
+  it('names the key a change touched', async () => {
+    const store = await storeWith({ streamOutcomes: [outcome('a', 1)] })
+    const heard: unknown[] = []
+    store.subscribe((key) => heard.push(key))
+
+    store.collection('resumePoints').put({ key: 'movie:1', tmdbId: 1, seconds: 600, duration: 6000 })
+    await store.replaceDocument(store.read())
+
+    expect(heard).toEqual(['resumePoints', null])
+  })
+
+  /**
+   * The renderer sends whole collections back, often unchanged. Each of those
+   * used to be a disk write and a reload of every view.
+   */
+  it('stays quiet when a collection comes back unchanged', async () => {
+    const store = await storeWith({ streamOutcomes: [outcome('a', 1)] })
+    const heard: unknown[] = []
+    store.subscribe((key) => heard.push(key))
+
+    store.applyPatch({ streamOutcomes: store.read().streamOutcomes })
+
+    expect(heard).toEqual([])
+  })
+
+  it('stays quiet, and stamps nothing, when a preference is set to what it is', async () => {
+    const store = await storeWith({})
+    const settings = store.read().settings
+    const stampedAt = store.raw().preferenceUpdatedAt.settings
+    const heard: unknown[] = []
+    store.subscribe((key) => heard.push(key))
+
+    store.setPreference('settings', { ...settings })
+
+    expect(heard).toEqual([])
+    expect(store.raw().preferenceUpdatedAt.settings).toBe(stampedAt)
+  })
+
+  it('still reports a real change to a collection', async () => {
+    const store = await storeWith({ streamOutcomes: [outcome('a', 1)] })
+    const heard: unknown[] = []
+    store.subscribe((key) => heard.push(key))
+
+    store.applyPatch({ streamOutcomes: [] })
+
+    expect(heard).toEqual(['streamOutcomes'])
+  })
+})

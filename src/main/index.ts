@@ -62,6 +62,7 @@ import { oauthClient } from '@shared/sync/credentials'
 import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
 import { localMidnight } from '@shared/aired'
+import { batchChanges } from '@shared/store/changebatch'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -104,9 +105,10 @@ const store = new Store()
  * film's progress bar spent a release invisible for exactly that reason —
  * `rememberPosition` wrote and said nothing, so the bar appeared only after a
  * restart. The store announces its own changes now, so forgetting is not an
- * option a caller has.
+ * option a caller has. Batched (`batchChanges`), naming the keys that changed,
+ * so the renderer re-reads once per burst and only what it shows.
  */
-store.subscribe(() => send(EV.storeChanged, null))
+store.subscribe(batchChanges((keys) => send(EV.storeChanged, keys)))
 
 
 /**
