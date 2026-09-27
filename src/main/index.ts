@@ -400,12 +400,14 @@ const upNext = new UpNextController({
     return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
   },
   announce: (offer) => {
+    if (offer) console.log(`[upnext] offering S${offer.season}E${offer.episode}${offer.onTv ? ' on the television' : ''}`)
     // The mini player lives in the app window, the full-size countdown in
     // the chrome over the video; either may be the one on screen.
     send(EV.playerUpNext, offer)
     player?.notifyChrome(EV.playerUpNext, offer)
   },
   advance: (next, toTv) => {
+    console.log(`[upnext] playing S${next.season}E${next.episode}${toTv ? ' on the television' : ''}`)
     navigatePlayer(next.season, next.episode)
     if (toTv) void beamNextToTv()
   },

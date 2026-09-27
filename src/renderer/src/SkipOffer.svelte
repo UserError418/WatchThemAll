@@ -21,7 +21,11 @@
   let offer = $state<SkipOffer | null>(null)
   let button = $state<HTMLButtonElement | null>(null)
 
-  $effect(() => api?.onSkipOffer((next) => (offer = next)))
+  $effect(() =>
+    api?.onSkipOffer((next) => {
+      offer = next
+    }),
+  )
 
   /**
    * Report the size so the view can be trimmed to it.

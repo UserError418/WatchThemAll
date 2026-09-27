@@ -201,10 +201,18 @@
           upNext = null
         }
       }),
-      window.wta.on.playerMini((next) => (mini = next)),
-      window.wta.on.playerPaused((paused) => (videoPaused = paused)),
-      window.wta.on.playerSuggestion((offer) => (offerStanding = offer !== null)),
-      window.wta.on.playerUpNext((offer) => (upNext = offer)),
+      window.wta.on.playerMini((next) => {
+        mini = next
+      }),
+      window.wta.on.playerPaused((paused) => {
+        videoPaused = paused
+      }),
+      window.wta.on.playerSuggestion((offer) => {
+        offerStanding = offer !== null
+      }),
+      window.wta.on.playerUpNext((offer) => {
+        upNext = offer
+      }),
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
         if (list.length === 0) return

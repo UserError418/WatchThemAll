@@ -58,4 +58,30 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    /*
+      An event callback handed to the preload must not *return* anything.
+
+      On the desktop, `window.wta` and `window.wtaChrome` cross Electron's
+      context bridge, which clones a callback's return value back across it.
+      `(next) => (state = next)` returns the assigned value, and Svelte 5 has
+      wrapped an object in a reactive proxy by then — which cannot be cloned.
+      The assignment still happens, then "An object could not be cloned" is
+      thrown in the preload and every later listener on that channel is
+      skipped. Found 2026-09-27 on eight subscriptions, the source-switch
+      offer among them. A statement body returns nothing and cannot hit it.
+    */
+    files: ['src/renderer/**/*.{ts,svelte}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.object.property.name='on'] > ArrowFunctionExpression[body.type='AssignmentExpression'], CallExpression[callee.property.name=/^on[A-Z]/] > ArrowFunctionExpression[body.type='AssignmentExpression']",
+          message:
+            'Give this event callback a statement body: its return value crosses the context bridge, and a returned Svelte proxy cannot be cloned. See eslint.config.js.',
+        },
+      ],
+    },
+  },
 ]

@@ -129,7 +129,9 @@
   )
 
   $effect(() => {
-    const off = window.wta.on.malProgress((p) => (progress = p))
+    const off = window.wta.on.malProgress((p) => {
+      progress = p
+    })
     return off
   })
 

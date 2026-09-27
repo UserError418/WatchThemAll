@@ -111,7 +111,9 @@
   let testStatus = $state<WatchlistTestStatus | null>(null)
   $effect(() => {
     void window.wta.providers.backgroundStatus().then((status) => (testStatus ??= status))
-    return window.wta.on.watchlistTest((status) => (testStatus = status))
+    return window.wta.on.watchlistTest((status) => {
+      testStatus = status
+    })
   })
 
   /** The status in words. See `watchlisttester.ts` for what each state means. */

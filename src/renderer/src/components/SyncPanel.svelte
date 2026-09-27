@@ -33,7 +33,9 @@
 
   $effect(() => {
     void window.wta.sync.status().then((initial) => (status = initial))
-    return window.wta.on.syncStatus((next) => (status = next))
+    return window.wta.on.syncStatus((next) => {
+      status = next
+    })
   })
 
   $effect(() => {

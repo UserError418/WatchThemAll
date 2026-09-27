@@ -707,7 +707,11 @@
   let episodes = $state<Episode[]>([])
   let loadingEpisodes = $state(false)
 
-  $effect(() => api?.onContext((next) => (context = next)))
+  $effect(() =>
+    api?.onContext((next) => {
+      context = next
+    }),
+  )
 
   /* ── The failed-source offer ──────────────────────────────────────────── */
 
@@ -721,7 +725,11 @@
    * floats.
    */
   let suggestion = $state<PlayerSuggestion | null>(null)
-  $effect(() => api?.onSuggestion((next) => (suggestion = next)))
+  $effect(() =>
+    api?.onSuggestion((next) => {
+      suggestion = next
+    }),
+  )
 
   /**
    * How long the user has to stop the switch.
@@ -745,7 +753,11 @@
    * standing offer are all still here on the way back.
    */
   let mini = $state(false)
-  $effect(() => api?.onMini((next) => (mini = next)))
+  $effect(() =>
+    api?.onMini((next) => {
+      mini = next
+    }),
+  )
 
   /**
    * Keyed on the offer itself, so a second provider failing restarts the clock
@@ -823,7 +835,11 @@
    */
   let upNext = $state<UpNextOffer | null>(null)
   let upNextLeft = $state(0)
-  $effect(() => api?.onUpNext((next) => (upNext = next)))
+  $effect(() =>
+    api?.onUpNext((next) => {
+      upNext = next
+    }),
+  )
   $effect(() => {
     const offer = upNext
     if (!offer) return
