@@ -272,12 +272,16 @@ export async function createBridge(): Promise<WtaApi> {
    * describes a problem they cannot act on.
    */
   const catalogStore = preferencesCatalogStore()
-  void (async () => {
-    cachedCatalog = await readCache(catalogStore)
-    if (cachedCatalog !== null) storeChanged.emit(null)
+  /**
+   * When this process last asked, so an unchanged answer (a 304, which leaves
+   * `fetchedAt` alone) is not asked for again on every resume.
+   */
+  let catalogAskedAt = 0
 
-    const fresh = Date.now() - (cachedCatalog?.fetchedAt ?? 0) < REFRESH_INTERVAL_MS
-    if (fresh) return
+  const refreshCatalogIfStale = async (): Promise<void> => {
+    const now = Date.now()
+    if (now - Math.max(catalogAskedAt, cachedCatalog?.fetchedAt ?? 0) < REFRESH_INTERVAL_MS) return
+    catalogAskedAt = now
 
     const result = await refreshCatalog(catalogStore)
     if (result.status !== 'updated') return
@@ -285,7 +289,16 @@ export async function createBridge(): Promise<WtaApi> {
     // The providers panel and the source picker both render off this list, and
     // a new catalogue is not a store write: "everything" re-reads it.
     storeChanged.emit(null)
+  }
+
+  void (async () => {
+    cachedCatalog = await readCache(catalogStore)
+    if (cachedCatalog !== null) storeChanged.emit(null)
+    await refreshCatalogIfStale()
   })()
+  // The desktop refreshes on a timer; a phone app can stay warm for days and
+  // used to look only at a cold start. The same interval, checked on return.
+  void CapacitorApp.addListener('resume', () => void refreshCatalogIfStale().catch(() => {}))
 
   const enabledProviders = (): Provider[] => {
     const { activeProviderIds } = store.read()
