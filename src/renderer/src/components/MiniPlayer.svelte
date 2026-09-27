@@ -35,9 +35,17 @@
      * why the card cannot listen for it itself.
      */
     paused: boolean
+    /**
+     * A source-switch offer is waiting. The full player's chrome shows it
+     * with a countdown, and that chrome is out of sight while the player is
+     * small. So the countdown is held (see `PlayerChrome`) and this card says
+     * why the picture has stopped instead of letting the app switch unseen.
+     * `App` holds it, like `paused`.
+     */
+    stalled: boolean
   }
 
-  const { player, paused: videoPaused }: Props = $props()
+  const { player, paused: videoPaused, stalled }: Props = $props()
 
   let slot = $state<HTMLButtonElement | null>(null)
 
@@ -50,18 +58,9 @@
    */
   let paused = $derived(videoPaused)
 
-  /**
-   * A source-switch offer is waiting. The full player's chrome shows it with a
-   * countdown, and that chrome is out of sight while the player is small. So
-   * the countdown is held (see `PlayerChrome`) and this card says why the
-   * picture has stopped instead of letting the app switch unseen.
-   */
-  let stalled = $state(false)
-
   /** A television, when the picture is on one rather than here. */
   let cast = $state<CastStatus | null>(null)
 
-  $effect(() => window.wta.on.playerSuggestion((offer) => (stalled = offer !== null)))
 
   /**
    * Tell the platform where the video goes, the same way `PlayerFrame` does.

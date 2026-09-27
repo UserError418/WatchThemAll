@@ -100,7 +100,15 @@
    * button.
    */
   let videoPaused = $state(false)
-  /** A standing offer to leave a slow provider. Withdrawn by main, never here. */
+
+  /**
+   * A standing offer to leave a source that has stalled. Made and withdrawn
+   * by main, never here; only the mini player shows it (the full player's
+   * chrome draws its own). Held here for the same reason as `videoPaused`: an
+   * offer made before the player shrank is announced once, when the card does
+   * not yet exist to hear it.
+   */
+  let offerStanding = $state(false)
   let providersOpen = $state(false)
   let paletteOpen = $state(false)
   let ready = $state(false)
@@ -183,10 +191,14 @@
       window.wta.on.playbackActive((active) => previewAudio.setSuspended(active)),
       window.wta.on.playerState((state) => {
         playing = state
-        if (state === null) mini = false
+        if (state === null) {
+          mini = false
+          offerStanding = false
+        }
       }),
       window.wta.on.playerMini((next) => (mini = next)),
       window.wta.on.playerPaused((paused) => (videoPaused = paused)),
+      window.wta.on.playerSuggestion((offer) => (offerStanding = offer !== null)),
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
         if (list.length === 0) return
@@ -424,7 +436,7 @@
 -->
 {#if playing}
   {#if mini}
-    <MiniPlayer player={playing} paused={videoPaused} />
+    <MiniPlayer player={playing} paused={videoPaused} stalled={offerStanding} />
   {:else}
     <PlayerFrame player={playing} onback={() => void window.wta.player.setMini(true)} />
   {/if}
