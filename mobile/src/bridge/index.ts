@@ -1026,14 +1026,21 @@ export async function createBridge(): Promise<WtaApi> {
    * binds is the smaller lie.
    */
   void CapacitorApp.addListener('backButton', () => {
-    // Back shrinks a full player into the corner, as the chrome's ← does.
-    // With the mini player up, Back belongs to the app again.
+    // Each press takes one layer away: a full player shrinks into the corner
+    // (as the chrome's ← does), then an open panel closes, then the mini
+    // player stops, and only then does the app quit.
     if (session && !mini) {
       setMini(true)
       return
     }
     if (document.querySelector('.scrim, aside.panel')) {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      return
+    }
+    // Stopped here, not left to die with the app: the episode's position and
+    // whether it counts as watched are settled only when the player closes.
+    if (session) {
+      closePlayer()
       return
     }
     void CapacitorApp.exitApp()

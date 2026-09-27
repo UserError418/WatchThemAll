@@ -88,6 +88,18 @@
    * that starts it is pressed in the player's own chrome.
    */
   let mini = $state(false)
+
+  /**
+   * Whether the video is paused, as the video last said. Only the mini player
+   * shows it.
+   *
+   * Held here rather than in `MiniPlayer`, because the state is announced the
+   * moment the player shrinks, and on the phone that is the same task as the
+   * `playerMini` that mounts the card. A listener inside the card is
+   * registered too late to hear it. It showed a paused video with a Pause
+   * button.
+   */
+  let videoPaused = $state(false)
   /** A standing offer to leave a slow provider. Withdrawn by main, never here. */
   let providersOpen = $state(false)
   let paletteOpen = $state(false)
@@ -174,6 +186,7 @@
         if (state === null) mini = false
       }),
       window.wta.on.playerMini((next) => (mini = next)),
+      window.wta.on.playerPaused((paused) => (videoPaused = paused)),
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
         if (list.length === 0) return
@@ -411,7 +424,7 @@
 -->
 {#if playing}
   {#if mini}
-    <MiniPlayer player={playing} />
+    <MiniPlayer player={playing} paused={videoPaused} />
   {:else}
     <PlayerFrame player={playing} onback={() => void window.wta.player.setMini(true)} />
   {/if}

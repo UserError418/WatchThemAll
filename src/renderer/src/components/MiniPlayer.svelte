@@ -27,20 +27,28 @@
 
   interface Props {
     player: PlayerState
+    /**
+     * Whether the video is paused, as the video itself last said. The
+     * platform sends the current state the moment the player shrinks, then
+     * every change, so a pause made with the provider's own controls reads
+     * the same as one made with this button. `App` holds it; see there for
+     * why the card cannot listen for it itself.
+     */
+    paused: boolean
   }
 
-  const { player }: Props = $props()
+  const { player, paused: videoPaused }: Props = $props()
 
   let slot = $state<HTMLButtonElement | null>(null)
 
   /**
-   * Whether the video is paused, as the video itself last said.
+   * The button's state: the video's, until the button is pressed.
    *
-   * Main sends the current state the moment the player shrinks, then every
-   * change. So a pause made with the provider's own controls reads the same
-   * as one made with this button.
+   * A press flips it at once so the button feels instant; the video's own
+   * answer then arrives through the prop and replaces it. If the page refuses
+   * and says nothing, the pressed state stays, as it would with no event.
    */
-  let paused = $state(false)
+  let paused = $derived(videoPaused)
 
   /**
    * A source-switch offer is waiting. The full player's chrome shows it with a
@@ -53,7 +61,6 @@
   /** A television, when the picture is on one rather than here. */
   let cast = $state<CastStatus | null>(null)
 
-  $effect(() => window.wta.on.playerPaused((next) => (paused = next)))
   $effect(() => window.wta.on.playerSuggestion((offer) => (stalled = offer !== null)))
 
   /**
@@ -142,9 +149,6 @@
       void window.wta.cast.control(showingPaused ? 'play' : 'pause')
       return
     }
-    // The answer comes back from the video as `playerPaused`; flipping the
-    // icon here too makes the press feel instant, and the event corrects it
-    // if the page refused.
     paused = !paused
     void window.wta.player.setPaused(paused)
   }
