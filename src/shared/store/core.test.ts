@@ -138,7 +138,6 @@ describe('load', () => {
           writes.push(text)
         },
         quarantine: async () => {},
-        describe: async () => 'memory',
       },
       migrate,
       'desktop',
@@ -200,7 +199,6 @@ describe('flush', () => {
           writes.push(next)
         },
         quarantine: async () => {},
-        describe: async () => 'memory',
       },
       migrate,
       'desktop',
