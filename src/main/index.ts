@@ -618,21 +618,26 @@ function closePlayer(announce = true): void {
 function navigatePlayer(season: number, episode: number): void {
   if (!player) return
 
-  // Settle the episode being left before the context is rewritten, or its time
-  // would be credited to the one being moved to.
-  leaveCurrent()
-
   const next: PlayRequest = { ...player.context, season, episode }
   // Keep the provider already loaded: changing episode should not silently
-  // change source under the user.
+  // change source under the user. Behind it, the same Automatic order a fresh
+  // play gets (tests, outcomes, favourites, the user's order). This passed the
+  // enabled list in raw order until 2026-09-27, so after an episode step the
+  // fallback walked into sources the tests had just called dead. The phone's
+  // `playerGoTo` always used the Automatic order.
   const selection = buildPlayUrl(
-    enabledProviders(),
+    automaticOrderFor(next).providers,
     { ...next, providerId: player.currentProviderId() ?? next.providerId },
     // The episode being stepped to has its own stored position — this is how
     // going back to one you abandoned half-way lands in the right place.
     resumeOfferFor(store.read().resumePoints, next),
   )
   if (!selection) return
+
+  // Settle the episode being left before the context is rewritten, or its time
+  // would be credited to the one being moved to. After the check above, as on
+  // the phone: a step that cannot happen leaves the episode playing unsettled.
+  leaveCurrent()
 
   player.context = next
   player.candidates = selection.candidates
