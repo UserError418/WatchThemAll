@@ -38,7 +38,7 @@
   import type { MediaSummary, RatingValue, WatchedEntry } from '@shared/types'
   import type { RatingBand } from '@shared/rating'
   import { library } from '../lib/library.svelte'
-  import { backdropUrl, posterUrl } from '../lib/images'
+  import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { titleFacts, whenVisible } from '../lib/titlefacts.svelte'
   import type { TitleFacts } from '../lib/titlefacts'
   import { runtime } from '../lib/format'
@@ -64,6 +64,14 @@
   import { SvelteSet } from 'svelte/reactivity'
   import RatingStrip from '../components/RatingStrip.svelte'
   import Score from '../components/Score.svelte'
+
+  /**
+   * The title's logo over the wide cover (the owner, 2026-09-27: so rows can
+   * be told apart at a glance, as the desktop's cards already are). The logo
+   * files that have finished loading, so each fades in rather than popping —
+   * the same rule as `TitleCard`'s, kept per URL because rows come and go.
+   */
+  const loadedLogos = new SvelteSet<string>()
 
   interface Props {
     onselect: (media: MediaSummary) => void
@@ -467,6 +475,23 @@
                       loading="lazy"
                       decoding="async"
                     />
+                    <!--
+                      Only over the wide artwork: a poster prints its own
+                      lettering, and a logo on top of it names the title twice.
+                    -->
+                    {@const logo = logoUrl(facts.logoPath)}
+                    {#if logo}
+                      <span class="cover-scrim"></span>
+                      <img
+                        class="cover-logo"
+                        class:loaded={loadedLogos.has(logo)}
+                        src={logo}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        onload={() => loadedLogos.add(logo)}
+                      />
+                    {/if}
                   {/if}
                 </span>
 
@@ -1044,6 +1069,38 @@
     }
   }
 
+  /*
+    The logo in the bottom-left corner, capped both ways so a long flat logo
+    and a stacked one both read at this size — `TitleCard`'s rule, scaled to a
+    192px cover. `.cover img.cover-logo` to outrank the fill-the-frame rule for
+    every image above. The shadow keeps a dark logo readable on dark artwork;
+    the scrim only darkens the edge it sits on, since logos come in every colour.
+  */
+  .cover-scrim {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, transparent 55%);
+    pointer-events: none;
+  }
+
+  .cover img.cover-logo {
+    inset: auto auto 8px 10px;
+    width: auto;
+    height: auto;
+    max-width: 62%;
+    max-height: 40%;
+    object-fit: contain;
+    object-position: left bottom;
+    filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.8));
+    opacity: 0;
+    transition: opacity var(--dur-mid) var(--ease-out);
+    pointer-events: none;
+  }
+
+  .cover img.cover-logo.loaded {
+    opacity: 1;
+  }
+
   .cover-letter {
     position: absolute;
     inset: 0;
@@ -1277,6 +1334,12 @@
 
     .cover {
       width: 96px;
+    }
+
+    /* At 96px a logo is too small to read; the name sits right beside it. */
+    .cover-scrim,
+    .cover img.cover-logo {
+      display: none;
     }
 
   }
