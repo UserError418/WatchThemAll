@@ -46,6 +46,7 @@ import { pressPlay as pressPlayIn } from './pressplay'
 import { beginStallWatch, frozenSeconds, observeStall, type StallWatch } from './playbackstall'
 import { checkRuntime } from './runtimecheck'
 import { findIntro } from './skiplookup'
+import { skipButtonBounds } from './skipplacement'
 import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
 import type { PlayCandidate } from './providers'
 import { shouldSeek } from './resume'
@@ -1882,14 +1883,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     win.contentView.addChildView(skipView)
   }
 
-  /** Distance from the picture's bottom-right corner, in device pixels. */
-  const SKIP_MARGIN = 28
-
   /** Size of the button, as the view itself measured it. */
   let skipSize = { width: 0, height: 0 }
 
   /**
-   * Pin the skip view to the bottom-right of the video's slot.
+   * Pin the skip view to the bottom-right of the video's slot, above the
+   * provider's own controls (`skipButtonBounds`).
    *
    * Zero-sized until the button exists, because a view with bounds is a view
    * taking clicks — and for most of an episode there is no button to take
@@ -1902,14 +1901,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       skipView.setBounds({ x: slot.x, y: slot.y, width: 0, height: 0 })
       return
     }
-    const width = Math.min(skipSize.width, Math.max(0, slot.width - SKIP_MARGIN * 2))
-    const height = Math.min(skipSize.height, Math.max(0, slot.height - SKIP_MARGIN * 2))
-    skipView.setBounds({
-      x: slot.x + slot.width - width - SKIP_MARGIN,
-      y: slot.y + slot.height - height - SKIP_MARGIN,
-      width,
-      height,
-    })
+    skipView.setBounds(skipButtonBounds(slot, skipSize))
   }
 
   /**
