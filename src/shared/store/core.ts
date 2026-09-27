@@ -232,6 +232,15 @@ export class StoreCore {
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private writing: Promise<void> = Promise.resolve()
   private loaded = false
+  /**
+   * Whether memory holds anything the file does not.
+   *
+   * `flush` used to write whether or not anything had changed, and the phone
+   * flushes every time the app leaves the foreground — a share sheet, a
+   * notification, a glance at another app — rewriting the whole library each
+   * time for nothing.
+   */
+  private unsaved = false
 
   /**
    * Why the document could not be read, when it exists and would not open.
@@ -282,6 +291,7 @@ export class StoreCore {
     if (text === null) {
       this.doc = { ...emptyDocument(), deviceKind: this.deviceKind }
       this.invalidate()
+      this.unsaved = true
       await this.flush()
       return
     }
@@ -294,6 +304,9 @@ export class StoreCore {
     }
     this.doc.deviceKind = this.deviceKind
     this.invalidate()
+    // A migration, a pruned tombstone or a new device kind is saved by the
+    // next flush, as it was when every flush wrote.
+    this.unsaved = JSON.stringify(this.doc) !== text
   }
 
   /** The document as callers should see it: no tombstones. */
@@ -537,6 +550,7 @@ export class StoreCore {
     // An imported backup may come from the other kind of device.
     this.doc = { ...keepTombstones(this.doc, next), deviceKind: this.deviceKind }
     this.invalidate()
+    this.unsaved = true
     this.notify(null)
     await this.flush()
   }
@@ -555,6 +569,8 @@ export class StoreCore {
     // A document that could not be read is never written: what is in memory is
     // an empty stand-in, and writing it would destroy the real one.
     if (this.loadFailure !== null) return this.writing
+    if (!this.unsaved) return this.writing
+    this.unsaved = false
     const snapshot = JSON.stringify(this.doc)
     // Chained, not concurrent: two overlapping writes to one path can interleave
     // and leave a half-written document, and the newer one is not guaranteed to
@@ -563,11 +579,14 @@ export class StoreCore {
       .then(() => this.persistence.write(snapshot))
       .catch((err: unknown) => {
         console.error('[store] write failed:', err)
+        // Still not on disk, so the next flush tries again.
+        this.unsaved = true
       })
     return this.writing
   }
 
   private changed(key: ChangedKey): void {
+    this.unsaved = true
     this.invalidate()
     this.scheduleFlush()
     this.notify(key)

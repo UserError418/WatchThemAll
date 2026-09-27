@@ -188,6 +188,73 @@ describe('load', () => {
   })
 })
 
+describe('flush', () => {
+  function counted(text: string | null, failFirst = false) {
+    let attempts = 0
+    const writes: string[] = []
+    const store = new StoreCore(
+      {
+        read: async () => text,
+        write: async (next) => {
+          attempts += 1
+          if (failFirst && attempts === 1) throw new Error('ENOSPC')
+          writes.push(next)
+        },
+        quarantine: async () => {},
+        describe: async () => 'memory',
+      },
+      migrate,
+      'desktop',
+    )
+    return { store, writes }
+  }
+
+  /** The phone flushes on every trip to the background, changed or not. */
+  it('writes nothing when nothing changed since the last write', async () => {
+    const { store, writes } = counted(null)
+    await store.load()
+    const afterFirstRun = writes.length
+
+    await store.flush()
+    await store.flush()
+    expect(writes).toHaveLength(afterFirstRun)
+
+    store.collection('resumePoints').put({ key: 'movie:1', tmdbId: 1, seconds: 600, duration: 6000 })
+    await store.flush()
+    await store.flush()
+    expect(writes).toHaveLength(afterFirstRun + 1)
+  })
+
+  it('tries again at the next flush when a write failed', async () => {
+    const { store, writes } = counted(null, true)
+    await store.load()
+    expect(writes).toHaveLength(0)
+
+    await store.flush()
+    expect(writes).toHaveLength(1)
+  })
+
+  it('saves what loading changed, and only that once', async () => {
+    const { store, writes } = counted(JSON.stringify({ schemaVersion: 1 }))
+    await store.load()
+
+    await store.flush()
+    await store.flush()
+    expect(writes).toHaveLength(1)
+  })
+
+  it('does not rewrite a document that loaded exactly as saved', async () => {
+    const first = counted(null)
+    await first.store.load()
+    const saved = first.writes.at(-1)!
+
+    const { store, writes } = counted(saved)
+    await store.load()
+    await store.flush()
+    expect(writes).toEqual([])
+  })
+})
+
 describe('subscribe', () => {
   it('names the key a change touched', async () => {
     const store = await storeWith({ streamOutcomes: [outcome('a', 1)] })
