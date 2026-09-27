@@ -2156,6 +2156,11 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       case 'cast':
         if (overlay !== null && !overlay.webContents.isDestroyed()) {
           overlay.webContents.send(EV.chromeOpenPanel, action)
+          // The cast remote covers the whole picture, so the keys belong to it:
+          // left in the shell, Escape shrinks the player instead of closing the
+          // remote. The chrome forwards every player key back here, so nothing
+          // else changes with the focus.
+          if (action === 'cast') overlay.webContents.focus()
         }
         return
       default:

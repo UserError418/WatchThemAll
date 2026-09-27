@@ -245,7 +245,7 @@
         <section class="tvs" inert={connecting}>
           <p class="label">Television</p>
           {#if devices.length === 0}
-            <p class="looking">Looking for a TV on your Wi-Fi…</p>
+            <p class="looking searching">Looking for a TV on your Wi-Fi…</p>
           {:else}
             <div class="chips">
               {#each devices as device (device.id)}
@@ -710,6 +710,19 @@
     margin: 0;
     font-size: 12px;
     color: #9a9aa6;
+  }
+
+  /*
+    The height of the row of televisions it stands in for. Discovery takes
+    about three seconds on the desktop, and without this the source list
+    dropped by a row's height the moment it became usable — under a pointer
+    already aimed at it.
+  */
+  .looking.searching {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+    margin-bottom: 8px;
   }
 
   .chips {
