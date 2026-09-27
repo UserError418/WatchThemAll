@@ -112,7 +112,24 @@
     void openTitle(opened)
   })
 
+  /**
+   * Which title load and which season load are current.
+   *
+   * A response for an older one is dropped. Without this, answers landed in
+   * whatever order the network returned them: pick season 2, go back to a
+   * cached season 1, and season 2's episodes showed under "Season 1". Across
+   * a title switch, the old title's season landed on the new one, and the
+   * reconcile effect below then ticked episodes on the new title from the old
+   * title's list. The same guard `PlayerChrome` has for its episode list.
+   */
+  let titleLoad = 0
+  let seasonLoad = 0
+
   async function openTitle(opened: MediaSummary): Promise<void> {
+    const load = ++titleLoad
+    // A season still loading belongs to the previous title, even when this one
+    // (a film) never asks for a season of its own.
+    seasonLoad += 1
     loadingDetail = true
     error = null
 
@@ -126,9 +143,10 @@
         // `$state.snapshot` because Svelte's proxies cannot cross the IPC
         // boundary — `structuredClone` throws on them.
         const bridged = await window.wta.resolve($state.snapshot(opened))
+        if (load !== titleLoad) return
         if (bridged) {
           subject = bridged
-          await loadDetail(bridged.tmdbId, bridged.type)
+          await loadDetail(bridged.tmdbId, bridged.type, load)
           return
         }
       } catch (err) {
@@ -147,14 +165,15 @@
       return
     }
 
-    await loadDetail(opened.tmdbId, opened.type)
+    await loadDetail(opened.tmdbId, opened.type, load)
   }
 
-  async function loadDetail(tmdbId: number, type: MediaSummary['type']): Promise<void> {
+  async function loadDetail(tmdbId: number, type: MediaSummary['type'], load: number): Promise<void> {
     loadingDetail = true
     error = null
     try {
       const result = await window.wta.tmdb.detail(tmdbId, type)
+      if (load !== titleLoad) return
       if (!result) {
         error = 'TMDB has no record of this title.'
         return
@@ -172,6 +191,7 @@
         // season their position is in, which is what `resumeAt` needs...
         selectedSeason = Math.min(anchor.season, result.seasonCount)
         await loadSeason(selectedSeason)
+        if (load !== titleLoad) return
         // ...then, if that season is finished and Resume moves on to the next,
         // that one — so the row the button names is the one on screen.
         if (resumeAt.season !== selectedSeason) {
@@ -180,22 +200,24 @@
         }
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Could not load this title'
+      if (load === titleLoad) error = err instanceof Error ? err.message : 'Could not load this title'
     } finally {
-      loadingDetail = false
+      if (load === titleLoad) loadingDetail = false
     }
   }
 
   async function loadSeason(number: number): Promise<void> {
+    const load = ++seasonLoad
     loadingSeason = true
     try {
       const loaded = await window.wta.tmdb.season(subject.tmdbId, number)
+      if (load !== seasonLoad) return
       season = loaded
       if (loaded?.season === anchor.season) resumeSeason = loaded
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Could not load this season'
+      if (load === seasonLoad) error = err instanceof Error ? err.message : 'Could not load this season'
     } finally {
-      loadingSeason = false
+      if (load === seasonLoad) loadingSeason = false
     }
   }
 
