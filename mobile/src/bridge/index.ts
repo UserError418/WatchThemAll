@@ -84,7 +84,7 @@ import {
   type AutomaticOrder,
 } from '@main/providerscan'
 import { castabilities } from '@shared/castability'
-import { checkAll } from '@main/releases'
+import { checkAll, sweepDueIn } from '@main/releases'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from '@main/resume'
@@ -946,21 +946,23 @@ export async function createBridge(): Promise<WtaApi> {
     }
 
     // Rebuilt after every sweep, because the sweep is what corrects the dates
-    // the alarms are set from. An empty list is the disarm: the reconcile
-    // cancels every pending alarm it no longer wants.
-    void syncScheduledReleases(notificationsEnabled ? store.read().trackers : [])
+    // the alarms are set from.
+    rearmReleaseAlarms()
 
     return { checked: before, found: notices.length }
   }
 
   /**
-   * Sweep when the app comes back to the foreground.
+   * Arm the episode alarms from the trackers as they stand. No requests.
    *
-   * Throttled, because Android fires `resume` for every return from a Custom
-   * Tab, a share sheet or a notification tap, and a TMDB call per tracked
-   * series on each of those is rude to both the API and the battery. An hour is
-   * far tighter than the desktop timer and far looser than the event rate.
+   * An empty list is the disarm: the reconcile cancels every pending alarm it
+   * no longer wants.
    */
+  const rearmReleaseAlarms = (): void => {
+    const trackers = store.read().settings.notificationsEnabled ? store.read().trackers : []
+    void syncScheduledReleases(trackers)
+  }
+
   /**
    * The floor under `settings.releaseCheckMinutes`, not a replacement for it.
    *
@@ -971,14 +973,33 @@ export async function createBridge(): Promise<WtaApi> {
    * get a TMDB call per tracked series every time they glance at their phone.
    */
   const MIN_SWEEP_INTERVAL_MS = 15 * 60 * 1000
-  let lastSweepAt = 0
+  /** Before this, a `resume` does nothing at all; see `sweepIfStale`. */
+  let nextLookAt = 0
 
+  /**
+   * Sweep when the app comes back to the foreground, if one is due.
+   *
+   * Due by the trackers' own `lastChecked`, not by when this process last
+   * swept: a cold start used to sweep every series even minutes after the last
+   * sweep, here or on the desktop (the stamps sync). Throttled on top, because
+   * Android fires `resume` for every return from a Custom Tab, a share sheet or
+   * a notification tap: the next look is when the next sweep falls due.
+   */
   const sweepIfStale = (): void => {
-    if (store.read().trackers.length === 0) return
+    const trackers = store.read().trackers
+    if (trackers.length === 0 || Date.now() < nextLookAt) return
     const configured = (store.read().settings.releaseCheckMinutes || 60) * 60 * 1000
     const interval = Math.max(configured, MIN_SWEEP_INTERVAL_MS)
-    if (Date.now() - lastSweepAt < interval) return
-    lastSweepAt = Date.now()
+
+    const wait = sweepDueIn(trackers, interval)
+    if (wait > 0) {
+      nextLookAt = Date.now() + wait
+      // Not due, but the other device's sweep may have synced in new dates or
+      // new series, and a sweep here is the only other thing that arms them.
+      rearmReleaseAlarms()
+      return
+    }
+    nextLookAt = Date.now() + interval
     void sweepReleases().catch(() => {
       // Offline, most likely. The next resume tries again.
     })
@@ -1016,8 +1037,10 @@ export async function createBridge(): Promise<WtaApi> {
 
   void CapacitorApp.addListener('resume', sweepIfStale)
   // Also on launch: the app is "resumed" only on a *return*, and a cold start
-  // after a week away is exactly when there is most to catch up on.
-  sweepIfStale()
+  // after a week away is exactly when there is most to catch up on. A moment
+  // after it, as on the desktop, so the first views load before the sweep's
+  // requests, and a sync on launch can bring in the other device's stamps.
+  setTimeout(sweepIfStale, 15_000)
 
   /**
    * Android's back button.

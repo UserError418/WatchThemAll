@@ -265,7 +265,37 @@ export function describeNotice(notice: ReleaseNotice): string {
 }
 
 /**
- * Run `checkAll` on an interval, and once shortly after startup.
+ * How long until a sweep is due: the interval after the *oldest* check.
+ *
+ * Read from the trackers rather than from when this process last swept, so a
+ * restart does not buy a fresh sweep of every series — the data is exactly as
+ * fresh as if the app had stayed open. The oldest rather than the newest
+ * check, so a series that missed the last sweep (added since, or synced in
+ * with `lastChecked: 0`) is not left waiting a full interval. `lastChecked`
+ * syncs, so a sweep on the other device counts too; that sweep also moved
+ * `lastNotified`, so this one would have had nothing left to announce.
+ *
+ * Never more than one interval, whatever a skewed clock elsewhere stamped.
+ */
+export function sweepDueIn(
+  trackers: ReadonlyArray<Pick<ReleaseTracker, 'lastChecked'>>,
+  intervalMs: number,
+  now = Date.now(),
+): number {
+  if (trackers.length === 0) return intervalMs
+  const oldest = Math.min(...trackers.map((tracker) => tracker.lastChecked))
+  return Math.min(intervalMs, Math.max(0, oldest + intervalMs - now))
+}
+
+/** Room after launch for the window and the first views to load before the sweep's requests. */
+const STARTUP_DELAY_MS = 15_000
+
+/** The shortest gap between two timed sweeps, and the floor under the setting. */
+const MIN_GAP_MS = 15 * 60 * 1000
+
+/**
+ * Sweep whenever one is due by `sweepDueIn`, never sooner than shortly after
+ * startup.
  *
  * Returns a stop function. The original left its interval running across
  * window close and quit, which is why it needed a guard against firing while
@@ -275,22 +305,36 @@ export function startReleaseTimer(
   store: SweepableStore,
   onNotices: (notices: ReleaseNotice[]) => void,
 ): () => void {
-  const minutes = store.read().settings.releaseCheckMinutes || 60
-  const intervalMs = Math.max(15, minutes) * 60 * 1000
+  // Read on every tick, so a changed setting applies without a restart.
+  const intervalMs = (): number => Math.max(MIN_GAP_MS, (store.read().settings.releaseCheckMinutes || 60) * 60 * 1000)
+  const dueIn = (): number => sweepDueIn(store.read().trackers, intervalMs())
 
-  const run = (): void => {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+
+  const schedule = (floorMs: number): void => {
+    if (stopped) return
+    timer = setTimeout(tick, Math.max(floorMs, dueIn()))
+  }
+
+  const tick = (): void => {
+    // "Check now", or the other device, may have swept since this was set.
+    if (dueIn() > 0) {
+      schedule(0)
+      return
+    }
     void checkAll(store)
       .then((notices) => {
         if (notices.length > 0) onNotices(notices)
       })
       .catch((err) => console.error('[releases] sweep failed:', err))
+      .finally(() => schedule(MIN_GAP_MS))
   }
 
-  const startupDelay = setTimeout(run, 15_000)
-  const interval = setInterval(run, intervalMs)
+  schedule(STARTUP_DELAY_MS)
 
   return () => {
-    clearTimeout(startupDelay)
-    clearInterval(interval)
+    stopped = true
+    if (timer) clearTimeout(timer)
   }
 }

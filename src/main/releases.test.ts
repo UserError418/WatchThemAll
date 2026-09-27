@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Episode, ReleaseTracker, StoreShape } from '@shared/types'
-import { checkAll, needsSchedule, scheduleWindow, type SweepableStore } from './releases'
+import { checkAll, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
 import * as tmdb from './tmdb'
 
 vi.mock('./tmdb', () => ({ detail: vi.fn(), season: vi.fn(), search: vi.fn() }))
@@ -125,7 +125,7 @@ describe('checkAll', () => {
       trackers,
       puts: [] as ReleaseTracker[],
       writes: 0,
-      read: () => ({ trackers: state.trackers }) as unknown as StoreShape,
+      read: () => ({ trackers: state.trackers, settings: { releaseCheckMinutes: 60 } }) as unknown as StoreShape,
       collection: () => ({
         putMany: (batch: ReleaseTracker[]) => {
           state.writes += 1
@@ -220,5 +220,88 @@ describe('checkAll', () => {
 
     expect(store.puts.map((t) => t.id)).toEqual(['b'])
     expect(notices).toHaveLength(1)
+  })
+
+  describe('startReleaseTimer', () => {
+    const MINUTE = 60 * 1000
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    /** Trackers last checked this long ago, and a timer started over them. */
+    function started(checkedAgo: number) {
+      vi.useFakeTimers({ now: NOW })
+      vi.mocked(tmdb.detail).mockClear()
+      detailWithNewEpisode()
+      const store = storeOf([{ ...tracker('a', 1), lastChecked: NOW - checkedAgo }])
+      const stop = startReleaseTimer(store, () => {})
+      return { store, stop }
+    }
+
+    /** The waste this replaced: every launch swept every series. */
+    it('does not sweep on launch when the last sweep is recent', async () => {
+      const { stop } = started(10 * MINUTE)
+
+      await vi.advanceTimersByTimeAsync(49 * MINUTE)
+      expect(tmdb.detail).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2 * MINUTE)
+      expect(tmdb.detail).toHaveBeenCalledTimes(1)
+      stop()
+    })
+
+    it('sweeps shortly after launch when one is due', async () => {
+      const { stop } = started(3 * 60 * MINUTE)
+
+      await vi.advanceTimersByTimeAsync(14_000)
+      expect(tmdb.detail).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(tmdb.detail).toHaveBeenCalledTimes(1)
+      stop()
+    })
+
+    it('keeps sweeping once an interval', async () => {
+      const { stop } = started(3 * 60 * MINUTE)
+
+      await vi.advanceTimersByTimeAsync(16_000 + 3 * 60 * MINUTE)
+      expect(tmdb.detail).toHaveBeenCalledTimes(4)
+      stop()
+    })
+
+    it('stops', async () => {
+      const { stop } = started(3 * 60 * MINUTE)
+      stop()
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * MINUTE)
+      expect(tmdb.detail).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('sweepDueIn', () => {
+  const HOUR = 60 * 60 * 1000
+  const checked = (...agos: number[]) => agos.map((ago) => ({ lastChecked: NOW - ago }))
+
+  it('is the rest of the interval after a recent sweep', () => {
+    expect(sweepDueIn(checked(10 * 60 * 1000), HOUR, NOW)).toBe(50 * 60 * 1000)
+  })
+
+  it('is now once the interval has passed', () => {
+    expect(sweepDueIn(checked(2 * HOUR), HOUR, NOW)).toBe(0)
+  })
+
+  /** A series added or synced in since the last sweep is not left waiting. */
+  it('goes by the oldest check', () => {
+    expect(sweepDueIn([...checked(60 * 1000), { lastChecked: 0 }], HOUR, NOW)).toBe(0)
+  })
+
+  it('never waits longer than one interval, whatever another clock stamped', () => {
+    expect(sweepDueIn(checked(-5 * HOUR), HOUR, NOW)).toBe(HOUR)
+  })
+
+  it('waits an interval when there is nothing to check', () => {
+    expect(sweepDueIn([], HOUR, NOW)).toBe(HOUR)
   })
 })
