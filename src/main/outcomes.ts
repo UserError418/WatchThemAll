@@ -248,11 +248,11 @@ export interface AutomaticOptions {
  *
  * **Superseded by `scanAwareOrder` in `providerscan.ts`, which both apps now
  * call.** That function is this one with a background scan's verdicts folded
- * in, and it reduces to exactly this behaviour when nothing has been scanned —
- * so the rules below still describe what happens on an unscanned title. Kept
- * for its tests, which pin that baseline. Do not wire it up to anything new:
- * a caller reaching for this one gets provider ordering that silently ignores
- * everything the user's last scan measured.
+ * in. On an unscanned title it keeps the rules below with one difference: a
+ * source that failed on this title drops behind the untried ones, where this
+ * function leaves it in its place among them. Kept for its tests. Do not wire
+ * it up to anything new: a caller reaching for this one gets provider ordering
+ * that silently ignores everything the user's last scan measured.
  *
  * Three rules, applied in this order, and all three are the user's rather than
  * the app's:

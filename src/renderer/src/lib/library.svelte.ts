@@ -86,7 +86,7 @@ class Library {
   activeProviderIds = $state<string[]>([])
   /** Every provider this install has been offered; see `load()`. */
   knownProviderIds = $state<string[]>([])
-  /** Providers to try first in Automatic; see `automaticOrder` in main. */
+  /** Providers to try first in Automatic; see `scanAwareOrder` in main. */
   favouriteProviderIds = $state<string[]>([])
   /**
    * The user's global provider order, best first.
@@ -801,8 +801,9 @@ class Library {
   /**
    * Every known provider in the user's order — the order Automatic walks.
    *
-   * The same sort main applies in `automaticOrder`, so the Providers panel and
-   * the source pickers list sources in the order they will actually be tried.
+   * The sort main's `scanAwareOrder` starts from, less the favourites and the
+   * per-title tiers it lays over it, so the Providers panel and the source
+   * pickers list sources in the order the user placed them.
    * Anything missing from the saved order keeps its catalogue position at the
    * end; appending is the only safe guess, since inserting a new provider
    * anywhere else would silently move one the user had deliberately placed.

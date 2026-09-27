@@ -1080,10 +1080,10 @@ export async function createBridge(): Promise<WtaApi> {
    * Order the enabled providers for one request.
    *
    * `scanAwareOrder` rather than `automaticOrder`, matching the desktop: it
-   * degrades to exactly that function when nothing has been scanned, and folds
-   * in the measurement when something has. Both apps must rank identically —
-   * the source picker's dots are drawn from the same ranking, and the renderer
-   * that draws them is shared. The same goes for `resumeFirst` after it.
+   * folds in the measurement when something has been scanned, which the older
+   * function cannot. Both apps must rank identically — the source picker's
+   * dots are drawn from the same ranking, and the renderer that draws them is
+   * shared. The same goes for `resumeFirst` after it.
    */
   const automaticOrderFor = (req: TitleRef): AutomaticOrder => {
     const doc = store.read()

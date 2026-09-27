@@ -700,9 +700,8 @@ function enabledProviders(): Provider[] {
  * Every rule is the user's own — their drag order, narrowed to sources known to
  * have played this title, with favourites in front — plus whatever a recent
  * scan measured, and then the source the title was last watched on moved to
- * the front while it is still green. The reasoning is in `scanAwareOrder`,
- * which degrades to exactly `automaticOrder` when nothing has been scanned,
- * and in `resumeFirst`.
+ * the front while it is still green. The reasoning is in `scanAwareOrder` and
+ * in `resumeFirst`.
  *
  * This is the half of the scan feature the user never sees. The dots tell them
  * which source to pick; this makes the *automatic* choice and every mid-episode

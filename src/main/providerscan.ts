@@ -361,8 +361,9 @@ export const SAME_SPEED_FLOOR_MS = 500
  * Two layers. The outer one is fixed: `providerRank`'s tiers, so a source that
  * works always comes before one that may work, and that before one that does
  * not — a preference for speed or quality is not a licence to try a dead
- * source first. It degrades to `automaticOrder` when there is no scan: without
- * verdicts every provider lands in tier 1, 3 or 4, the same worked-first split.
+ * source first. Without a scan every provider lands in tier 1, 3 or 4: the
+ * worked-first split of `automaticOrder`, except that a source that failed on
+ * this title goes behind the untried ones rather than staying among them.
  *
  * The inner layer is the user's `sourceOrder`: a chain of keys, each deciding
  * only among the providers the keys before it left tied. Speed groups sources

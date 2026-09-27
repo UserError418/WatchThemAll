@@ -229,8 +229,8 @@
     nicety: HTML5 drag-and-drop does not respond to touch at all, and the other
     route in — ArrowUp/ArrowDown on the focused grip — needs a keyboard. With
     only those two, **this order could not be changed on a phone**, which is
-    the order `automaticOrder` tries providers in and therefore what decides
-    what opens when you press Play.
+    the order Automatic starts from (`scanAwareOrder` in main) and therefore
+    what decides what opens when you press Play.
   -->
   {#snippet grip(index: number, name: string)}
     {#if canHover()}
