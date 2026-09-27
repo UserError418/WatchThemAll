@@ -791,23 +791,44 @@
    * noise — most days nothing airs. Collapsed by the reduced-motion token
    * like everything else.
    */
+  /*
+   * A disc behind the dot that swells and fades, as a growing box-shadow
+   * would. Scaled rather than a shadow because a shadow repaints every frame
+   * for as long as the page is open, while transform and opacity stay on the
+   * compositor. 23px is the 11px dot plus the 6px the shadow used to spread.
+   */
   .dot.pulse {
+    position: relative;
+    /* Keeps the disc behind the dot but in front of the row it sits on. */
+    isolation: isolate;
+  }
+
+  .dot.pulse::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    background: var(--accent);
+    z-index: -1;
     animation: pulse 2.4s var(--ease-out) infinite;
   }
 
   @keyframes pulse {
     0%,
     100% {
-      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+      transform: scale(1);
+      opacity: 0.6;
     }
     50% {
-      box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent);
+      transform: scale(calc(23 / 11));
+      opacity: 0;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .dot.pulse {
+    .dot.pulse::after {
       animation: none;
+      opacity: 0;
     }
   }
 
