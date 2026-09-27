@@ -39,6 +39,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Everything the phone needs to put a provider's stream on a Chromecast.
@@ -74,6 +76,17 @@ public class CastPlugin extends Plugin {
     private static final long CONNECT_TIMEOUT_MS = 20_000L;
 
     private final CastProxyServer proxy = new CastProxyServer();
+
+    /**
+     * Where `fetchText` does its blocking work.
+     *
+     * Capacitor runs every plugin call, of every plugin, on one shared thread.
+     * A fetch held that thread for up to its 15-second timeouts, and a scan
+     * makes dozens, so the library's own file writes and every other plugin
+     * call queued behind a slow provider. Four at once is more than a scan's
+     * two probes ask for.
+     */
+    private final ExecutorService fetchPool = Executors.newFixedThreadPool(4);
 
     /**
      * The `connect` call still waiting for its session to actually exist.
@@ -174,7 +187,11 @@ public class CastPlugin extends Plugin {
         JSObject headers = call.getObject("headers", new JSObject());
         int limit = call.getInt("limitBytes", 4 * 1024 * 1024);
         boolean binary = "base64".equals(call.getString("encoding", "text"));
+        fetchPool.execute(() -> fetchTextNow(call, url, headers, limit, binary));
+    }
 
+    /** `fetchText`'s request, on `fetchPool`. A `PluginCall` may be resolved from any thread. */
+    private static void fetchTextNow(PluginCall call, String url, JSObject headers, int limit, boolean binary) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();
