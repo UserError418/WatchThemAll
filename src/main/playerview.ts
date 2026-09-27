@@ -1070,8 +1070,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * Deliberately late and deliberately conditional. `media-started-playing`
    * only says decoding began; the element's duration and seekable range often
    * arrive a beat later, and seeking before then is silently ignored. And if
-   * the provider restores its own position, `shouldSeek` sees that and leaves
-   * it alone rather than fighting a feature the site already has.
+   * the provider has already put the video there, by its own memory or its
+   * URL's start parameter, `shouldSeek` sees that and leaves it alone.
    */
   const SEEK_SETTLE_MS = 1_500
   const SEEK_ATTEMPTS = 4

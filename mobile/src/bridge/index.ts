@@ -63,7 +63,7 @@ import {
   REFRESH_INTERVAL_MS,
   type CachedCatalog,
 } from '@main/catalog'
-import { buildPlayUrl } from '@main/providers'
+import { buildPlayUrl, renderTemplate } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
@@ -89,7 +89,14 @@ import { checkAll, sweepDueIn } from '@main/releases'
 import { UpNextController, isEpisodeEnd, nextAiredEpisode, type UpNextPlace } from '@main/upnext'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
-import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from '@main/resume'
+import {
+  isWatchedEnough,
+  resumeAction,
+  resumeKey,
+  resumeOfferFor,
+  ResumeSeek,
+  WrittenPositions,
+} from '@main/resume'
 import { createCastBridge } from './cast'
 import { App as CapacitorApp } from '@capacitor/app'
 import { ScreenOrientation } from '@capacitor/screen-orientation'
@@ -415,6 +422,9 @@ export async function createBridge(): Promise<WtaApi> {
   /** Whether the provider's video is moving, as the relay last reported. */
   let videoPlaying = false
 
+  /** Putting the video back where it was left, for the source now loading; see `resumeUrl`. */
+  let resumeSeek: ResumeSeek | null = null
+
   const surface = createPlayerSurface({
     onMediaState: (playing) => {
       videoPlaying = playing
@@ -433,6 +443,16 @@ export async function createBridge(): Promise<WtaApi> {
      * Read at message time rather than captured: the surface is built once and
      * outlives every episode shown in it.
      */
+    /**
+     * Resume through the relay, for sources whose URL could not do it. The
+     * television has the picture while casting, and resumes on its own.
+     */
+    onFilmTime: (time) => {
+      if (!session || onTv || resumeSeek === null) return
+      const to = resumeSeek.next(time, Date.now())
+      if (to !== null) surface.seek(to, time.duration)
+    },
+
     expects: () =>
       session === null
         ? null
@@ -628,11 +648,12 @@ export async function createBridge(): Promise<WtaApi> {
   /**
    * Casting stopped: take the film back, at the position the television reached.
    *
-   * Written as a resume point rather than passed along, so the existing
-   * mechanism does the work — `buildPlayUrl` appends the provider's own start
-   * parameter, which is how resuming works on this platform at all. Without
-   * this the embed would come back at whatever position it was blanked at,
-   * rewinding the user by however long they watched on the TV.
+   * Written as a resume point rather than passed along, so the ordinary
+   * resume does the work: `resumeUrl` puts it in the provider's URL and arms
+   * the relay seek. Without this the embed would come back at whatever position
+   * it was blanked at, rewinding the user by however long they watched on the
+   * TV. (Until 1.9.9 that is what happened anyway: the restore reloaded the URL
+   * built when Play was pressed.)
    */
   const reclaimFromTv = async (): Promise<void> => {
     const status = await castBridge.status()
@@ -647,7 +668,8 @@ export async function createBridge(): Promise<WtaApi> {
     }
     onTv = false
     tvStale = false
-    surface.restore()
+    const candidate = session?.candidates[session.index]
+    surface.restore(candidate ? resumeUrl(candidate) : undefined)
     releaseOrientation()
   }
 
@@ -792,6 +814,9 @@ export async function createBridge(): Promise<WtaApi> {
   const writtenPositions = new WrittenPositions()
 
   const rememberPosition = (req: PlayRequest): void => {
+    // The video is where the provider put it, not where the viewer is, until
+    // the resume seek is seen to take; see `ResumeSeek.inFlight`.
+    if (resumeSeek?.inFlight) return
     const reading = progress?.reading ?? null
     const context = contextFor(req, reading)
     const points = store.collection('resumePoints')
@@ -1068,8 +1093,28 @@ export async function createBridge(): Promise<WtaApi> {
   const playerReload = async (): Promise<void> => {
     // Save the place first: the frame is about to be thrown away, and whatever
     // it reported is the last thing anything will know about this attempt.
-    if (session) rememberPosition(session.req)
-    surface.reload()
+    if (!session) return
+    rememberPosition(session.req)
+    const candidate = session.candidates[session.index]
+    surface.reload(candidate ? resumeUrl(candidate) : undefined)
+  }
+
+  /**
+   * The source's URL with the stored position as of now, and the relay seek
+   * armed to the same place. Every load goes through here: a new source, a
+   * reload, and the picture coming back after a cast or a source test.
+   *
+   * The candidates' URLs are built when Play is pressed, and until 1.9.9 every
+   * later load reused them. So switching source twenty minutes in, or taking
+   * the film back from the television, sent the provider to the minute the
+   * session *started* at. The seek then saw a provider already past thirty
+   * seconds, took that for the provider's own resume, and left it there.
+   */
+  const resumeUrl = (candidate: PlayCandidate): string => {
+    if (!session) return candidate.url
+    const offer = resumeOfferFor(store.read().resumePoints, session.req)
+    resumeSeek = new ResumeSeek(offer?.seconds ?? 0, session.req.runtimeMinutes)
+    return renderTemplate(candidate.provider, session.req, offer) ?? candidate.url
   }
 
   /** Load `index` of the current session's candidates. */
@@ -1092,7 +1137,7 @@ export async function createBridge(): Promise<WtaApi> {
      */
     void castBridge.forget()
 
-    surface.show(candidate)
+    surface.show({ ...candidate, url: resumeUrl(candidate) })
     if (progress) {
       progress.candidateShownAt = Date.now()
       progress.candidateReported = false
@@ -1335,10 +1380,16 @@ export async function createBridge(): Promise<WtaApi> {
     // Left alone while casting: the television has the picture, and bringing
     // the phone's back when the scan ends would play the film twice.
     suspendPlayback: () => {
-      if (!onTv) surface.blank()
+      if (onTv) return
+      // The exact place, not the last five-second sample: it is where the
+      // picture comes back to.
+      if (session) rememberPosition(session.req)
+      surface.blank()
     },
     resumePlayback: () => {
-      if (!onTv) surface.restore()
+      if (onTv) return
+      const candidate = session?.candidates[session.index]
+      surface.restore(candidate ? resumeUrl(candidate) : undefined)
     },
     onProgress: (payload) => providerScan.emit(payload),
   })

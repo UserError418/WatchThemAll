@@ -23,14 +23,13 @@
 const MIN_RESUME_SECONDS = 60
 
 /**
- * How far in the provider may already be before we leave it alone.
+ * How close to the stored position counts as already there.
  *
- * Some providers restore their own position. Seeking on top of that would fight
- * a feature the site already has, and would land the user somewhere neither of
- * us intended if the two disagree. More than half a minute in on a fresh load
- * means the provider has done the job itself.
+ * A provider that restores its own position, or honours the start parameter
+ * in its URL, lands within a few seconds of ours. Seeking again for that
+ * would be a visible jump that gains nothing.
  */
-const SELF_RESUME_TOLERANCE_SECONDS = 30
+const RESUMED_TOLERANCE_SECONDS = 30
 
 /**
  * How much of the end may be missed and still count as finished.
@@ -86,6 +85,8 @@ export function watchedThresholdSeconds(duration: number): number {
 // whole of resume behaviour.
 export { resumeKey } from '@shared/types'
 import { resumeKey } from '@shared/types'
+
+import { lengthVerdict } from './runtimecheck'
 
 /**
  * Is this position worth writing down?
@@ -189,17 +190,95 @@ export function resumeAction(reading: ResumeReading | null): ResumeAction {
 /**
  * Should we move the video to the stored position?
  *
- * `current` is where the provider has already put itself. The check against it
- * is the whole point of the tolerance: this only steps in when the provider has
- * *not* restored the position on its own.
+ * `current` is where the provider has already put itself. Only forward, and
+ * only when it is not already there.
+ *
+ * Until 2026-09-27 any provider more than 30s in was left alone, on the
+ * theory that it had restored the position itself. But a provider's own
+ * memory is per device and per browser, while ours is saved every five
+ * seconds and synced within ten. So a provider that resumed where this
+ * phone left off yesterday overruled where the desktop left off tonight.
+ * Ours wins when it is further along. Behind it, the provider knows
+ * something newer and keeps its answer.
  */
 export function shouldSeek(saved: number, current: number, duration: number): boolean {
   if (!shouldStorePosition(saved, duration)) return false
   if (!Number.isFinite(current)) return false
-  // The provider already resumed; leave its answer alone.
-  if (current > SELF_RESUME_TOLERANCE_SECONDS) return false
+  // Already there: the provider resumed by itself, or its URL did it.
+  if (Math.abs(saved - current) <= RESUMED_TOLERANCE_SECONDS) return false
   // Never seek backwards into something already further along than the memory.
   return saved > current
+}
+
+/** What the phone's relay reads off the film's own element; see `ResumeSeek`. */
+export interface FilmTime {
+  seconds: number
+  duration: number
+}
+
+/**
+ * One load's attempt to put the video back where it was left, on the phone.
+ *
+ * The phone's first mechanism is the provider's URL parameter, which only
+ * four sources read. This is the second: the media relay (see
+ * `mobile/src/bridge/mediarelay.ts`) reaches the provider's `<video>` in
+ * every frame and can set its `currentTime`, as the desktop does through
+ * `WebFrameMain`.
+ *
+ * It checks and retries rather than seeking once, because on the phone a
+ * seek can simply not take. A player attaching its stream after the first
+ * `timeupdate` puts itself back at its own start, and a provider whose URL
+ * start was ignored reports zero. Every relay report of the film's time is
+ * fed in. The answer is where to seek now, or null for nothing to do yet.
+ * It settles for good once the video is where it should be, or once the
+ * attempts run out.
+ */
+export class ResumeSeek {
+  /** Enough for a stream that attaches late; few enough not to fight a user who rewinds. */
+  static readonly ATTEMPTS = 4
+  /** The relay reports every two seconds; this leaves one report for a seek to show. */
+  static readonly RETRY_MS = 2_500
+
+  private attempts = 0
+  private sentAt = 0
+  private settled: boolean
+
+  constructor(
+    private readonly target: number,
+    /** TMDB's runtime, so an advert's clip is not taken for the film. */
+    private readonly runtimeMinutes: number | null,
+  ) {
+    this.settled = !(target > 0)
+  }
+
+  /** Finished, one way or the other. */
+  get done(): boolean {
+    return this.settled
+  }
+
+  /**
+   * A seek has been sent and has not yet been seen to take. Meanwhile the
+   * video's time is where the provider put it, not where the viewer is, and
+   * saving it would write over the very position being restored.
+   */
+  get inFlight(): boolean {
+    return !this.settled && this.attempts > 0
+  }
+
+  next(time: FilmTime, now: number): number | null {
+    if (this.settled) return null
+    // An advert or a trailer in the film's place: wait for the episode itself.
+    if (lengthVerdict(time.duration, this.runtimeMinutes) === 'implausible') return null
+    if (!shouldSeek(this.target, time.seconds, time.duration) || this.attempts >= ResumeSeek.ATTEMPTS) {
+      this.settled = true
+      return null
+    }
+    // Sent, and not yet had a report's time to show whether it took.
+    if (this.attempts > 0 && now - this.sentAt < ResumeSeek.RETRY_MS) return null
+    this.attempts += 1
+    this.sentAt = now
+    return this.target
+  }
 }
 
 /**

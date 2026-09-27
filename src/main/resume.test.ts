@@ -4,6 +4,7 @@ import {
   isWatchedEnough,
   resumeAction,
   resumeKey,
+  ResumeSeek,
   shouldSeek,
   shouldStorePosition,
   WrittenPositions,
@@ -100,8 +101,17 @@ describe('shouldSeek', () => {
   })
 
   it('leaves a provider that restored the position itself alone', () => {
-    // Seeking on top of that fights a feature the site already has.
+    // Seeking on top of that would be a jump for nothing.
     expect(shouldSeek(900, 880, 3600)).toBe(false)
+  })
+
+  /** The provider's own memory is per device; ours is synced within seconds. */
+  it('moves a provider that resumed somewhere older forward to ours', () => {
+    expect(shouldSeek(1500, 600, 3600)).toBe(true)
+  })
+
+  it('keeps a provider that is further along than ours', () => {
+    expect(shouldSeek(900, 1200, 3600)).toBe(false)
   })
 
   it('tolerates a few seconds of start-up drift', () => {
@@ -218,5 +228,70 @@ describe('WrittenPositions', () => {
     written.isChange('movie:9', 600, 3600)
     written.forget('movie:9')
     expect(written.isChange('movie:9', 600, 3600)).toBe(true)
+  })
+})
+
+/**
+ * The phone's seek through the relay, fed one report of the film's time at a
+ * time. A 48-minute episode left at 25 minutes.
+ */
+describe('ResumeSeek', () => {
+  const EPISODE = 2885
+  const at = (seconds: number, duration = EPISODE) => ({ seconds, duration })
+
+  it('seeks at the first report from the beginning, and stops once it took', () => {
+    const seek = new ResumeSeek(1500, 48)
+    expect(seek.inFlight).toBe(false)
+    expect(seek.next(at(2), 0)).toBe(1500)
+    expect(seek.inFlight).toBe(true)
+    expect(seek.next(at(1502), 2_000)).toBeNull()
+    expect(seek.done).toBe(true)
+    expect(seek.inFlight).toBe(false)
+  })
+
+  it('does nothing when the URL already put the video there', () => {
+    const seek = new ResumeSeek(1500, 48)
+    expect(seek.next(at(1503), 0)).toBeNull()
+    expect(seek.done).toBe(true)
+  })
+
+  /** A player that attaches its stream late puts itself back at its own start. */
+  it('seeks again when the first did not take, but not before a report could show it', () => {
+    const seek = new ResumeSeek(1500, 48)
+    expect(seek.next(at(1), 0)).toBe(1500)
+    expect(seek.next(at(2), 1_000)).toBeNull()
+    expect(seek.next(at(4), ResumeSeek.RETRY_MS)).toBe(1500)
+    expect(seek.next(at(1501), ResumeSeek.RETRY_MS + 2_000)).toBeNull()
+    expect(seek.done).toBe(true)
+  })
+
+  it('gives up after its attempts, and does not fight the player after that', () => {
+    const seek = new ResumeSeek(1500, 48)
+    let now = 0
+    for (let i = 0; i < ResumeSeek.ATTEMPTS; i++) {
+      expect(seek.next(at(0), now)).toBe(1500)
+      now += ResumeSeek.RETRY_MS
+    }
+    expect(seek.next(at(0), now)).toBeNull()
+    expect(seek.done).toBe(true)
+    expect(seek.next(at(0), now + 60_000)).toBeNull()
+  })
+
+  /** Seeking a pre-roll to 25 minutes would end the advert, then the film starts at zero. */
+  it('waits out an advert rather than seeking it', () => {
+    const seek = new ResumeSeek(1500, 48)
+    expect(seek.next(at(3, 30), 0)).toBeNull()
+    expect(seek.done).toBe(false)
+    expect(seek.next(at(0), 30_000)).toBe(1500)
+  })
+
+  it('never resumes into the credits', () => {
+    const seek = new ResumeSeek(EPISODE - 20, 48)
+    expect(seek.next(at(0), 0)).toBeNull()
+    expect(seek.done).toBe(true)
+  })
+
+  it('is done from the start with nothing to resume', () => {
+    expect(new ResumeSeek(0, 48).done).toBe(true)
   })
 })

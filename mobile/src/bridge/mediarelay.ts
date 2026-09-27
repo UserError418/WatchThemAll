@@ -1,5 +1,6 @@
 /**
- * Pause and resume the provider's video from the app, on Android.
+ * Pause and resume the provider's video from the app, on Android, and move it
+ * to where it was left (1.9.9: only four sources take a start in their URL).
  *
  * The mini player (2026-09-27) has a play/pause button, and the video it
  * controls is the provider's `<video>`, one or two cross-origin iframes deep
@@ -16,8 +17,8 @@
  *
  * ## The relay
  *
- * The app posts `{ wtaMedia: 1, command: 'pause' | 'play' }` to the surface
- * iframe. Each frame's copy of the script acts on its own videos, then passes
+ * The app posts `{ wtaMedia: 1, command: 'pause' | 'play' | 'seek' }` to the
+ * surface iframe. Each frame's copy of the script acts on its own videos, then passes
  * the command to its child frames. That is how it reaches a player nested
  * two deep without knowing the nesting. Going the other way, each frame
  * reports its video starting or stopping to its parent, and every frame
@@ -42,6 +43,16 @@ const TAG = 'wtaMedia'
 /** What the app posts into the surface iframe. */
 export function relayCommand(paused: boolean): Record<string, unknown> {
   return { [TAG]: 1, command: paused ? 'pause' : 'play' }
+}
+
+/**
+ * Move the film to `seconds`: the phone's resume where the provider's URL
+ * cannot do it (`ResumeSeek`). `duration` is the length the relay reported,
+ * and only the element of that length is moved. Every frame hears the command,
+ * and a frame playing an advert must not have the advert sent to 25 minutes.
+ */
+export function relaySeek(seconds: number, duration: number): Record<string, unknown> {
+  return { [TAG]: 1, command: 'seek', seconds, duration }
 }
 
 /** Where the provider's own video is, as the relay reads it off the element. */
@@ -130,13 +141,20 @@ export function mediaRelayScript(appOrigin: string): string {
     const data = event.data
     if (!data || typeof data !== 'object' || data[TAG] !== 1) return
 
-    if (data.command === 'pause' || data.command === 'play') {
+    if (data.command === 'pause' || data.command === 'play' || data.command === 'seek') {
       if (!fromParent(event)) return
       if (data.command === 'pause') {
         for (const video of document.querySelectorAll('video')) video.pause()
-      } else {
+      } else if (data.command === 'play') {
         const video = film()
         if (video) video.play().catch(() => {})
+      } else {
+        const video = film()
+        const seconds = Number(data.seconds)
+        if (video && Number.isFinite(seconds) && seconds >= 0 &&
+            Math.abs(Number(video.duration) - Number(data.duration)) < 2) {
+          try { video.currentTime = seconds } catch (error) {}
+        }
       }
       for (const child of children()) {
         try { child.contentWindow.postMessage(data, '*') } catch (error) {}

@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { mediaRelayScript, parseRelayState, parseRelayTime, relayCommand } from './mediarelay'
+import { mediaRelayScript, parseRelayState, parseRelayTime, relayCommand, relaySeek } from './mediarelay'
 
 const APP = 'https://localhost'
 
@@ -152,6 +152,54 @@ describe('commands from the app', () => {
 
     as(app.win, () => provider.win.postMessage(relayCommand(true)))
     expect([film.paused, advert.paused]).toEqual([true, true])
+  })
+})
+
+/** The phone's resume for sources that take no start in their URL (1.9.9). */
+describe('seek from the app', () => {
+  it('moves the film nested two frames down', () => {
+    const { app, provider, player } = world()
+    const film = new FakeVideo(2_885)
+    player.videos.push(film)
+
+    as(app.win, () => provider.win.postMessage(relaySeek(1_500, 2_885)))
+    expect(film.currentTime).toBe(1_500)
+  })
+
+  /**
+   * Every frame hears the command. A frame whose largest video is an advert
+   * must not have the advert sent to 25 minutes, which would end it early
+   * and could leave the film starting from zero after it.
+   */
+  it('moves only the element of the length that was reported', () => {
+    const { app, provider, player } = world()
+    const film = new FakeVideo(2_885)
+    const advert = new FakeVideo(30)
+    provider.videos.push(advert)
+    player.videos.push(film)
+
+    as(app.win, () => provider.win.postMessage(relaySeek(1_500, 2_885)))
+    expect([advert.currentTime, film.currentTime]).toEqual([0, 1_500])
+  })
+
+  it('is obeyed from the frame parent only', () => {
+    const { player } = world()
+    const film = new FakeVideo(2_885)
+    player.videos.push(film)
+    const stranger = new FakeWindow('https://ads.example')
+
+    as(stranger, () => player.win.postMessage(relaySeek(1_500, 2_885)))
+    expect(film.currentTime).toBe(0)
+  })
+
+  it('ignores a position that is not one', () => {
+    const { app, provider, player } = world()
+    const film = new FakeVideo(2_885)
+    player.videos.push(film)
+
+    as(app.win, () => provider.win.postMessage({ ...relaySeek(1_500, 2_885), seconds: 'soon' }))
+    as(app.win, () => provider.win.postMessage(relaySeek(-5, 2_885)))
+    expect(film.currentTime).toBe(0)
   })
 })
 

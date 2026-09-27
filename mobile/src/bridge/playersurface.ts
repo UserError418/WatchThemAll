@@ -58,15 +58,15 @@
  * Stall detection and the auto-switch countdown. Both need to know that a video
  * *stopped* advancing, and a provider that reports nothing is indistinguishable
  * from one that has stalled — three of the eight core providers report nothing
- * at all. Seeking to a stored position is missing for the same reason in
- * reverse: the position can be read, but nothing here can write one back.
+ * at all. (Seeking to a stored position used to be missing too. Since 1.9.9
+ * the media relay does it; see `seek` and `ResumeSeek`.)
  */
 
 import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { StatusBar } from '@capacitor/status-bar'
 
 import { parsePlayerMessage, type PlayerContext, type PlayerReading } from '@main/playermessage'
-import { parseRelayState, parseRelayTime, relayCommand } from './mediarelay'
+import { parseRelayState, parseRelayTime, relayCommand, relaySeek, type RelayTime } from './mediarelay'
 import type { PlayCandidate } from '@main/providers'
 
 /** Where the renderer's player chrome wants the video, in CSS pixels. */
@@ -188,6 +188,7 @@ function listenForReadings(
   onReading: (reading: PlayerReading) => void,
   expects: () => PlayerContext | null,
   onMediaState: (playing: boolean) => void,
+  onFilmTime: (time: RelayTime) => void,
 ): () => void {
   const onMessage = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow) return
@@ -203,6 +204,7 @@ function listenForReadings(
     // the caller files it under what is playing.
     const time = parseRelayTime(event.data)
     if (time !== null) {
+      onFilmTime(time)
       onReading({
         tmdbId: null,
         seconds: time.seconds,
@@ -247,6 +249,13 @@ export interface PlayerSurfaceOptions {
   expects?(): PlayerContext | null
   /** The video started (true) or stopped (false), as the relay reports it. */
   onMediaState?(playing: boolean): void
+  /**
+   * The film's own element, as the relay read it. Also passed to `onReading`
+   * as a reading. This hook exists for the resume seek, which must act only on
+   * the element the relay can reach: a provider's own position messages can
+   * describe another title altogether.
+   */
+  onFilmTime?(time: RelayTime): void
 }
 
 export interface PlayerSurface {
@@ -257,8 +266,13 @@ export interface PlayerSurface {
    * `installMediaRelay`. The outcome comes back as `onMediaState`.
    */
   setPaused(paused: boolean): void
-  /** Reload the current URL without changing provider. */
-  reload(): void
+  /** Move the film to `seconds`, through the relay; see `relaySeek`. */
+  seek(seconds: number, duration: number): void
+  /**
+   * Load the current source again. `url` replaces the current one: the same
+   * source with a newer start position in it.
+   */
+  reload(url?: string): void
   /**
    * Stop playing here, without forgetting what was playing.
    *
@@ -267,7 +281,8 @@ export interface PlayerSurface {
    * from two rooms. `restore` brings the same URL back.
    */
   blank(): void
-  restore(): void
+  /** Bring back what `blank` took away, at `url` if given; see `reload`. */
+  restore(url?: string): void
   setBounds(bounds: SurfaceBounds): void
   /** Tear it down. Safe to call when nothing is showing. */
   close(): void
@@ -311,11 +326,12 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
-    if (options.onReading || options.onMediaState) {
+    if (options.onReading || options.onMediaState || options.onFilmTime) {
       const onReading = options.onReading?.bind(options) ?? (() => {})
       const expects = options.expects?.bind(options) ?? (() => null)
       const onMediaState = options.onMediaState?.bind(options) ?? (() => {})
-      stopListening = listenForReadings(frame, onReading, expects, onMediaState)
+      const onFilmTime = options.onFilmTime?.bind(options) ?? (() => {})
+      stopListening = listenForReadings(frame, onReading, expects, onMediaState, onFilmTime)
     }
     return frame
   }
@@ -339,8 +355,13 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       frame?.contentWindow?.postMessage(relayCommand(paused), '*')
     },
 
-    reload() {
+    seek(seconds, duration) {
+      frame?.contentWindow?.postMessage(relaySeek(seconds, duration), '*')
+    },
+
+    reload(url) {
       if (!frame || !current) return
+      current = url ?? current
       // Re-assigning the same `src` is a no-op in Chromium, so blank it first.
       frame.src = 'about:blank'
       frame.src = current
@@ -360,8 +381,9 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       frame.src = 'about:blank'
     },
 
-    restore() {
+    restore(url) {
       if (!frame || !current) return
+      current = url ?? current
       frame.style.visibility = 'visible'
       frame.src = current
     },
