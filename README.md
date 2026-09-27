@@ -113,9 +113,6 @@ npm run build:linux    # or :win / :mac
 npm run apk            # Android; needs JDK 21 + Android SDK
 ```
 
-The Android build needs JDK 21 and the Android SDK. The script that installs
-both is not published — see "What is not in this repository".
-
 ## Contributing
 
 Issues and pull requests are welcome. Please don't open either to add new
