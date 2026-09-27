@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { genres, keywords, pickLogo, search, type TmdbLogo } from './tmdb'
+import { detail, genres, keywords, pickLogo, search, trailer, type TmdbLogo } from './tmdb'
 
 const logo = (file_path: string, iso_639_1: string | null, vote_average: number): TmdbLogo => ({
   file_path,
@@ -89,4 +89,22 @@ describe('the request cache', () => {
     await search('silo')
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  /** The detail answer carries the videos; a detailed card's preview needs no second request. */
+  it('takes a trailer from a cached detail answer', async () => {
+    const video = { key: 'abc', site: 'YouTube', type: 'Trailer', official: true }
+    fetchMock.mockResolvedValue(answer({ id: 4242, name: 'Series', videos: { results: [video] } }))
+
+    await detail(4242, 'tv')
+    expect(await trailer(4242, 'tv')).toBe('abc')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks for the videos when the title was never detailed', async () => {
+    fetchMock.mockResolvedValue(answer({ results: [{ key: 'xyz', site: 'YouTube', type: 'Teaser' }] }))
+
+    expect(await trailer(4343, 'movie')).toBe('xyz')
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/movie/4343/videos')
+  })
 })
+

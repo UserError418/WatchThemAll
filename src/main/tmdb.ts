@@ -60,14 +60,26 @@ const cache = new Map<string, { at: number; ttl: number; value: unknown }>()
  */
 const inflight = new Map<string, Promise<unknown>>()
 
-async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
+type Params = Record<string, string | number>
+
+/** The request's URL, which is also its cache key. */
+function urlFor(path: string, params: Params): string {
   const url = new URL(BASE + path)
   url.searchParams.set('api_key', API_KEY)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
+  return url.toString()
+}
 
-  const key = url.toString()
-  const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < hit.ttl) return hit.value as T
+/** A cached answer that has not expired, without asking for one. */
+function cached<T>(path: string, params: Params = {}): T | undefined {
+  const hit = cache.get(urlFor(path, params))
+  return hit && Date.now() - hit.at < hit.ttl ? (hit.value as T) : undefined
+}
+
+async function get<T>(path: string, params: Params = {}): Promise<T> {
+  const key = urlFor(path, params)
+  const hit = cached<T>(path, params)
+  if (hit !== undefined) return hit
 
   const waiting = inflight.get(key)
   if (waiting) return waiting as Promise<T>
@@ -343,6 +355,9 @@ export async function search(query: string, page = 1): Promise<Paged<MediaSummar
   return toPaged(res, 'tv')
 }
 
+/** What every detail request asks for; see `detail`. Shared so `trailer` can find its answer. */
+const DETAIL_PARAMS: Params = { append_to_response: 'external_ids,videos,images', include_image_language: 'en' }
+
 export async function detail(tmdbId: number, type: MediaType): Promise<MediaDetail> {
   interface TmdbDetail extends TmdbListItem {
     genres?: Array<{ id: number; name: string }>
@@ -368,10 +383,7 @@ export async function detail(tmdbId: number, type: MediaType): Promise<MediaDeta
   // lettering, so they always carry a language, and leaving out the textless
   // (`null`) images drops most of the payload — measured, 16 KB against 10 KB
   // for a long-running series, and 4-8 KB for most titles.
-  const d = await get<TmdbDetail>(`/${type}/${tmdbId}`, {
-    append_to_response: 'external_ids,videos,images',
-    include_image_language: 'en',
-  })
+  const d = await get<TmdbDetail>(`/${type}/${tmdbId}`, DETAIL_PARAMS)
   const summary = toSummary({ ...d, media_type: type }, type)
 
   const stub = (e: TmdbEpisode | null | undefined) =>
@@ -465,8 +477,17 @@ export function pickLogo(logos: TmdbLogo[] | undefined): string | null {
   return usable[0]?.file_path ?? null
 }
 
-/** Trailer key for a title we only hold a summary for, e.g. a hovered card. */
+/**
+ * Trailer key for a title we only hold a summary for, e.g. a hovered card.
+ *
+ * The detail answer carries the same videos, and a card on screen has often
+ * been detailed already (the billboard, a row's facts, an opened title), so
+ * that is used when it is still cached rather than asking a second endpoint.
+ */
 export async function trailer(tmdbId: number, type: MediaType): Promise<string | null> {
+  const detailed = cached<{ videos?: { results?: TmdbVideo[] } }>(`/${type}/${tmdbId}`, DETAIL_PARAMS)
+  if (detailed) return pickTrailer(detailed.videos?.results)
+
   const res = await get<{ results?: TmdbVideo[] }>(`/${type}/${tmdbId}/videos`)
   return pickTrailer(res.results)
 }
