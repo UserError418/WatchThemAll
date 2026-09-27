@@ -28,6 +28,12 @@ ones you point it at and keeps the part that matters: your library.
 - **A browse screen built from your library.** The hero shows whatever is most
   urgent for you — a tracked series airing this week, or something you're
   part-way through. Genre rows follow what you actually watch.
+- **One player, whatever the source** (desktop, from 2.0.0). Every source
+  plays under the same controls and keys, with its own page, adverts and
+  downloads kept out of sight. Subtitles come from the source or, when it has
+  none, from OpenSubtitles, fetched only when you ask. Quality can be chosen
+  where the source offers a choice. The Android app follows in a later
+  release.
 - **Resume where you stopped**, at the real position in the episode, including
   when you switch provider mid-show.
 - **Keep watching while you browse.** Back shrinks the player into a corner
@@ -71,6 +77,9 @@ ones you point it at and keeps the part that matters: your library.
 Android runs the same app and the same library, laid out for a phone. The APK
 is debug-signed, which is fine for sideloading but cannot upgrade an install
 from another source. Uninstall first if you have one.
+
+2.0.0 is desktop only. Until the Android app has the new player, its latest
+APK is [1.9.9's](https://github.com/UserError418/WatchThemAll/releases/tag/v1.9.9).
 
 ## Notices
 
