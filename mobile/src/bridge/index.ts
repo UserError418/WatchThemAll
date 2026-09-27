@@ -41,6 +41,7 @@ import type {
   PlayRequest,
   PlayerState,
   PlayerSuggestion,
+  UpNextOffer,
   RowRequest,
   ForYouPlanRequest,
   ForYouRowRequest,
@@ -85,6 +86,7 @@ import {
 } from '@main/providerscan'
 import { castabilities } from '@shared/castability'
 import { checkAll, sweepDueIn } from '@main/releases'
+import { UpNextController, isEpisodeEnd, nextAiredEpisode, type UpNextPlace } from '@main/upnext'
 import { isOpenableExternally } from '@main/externalurl'
 import type { PlayerReading } from '@main/playermessage'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from '@main/resume'
@@ -177,6 +179,7 @@ export async function createBridge(): Promise<WtaApi> {
   const playbackActive = new Signal<boolean>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
+  const playerUpNext = new Signal<UpNextOffer | null>()
   /** The phone's side of main's `playerMini` / `playerPaused`; see `setMini`. */
   const playerMini = new Signal<boolean>()
   const playerPaused = new Signal<boolean>()
@@ -496,6 +499,13 @@ export async function createBridge(): Promise<WtaApi> {
         progress.writtenAt = Date.now()
         rememberPosition(session.req)
       }
+
+      // The end of the episode here, as opposed to on the television, which
+      // `castBridge.onProgress` watches.
+      const place = placeOf(session.req)
+      if (!onTv && place !== null && isEpisodeEnd(reading, session.req.runtimeMinutes)) {
+        void upNext.ended(place, false)
+      }
     },
   })
   const chrome = createChromeOverlay()
@@ -549,6 +559,13 @@ export async function createBridge(): Promise<WtaApi> {
    * the phone's own video back mid-cast — the film twice, audio in two rooms.
    */
   let onTv = false
+  /**
+   * True from an episode step until the next beam lands. Until then the
+   * television is still reporting the episode it had — finished, as often as
+   * not — and those readings must be filed under neither episode, nor start a
+   * countdown for the one being stepped to.
+   */
+  let tvStale = false
 
   /**
    * Move what is playing onto the television, and stand the phone down.
@@ -566,6 +583,7 @@ export async function createBridge(): Promise<WtaApi> {
     const result = await castBridge.beam(now)
     if (result.ok) {
       onTv = true
+      tvStale = false
       surface.blank()
       standUpright()
     }
@@ -628,6 +646,7 @@ export async function createBridge(): Promise<WtaApi> {
       })
     }
     onTv = false
+    tvStale = false
     surface.restore()
     releaseOrientation()
   }
@@ -894,6 +913,7 @@ export async function createBridge(): Promise<WtaApi> {
       leaveCandidate(false)
       settleProgress(session.req)
     }
+    upNext.reset()
     setMini(false)
     videoPlaying = false
     chrome.close()
@@ -946,8 +966,91 @@ export async function createBridge(): Promise<WtaApi> {
       progress.namedEpisode = null
       progress.episodeOpenedAt = Date.now()
     }
+    // A new episode: its end is a new end, and any countdown is for the old one.
+    upNext.reset()
+    if (onTv) tvStale = true
     showCandidate(0)
   }
+
+  /* ── Auto-next, and the television's position ────────────────────────── */
+
+  /** Where auto-next counts from, or null for a film or an unnumbered episode. */
+  const placeOf = (req: PlayRequest): UpNextPlace | null =>
+    req.type === 'tv' && req.season !== null && req.episode !== null
+      ? { tmdbId: req.tmdbId, season: req.season, episode: req.episode }
+      : null
+
+  /**
+   * How long the television is waited on for the next episode's stream: the
+   * remote's own budget, as on the desktop (`TV_NEXT_WAIT_MS` in main).
+   */
+  const TV_NEXT_WAIT_MS = 25_000
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const beamNextToTv = async (): Promise<void> => {
+    // Nothing is captured for a beat after a navigation.
+    await sleep(2_000)
+    const deadline = Date.now() + TV_NEXT_WAIT_MS
+    while (Date.now() < deadline && session) {
+      const result = await beamToTv()
+      if (result.ok) return
+      if (result.final) break
+      await sleep(1_200)
+    }
+    console.warn('[upnext] the next episode could not be sent to the television')
+  }
+
+  const upNext = new UpNextController({
+    enabled: () => store.read().settings.autoNext,
+    resolve: async (place) => {
+      const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
+      if (detail === null) return null
+      return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
+    },
+    announce: (offer) => playerUpNext.emit(offer),
+    advance: (next, toTv) => {
+      void playerGoTo(next.season, next.episode).then(() => {
+        if (toTv) void beamNextToTv()
+      })
+    },
+  })
+
+  /**
+   * The television's position, from native code every five seconds.
+   *
+   * Taken as the reading while casting, so everything that saves or settles
+   * the position — the five-second save, a pause, leaving — uses where the
+   * television is. Until 1.9.8 nothing was saved during a cast until it
+   * ended. Native rather than a JavaScript poll because a phone casting is
+   * usually a phone in a pocket, where JavaScript timers run once a minute;
+   * see `onProgress`.
+   */
+  castBridge.onProgress((tv) => {
+    if (!session || !progress || !onTv || tvStale) return
+    // A finished receiver often reports no media at all; its end is the last
+    // length it did report.
+    const duration = tv.duration > 0 ? tv.duration : (progress.reading?.duration ?? 0)
+    if (duration <= 0) return
+    const wasPlaying = progress.reading?.playing ?? false
+    const reading: PlayerReading = {
+      tmdbId: null,
+      seconds: tv.finished ? duration : tv.seconds,
+      duration,
+      season: null,
+      episode: null,
+      ended: tv.finished,
+      playing: tv.playing,
+    }
+    progress.reading = reading
+    rememberPosition(session.req)
+    // Paused on the television: the other device may pick up from here.
+    if (wasPlaying && !tv.playing && !tv.finished) pushPositions.now()
+
+    const place = placeOf(session.req)
+    if (place !== null && isEpisodeEnd(reading, session.req.runtimeMinutes)) void upNext.ended(place, true)
+    // The countdown's own timer may be a minute late in the background.
+    upNext.poke()
+  })
 
   const playerSwitchProvider = async (providerId: string): Promise<boolean> => {
     if (!session) return false
@@ -1294,6 +1397,9 @@ export async function createBridge(): Promise<WtaApi> {
     subscribeState: (cb) => playerState.subscribe(cb),
     currentState: () => currentPlayerState,
     subscribeSuggestion: (cb) => playerSuggestion.subscribe(cb),
+    subscribeUpNext: (cb) => playerUpNext.subscribe(cb),
+    upNextNow: () => upNext.playNow(),
+    upNextCancel: () => upNext.cancel(),
     minimize: () => setMini(true),
     subscribeMini: (cb) => playerMini.subscribe(cb),
     goTo: playerGoTo,
@@ -1482,6 +1588,7 @@ export async function createBridge(): Promise<WtaApi> {
       // Pressing Play is asking to watch, so what plays next opens full size
       // even when it replaces a mini player.
       setMini(false)
+      upNext.reset()
 
       session = { req, candidates: selection.candidates, index: 0 }
       const now = Date.now()
@@ -1519,6 +1626,8 @@ export async function createBridge(): Promise<WtaApi> {
 
       close: async () => closePlayer(),
       dismissSuggestion: async () => {},
+      upNextNow: async () => upNext.playNow(),
+      upNextCancel: async () => upNext.cancel(),
       reload: playerReload,
       setMini: async (next) => setMini(next),
       setPaused: async (paused) => surface.setPaused(paused),
@@ -1704,6 +1813,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerMini: (cb) => playerMini.subscribe(cb),
       playerPaused: (cb) => playerPaused.subscribe(cb),
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
+      playerUpNext: (cb) => playerUpNext.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
       watchlistTest: () => () => {},

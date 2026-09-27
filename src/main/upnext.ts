@@ -16,6 +16,7 @@
  * full chrome, or nothing at all while the phone is in a pocket.
  */
 
+import type { UpNextOffer } from '@shared/ipc'
 import type { EpisodeStub, Season } from '@shared/types'
 import { localMidnight } from '@shared/aired'
 import { lengthVerdict } from './runtimecheck'
@@ -98,25 +99,11 @@ export async function nextAiredEpisode(
   }
 }
 
-/** What the screens show while the countdown runs. */
-export interface UpNextOffer {
-  season: number
-  episode: number
-  /** The episode's title, when TMDB has one. */
-  name: string | null
-  /** Epoch ms at which it plays by itself. */
-  at: number
-  /** True when it will be sent to the television, not played here. */
-  onTv: boolean
-}
-
 /** Where the viewer is, for the controller to count on from. */
 export interface UpNextPlace {
   tmdbId: number
   season: number
   episode: number
-  /** How many seasons the series has, per TMDB. */
-  seasonCount: number
 }
 
 export interface UpNextDeps {
@@ -183,6 +170,18 @@ export class UpNextController {
     if (offer === null) return
     this.stop()
     this.deps.advance({ season: offer.season, episode: offer.episode, name: offer.name }, offer.onTv)
+  }
+
+  /**
+   * Play the offer if its time has come, whatever its own timer says.
+   *
+   * For the phone in a pocket: a backgrounded WebView runs JavaScript timers
+   * once a minute, so the countdown's timer can fire nearly a minute late.
+   * The phone calls this on every native cast tick (every five seconds),
+   * which is not a timer and is not held back.
+   */
+  poke(): void {
+    if (this.offer !== null && this.now() >= this.offer.at) this.playNow()
   }
 
   /** The viewer said no. This end stays handled; the next one counts. */

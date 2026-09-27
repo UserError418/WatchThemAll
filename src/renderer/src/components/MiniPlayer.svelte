@@ -22,7 +22,7 @@
    * the width of the window, not the platform; `mobile.css` only moves it
    * clear of the tab bar (`--mini-bottom`).
    */
-  import type { CastStatus, PlayerState } from '@shared/ipc'
+  import type { CastStatus, PlayerState, UpNextOffer } from '@shared/ipc'
   import { episodeCode } from '../lib/format'
 
   interface Props {
@@ -43,9 +43,28 @@
      * `App` holds it, like `paused`.
      */
     stalled: boolean
+    /**
+     * The next-episode countdown, which runs in the small player too
+     * (`main/upnext.ts`). The card says what is coming and offers Cancel;
+     * Play now is one tap away in the full player.
+     */
+    upNext: UpNextOffer | null
   }
 
-  const { player, paused: videoPaused, stalled }: Props = $props()
+  const { player, paused: videoPaused, stalled, upNext }: Props = $props()
+
+  /** Seconds left on the countdown, from the offer's own deadline. */
+  let upNextLeft = $state(0)
+  $effect(() => {
+    const offer = upNext
+    if (!offer) return
+    const tick = (): void => {
+      upNextLeft = Math.max(0, Math.ceil((offer.at - Date.now()) / 1000))
+    }
+    tick()
+    const timer = setInterval(tick, 250)
+    return () => clearInterval(timer)
+  })
 
   let slot = $state<HTMLButtonElement | null>(null)
 
@@ -136,7 +155,9 @@
   )
 
   const detail = $derived(
-    tv
+    upNext
+      ? `Next: ${episodeCode(upNext.season, upNext.episode)} in ${upNextLeft}s`
+      : tv
       ? `Playing on ${tv}`
       : stalled
         ? 'This source stopped. Open the player to switch.'
@@ -171,6 +192,9 @@
       <span class="heading">{heading}</span>
       {#if detail}<span class="detail" class:warn={stalled && !tv}>{detail}</span>{/if}
     </button>
+    {#if upNext}
+      <button class="cancel" onclick={() => void window.wta.player.upNextCancel()}>Cancel</button>
+    {/if}
     <button
       class="control"
       onclick={togglePlayback}
@@ -315,5 +339,17 @@
       width: 44px;
       height: 44px;
     }
+  }
+
+  /* Text, not an icon: "cancel what?" has to be answered by the line beside it. */
+  .cancel {
+    flex: none;
+    border: none;
+    border-radius: 999px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.12);
+    color: inherit;
+    font: 600 12px/1 inherit;
+    cursor: pointer;
   }
 </style>

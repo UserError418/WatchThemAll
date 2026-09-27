@@ -206,6 +206,15 @@
         <label class="check">
           <input
             type="checkbox"
+            checked={library.settings.autoNext}
+            onchange={(e) => library.setAutoNext(e.currentTarget.checked)}
+          />
+          Play the next episode automatically
+        </label>
+
+        <label class="check">
+          <input
+            type="checkbox"
             checked={library.settings.skipIntro}
             onchange={(e) => library.setSkipIntro(e.currentTarget.checked)}
           />

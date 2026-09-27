@@ -1213,6 +1213,11 @@ class Library {
     void this.persist({ settings: this.settings })
   }
 
+  setAutoNext(on: boolean): void {
+    this.settings = { ...this.settings, autoNext: on }
+    void this.persist({ settings: this.settings })
+  }
+
   /**
    * How sources are ordered inside each group — works, may work, does not
    * work — for the source lists and Automatic alike. See `scanAwareOrder`.

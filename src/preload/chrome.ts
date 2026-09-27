@@ -18,6 +18,7 @@ import type {
   OverlayArea,
   PlayerContext,
   PlayerSuggestion,
+  UpNextOffer,
   SkipOffer,
   ProviderScan,
   ProviderScanProgress,
@@ -137,6 +138,14 @@ const api: WtaChromeApi = {
     ipcRenderer.on(EV.playerSuggestion, listener)
     return () => ipcRenderer.removeListener(EV.playerSuggestion, listener)
   },
+  /** The next-episode countdown, or null; drawn over the video like the offer above. */
+  onUpNext: (callback: (offer: UpNextOffer | null) => void): (() => void) => {
+    const listener = (_event: unknown, offer: UpNextOffer | null): void => callback(offer)
+    ipcRenderer.on(EV.playerUpNext, listener)
+    return () => ipcRenderer.removeListener(EV.playerUpNext, listener)
+  },
+  upNextNow: (): Promise<void> => ipcRenderer.invoke(CH.playUpNextNow) as Promise<void>,
+  upNextCancel: (): Promise<void> => ipcRenderer.invoke(CH.playUpNextCancel) as Promise<void>,
   onMini: (callback: (mini: boolean) => void): (() => void) => {
     const listener = (_event: unknown, mini: boolean): void => callback(mini)
     ipcRenderer.on(EV.playerMini, listener)

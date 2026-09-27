@@ -14,8 +14,9 @@ import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, TitleRef } from '@shared/ipc'
 import { Store } from './store'
-import { registerIpc } from './ipc'
+import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
+import { UpNextController, isEpisodeEnd, nextAiredEpisode, type UpNextPlace } from './upnext'
 import { buildMenu, createTray, type MenuDeps } from './menu'
 import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
@@ -289,7 +290,126 @@ store.subscribe(() => {
  * from the TV's own remote would be left with a permanently silent player and
  * no control in this app that explains it.
  */
-cast.onSessionEnded(() => player?.setMuted(false))
+cast.onSessionEnded(() => setOnTv(false))
+
+/* ── The television, and auto-next ────────────────────────────────────── */
+
+/**
+ * Whether the picture is on the television.
+ *
+ * While it is, the television's position is the one that counts: the local
+ * copy keeps playing muted (the next episode's stream can only be fetched
+ * through it), but the viewer is watching the television, which they may
+ * have paused or skipped on with its own remote.
+ */
+let onTv = false
+/** The television's last reading, while `onTv`. */
+let tvPosition: VideoPosition | null = null
+let tvPlaying = false
+let tvWatch: ReturnType<typeof setInterval> | null = null
+/**
+ * True from an episode step until the next beam lands. Until then the
+ * television is still reporting the episode it had — finished, as often as
+ * not — and those readings must be filed under neither episode, nor start a
+ * countdown for the one being stepped to.
+ */
+let tvStale = false
+
+/** How often the television is asked where it is: the same five seconds as the local save. */
+const TV_WATCH_MS = 5_000
+
+/** Set once the IPC is up; auto-next beams through the Cast button's own path. */
+let ipc: IpcHandles | null = null
+
+function setOnTv(next: boolean): void {
+  onTv = next
+  player?.setMuted(next)
+  tvPosition = null
+  tvPlaying = false
+  tvStale = false
+  if (tvWatch !== null) clearInterval(tvWatch)
+  tvWatch = next ? setInterval(() => void watchTv(), TV_WATCH_MS) : null
+}
+
+/**
+ * Record where the television is, and notice when it finishes.
+ *
+ * Until 1.9.8 a cast recorded the muted local copy's position, which knows
+ * nothing of a pause or a skip on the television's own remote.
+ */
+async function watchTv(): Promise<void> {
+  if (!player || !onTv || tvStale) return
+  const context = player.context
+  const status = await cast.status().catch(() => null)
+  if (status === null || !status.connected || tvStale || player?.context !== context) return
+
+  // A finished receiver often reports no media at all; its end is the last
+  // length it did report.
+  const duration = status.duration > 0 ? status.duration : (tvPosition?.duration ?? 0)
+  const reading: VideoPosition = {
+    seconds: status.finished ? duration : status.seconds,
+    duration,
+    ended: status.finished,
+    paused: !status.playing,
+  }
+  if (reading.duration <= 0) return
+  tvPosition = reading
+  rememberPosition(context, reading)
+
+  // Paused on the television: the other device may pick up from here.
+  if (tvPlaying && !status.playing && !status.finished) pushPositions.now()
+  tvPlaying = status.playing
+
+  if (isEpisodeEnd(reading, context.runtimeMinutes)) void upNext.ended(placeOf(context)!, true)
+}
+
+/** Where auto-next counts from, or null for a film or an unnumbered episode. */
+function placeOf(context: PlayRequest): UpNextPlace | null {
+  if (context.type !== 'tv' || context.season === null || context.episode === null) return null
+  return { tmdbId: context.tmdbId, season: context.season, episode: context.episode }
+}
+
+/**
+ * How long the television is waited on for the next episode's stream.
+ *
+ * The same budget the remote's own next-episode button gives it: this window
+ * loads the episode, the provider fetches the stream, and only then can it
+ * be sent. Some providers fetch nothing until pressed, which `beam` does.
+ */
+const TV_NEXT_WAIT_MS = 25_000
+
+async function beamNextToTv(): Promise<void> {
+  // Nothing is captured for a beat after a navigation; asking at once only
+  // burns the first attempt.
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  const deadline = Date.now() + TV_NEXT_WAIT_MS
+  while (Date.now() < deadline && player && ipc) {
+    const result = await ipc.beam()
+    if (result.ok) return
+    if (result.final) break
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+  }
+  console.warn('[upnext] the next episode could not be sent to the television')
+}
+
+const upNext = new UpNextController({
+  enabled: () => store.read().settings.autoNext,
+  resolve: async (place) => {
+    const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
+    if (detail === null) return null
+    return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
+  },
+  announce: (offer) => {
+    // The mini player lives in the app window, the full-size countdown in
+    // the chrome over the video; either may be the one on screen.
+    send(EV.playerUpNext, offer)
+    player?.notifyChrome(EV.playerUpNext, offer)
+  },
+  advance: (next, toTv) => {
+    navigatePlayer(next.season, next.episode)
+    if (toTv) void beamNextToTv()
+  },
+})
 
 /**
  * Start playing, inline.
@@ -313,6 +433,7 @@ function openPlayer(
   // One player. Starting a second replaces the first rather than stacking two
   // videos in one window, which has no meaning.
   closePlayer(false)
+  upNext.reset()
 
   const [width = 1280, height = 800] = win.getContentSize()
 
@@ -349,7 +470,7 @@ function openPlayer(
       send(EV.playerPaused, !playing)
       // A pause is a stop the other device may pick up from: write the exact
       // place and send it now, rather than at the next five-second sample.
-      if (!playing && player) {
+      if (!playing && player && !onTv) {
         rememberPosition(player.context, player.position())
         pushPositions.now()
       }
@@ -402,7 +523,17 @@ function openPlayer(
      * and consumes the elapsed-time counter, neither of which belongs in a
      * periodic sample. Reaching the end while still playing is caught on exit.
      */
-    onPosition: (position) => rememberPosition(player?.context ?? context, position),
+    onPosition: (position) => {
+      // While casting, the muted local copy is not what anyone is watching.
+      if (onTv) return
+      rememberPosition(player?.context ?? context, position)
+    },
+    onPositionRead: (position) => {
+      if (onTv) return
+      const current = player?.context ?? context
+      const place = placeOf(current)
+      if (place !== null && isEpisodeEnd(position, current.runtimeMinutes)) void upNext.ended(place, false)
+    },
     /**
      * Save the place being left, and hand back the place to pick up at.
      *
@@ -556,7 +687,8 @@ function savedPositionFor(context: PlayRequest): number {
  */
 function leaveCurrent(): void {
   if (!player) return
-  const position = player.position()
+  // While casting, the television's place, not the muted copy's.
+  const position = onTv ? tvPosition : player.position()
   settleProgress(player.context, player.takeProgressMs(), position)
   // Leaving is when the other device most wants the place: not in ten seconds.
   pushPositions.now()
@@ -614,6 +746,7 @@ function closePlayer(announce = true): void {
   if (!player) return
 
   leaveCurrent()
+  upNext.reset()
   player.destroy()
   player = null
   videoPlaying = false
@@ -664,6 +797,10 @@ function navigatePlayer(season: number, episode: number): void {
   // would be credited to the one being moved to. After the check above, as on
   // the phone: a step that cannot happen leaves the episode playing unsettled.
   leaveCurrent()
+  // A new episode: its end is a new end, and any countdown is for the old one.
+  upNext.reset()
+  tvPosition = null
+  if (onTv) tvStale = true
 
   player.context = next
   player.candidates = selection.candidates
@@ -942,7 +1079,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
           })
     await sync?.load()
 
-    registerIpc({
+    ipc = registerIpc({
       store,
       sync,
       getMainWindow,
@@ -958,7 +1095,9 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       reloadPlayer: () => player?.reload(),
       setPlayerMini,
       setPlayerPaused: (paused) => player?.setPaused(paused),
-      setPlayerMuted: (muted) => player?.setMuted(muted),
+      setOnTv,
+      upNextNow: () => upNext.playNow(),
+      upNextCancel: () => upNext.cancel(),
       pressPlay: async () => player?.pressPlay(),
       cast,
       castNowPlaying: () => {

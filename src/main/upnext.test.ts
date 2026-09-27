@@ -5,7 +5,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Season } from '@shared/types'
-import { UP_NEXT_COUNTDOWN_MS, UpNextController, isEpisodeEnd, nextAiredEpisode, type NextEpisode, type UpNextOffer } from './upnext'
+import type { UpNextOffer } from '@shared/ipc'
+import { UP_NEXT_COUNTDOWN_MS, UpNextController, isEpisodeEnd, nextAiredEpisode, type NextEpisode } from './upnext'
 
 const NOW = new Date(2026, 8, 27, 20, 0, 0).getTime()
 
@@ -75,7 +76,7 @@ describe('nextAiredEpisode', () => {
 })
 
 describe('UpNextController', () => {
-  const place = { tmdbId: 7, season: 1, episode: 1, seasonCount: 2 }
+  const place = { tmdbId: 7, season: 1, episode: 1 }
   const next: NextEpisode = { season: 1, episode: 2, name: 'Two' }
 
   function controller(options: { enabled?: boolean; resolve?: NextEpisode | null } = {}) {
@@ -168,4 +169,31 @@ describe('UpNextController', () => {
     expect(offers).toEqual([])
     vi.useRealTimers()
   })
+
+  /** A backgrounded phone's timers run a minute late; its native ticks do not. */
+  it('plays a due offer when poked, before its own timer', async () => {
+    vi.useFakeTimers({ now: NOW })
+    const advanced: NextEpisode[] = []
+    let clock = NOW
+    const upNext = new UpNextController({
+      enabled: () => true,
+      resolve: async () => next,
+      announce: () => {},
+      advance: (episode) => advanced.push(episode),
+      now: () => clock,
+      // A timer that never fires, as a throttled one may not for a minute.
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    })
+
+    await upNext.ended(place, true)
+    clock = NOW + UP_NEXT_COUNTDOWN_MS - 1
+    upNext.poke()
+    expect(advanced).toEqual([])
+    clock = NOW + UP_NEXT_COUNTDOWN_MS
+    upNext.poke()
+    expect(advanced).toEqual([next])
+    vi.useRealTimers()
+  })
 })
+

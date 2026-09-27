@@ -82,6 +82,7 @@ interface CastNative {
   setVolume(options: { level?: number; muted?: boolean }): Promise<void>
   status(): Promise<CastStatus>
   addListener(event: 'castDevices', cb: (payload: { devices: CastDevice[] }) => void): Promise<{ remove(): void }>
+  addListener(event: 'castProgress', cb: (payload: CastProgress) => void): Promise<{ remove(): void }>
   addListener(
     event: 'castSession',
     cb: (payload: { state: string; deviceName: string; error?: number }) => void,
@@ -306,6 +307,22 @@ export interface CastBridge {
   forget(): Promise<void>
   onDevices(cb: (devices: CastDevice[]) => void): () => void
   onSession(cb: (state: string, deviceName: string) => void): () => void
+  /**
+   * The television's position, every five seconds while a stream is served
+   * to it, from native code — which, unlike a JavaScript timer, still runs
+   * promptly with the app in the background. See `progressTick` in
+   * `CastPlugin.java`.
+   */
+  onProgress(cb: (progress: CastProgress) => void): () => void
+}
+
+/** One `castProgress` event. */
+export interface CastProgress {
+  seconds: number
+  duration: number
+  playing: boolean
+  /** Played to the end; see `CastStatus.finished`. */
+  finished: boolean
 }
 
 export function createCastBridge(): CastBridge {
@@ -411,6 +428,7 @@ export function createCastBridge(): CastBridge {
           playing: false,
           seconds: 0,
           duration: 0,
+          finished: false,
           proxyRunning: false,
           volume: 0,
           muted: false,
@@ -451,6 +469,11 @@ export function createCastBridge(): CastBridge {
 
     onSession(cb): () => void {
       const handle = Cast.addListener('castSession', (payload) => cb(payload.state, payload.deviceName))
+      return () => void handle.then((h) => h.remove())
+    },
+
+    onProgress(cb): () => void {
+      const handle = Cast.addListener('castProgress', cb)
       return () => void handle.then((h) => h.remove())
     },
   }

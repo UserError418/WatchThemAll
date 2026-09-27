@@ -113,6 +113,9 @@ export interface IpcDeps {
   freshenPositions: () => Promise<void>
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
+  /** Auto-next: play the offered episode now, or not this time. */
+  upNextNow: () => void
+  upNextCancel: () => void
   /** The user, or the countdown, took the offer to switch. False if there was none. */
   acceptSuggestion: () => boolean
   /** Reload the embed currently playing, in place. */
@@ -139,13 +142,15 @@ export interface IpcDeps {
    */
   castNowPlaying: () => NowPlaying | null
   /**
-   * Silence the local copy while the television has it.
+   * The picture moved to the television, or came back.
    *
-   * See `PlayerWindow.setMuted` for why this is a mute and not a stop: the
-   * embed is the only thing that can fetch the next episode's stream, so it
-   * has to keep running for the remote's next-episode button to work at all.
+   * Silences the local copy while the television has it — see
+   * `PlayerWindow.setMuted` for why this is a mute and not a stop: the embed
+   * is the only thing that can fetch the next episode's stream, so it has to
+   * keep running for the remote's next-episode button to work at all — and
+   * from 1.9.8 also makes the television's own position the one recorded.
    */
-  setPlayerMuted: (muted: boolean) => void
+  setOnTv: (onTv: boolean) => void
   /** Click the provider's own play button, for a source that fetches nothing until pressed. */
   pressPlay: () => Promise<void>
   /**
@@ -171,7 +176,15 @@ export interface IpcDeps {
  */
 let pendingMal: MalEntry[] = []
 
-export function registerIpc(deps: IpcDeps): void {
+export interface IpcHandles {
+  /**
+   * The Cast button's own beam, for auto-next to send the next episode to the
+   * television by exactly the same path. See `CH.castBeam`.
+   */
+  beam(): Promise<{ ok: boolean; error?: string; final: boolean }>
+}
+
+export function registerIpc(deps: IpcDeps): IpcHandles {
   const { store, getMainWindow, openPlayer } = deps
   const providers = deps.allProviders
 
@@ -343,7 +356,7 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.castDisconnect, async () => {
     await cast.disconnect()
     // The picture is ours again, so give the sound back with it.
-    deps.setPlayerMuted(false)
+    deps.setOnTv(false)
   })
   ipcMain.handle(CH.castStatus, () => cast.status())
   ipcMain.handle(CH.castControl, (_e, action: 'play' | 'pause' | 'stop' | 'seek', seconds?: number) =>
@@ -366,9 +379,9 @@ export function registerIpc(deps: IpcDeps): void {
   let pressedForCastAt = 0
   const PRESS_FOR_CAST_EVERY_MS = 5_000
 
-  ipcMain.handle(CH.castBeam, async () => {
+  const beam = async (): Promise<{ ok: boolean; error?: string; final: boolean }> => {
     const now = deps.castNowPlaying()
-    if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON }
+    if (now === null) return { ok: false, error: NOTHING_PLAYING_REASON, final: false }
     const result = await cast.beam(now)
     if (result.waiting && Date.now() - pressedForCastAt >= PRESS_FOR_CAST_EVERY_MS) {
       pressedForCastAt = Date.now()
@@ -376,7 +389,7 @@ export function registerIpc(deps: IpcDeps): void {
     }
     // Only on success. A failed beam leaves the user watching here, and taking
     // the sound away from that would turn one disappointment into two.
-    if (result.ok) deps.setPlayerMuted(true)
+    if (result.ok) deps.setOnTv(true)
     // Succeeded or not, a beam that identified a stream measured the source:
     // filed, so the cast list knows it next time. See `recordCast`.
     if (result.learned && now.titleKey && now.providerId) {
@@ -385,7 +398,8 @@ export function registerIpc(deps: IpcDeps): void {
       )
     }
     return { ok: result.ok, error: result.error, final: !result.ok && result.learned !== undefined }
-  })
+  }
+  ipcMain.handle(CH.castBeam, beam)
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
 
@@ -453,6 +467,8 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(CH.playSetBounds, (_e, bounds: PlayerBounds) => deps.setPlayerBounds(bounds))
   ipcMain.handle(CH.playClose, () => deps.closePlayer())
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
+  ipcMain.handle(CH.playUpNextNow, () => deps.upNextNow())
+  ipcMain.handle(CH.playUpNextCancel, () => deps.upNextCancel())
   ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())
   // Strictly booleans: anything else from a renderer is a bug, not a request.
@@ -570,6 +586,7 @@ export function registerIpc(deps: IpcDeps): void {
   })
 
   assertEveryChannelHandled()
+  return { beam }
 }
 
 /**

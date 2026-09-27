@@ -72,6 +72,8 @@ export interface CastPlaybackStatus {
   playing: boolean
   seconds: number
   duration: number
+  /** Played to the end: IDLE with reason FINISHED. See `CastStatus.finished`. */
+  finished: boolean
   /**
    * The receiver's own volume, 0–1, and its mute.
    *
@@ -100,6 +102,7 @@ interface ReceiverPayload {
 interface MediaStatusEntry {
   mediaSessionId?: number
   playerState?: string
+  idleReason?: string
   currentTime?: number
   media?: { duration?: number }
 }
@@ -151,6 +154,7 @@ export class CastSession {
   private lastStatus: CastPlaybackStatus = {
     connected: false,
     playing: false,
+    finished: false,
     seconds: 0,
     duration: 0,
     volume: 0,
@@ -409,7 +413,7 @@ export class CastSession {
    */
   async status(): Promise<CastPlaybackStatus> {
     if (!this.transportId) {
-      return { connected: false, playing: false, seconds: 0, duration: 0, volume: 0, muted: false }
+      return { connected: false, playing: false, seconds: 0, duration: 0, finished: false, volume: 0, muted: false }
     }
     try {
       const answer = await this.request(
@@ -437,6 +441,9 @@ export class CastSession {
       ...this.lastStatus,
       connected: true,
       playing: entry.playerState === 'PLAYING',
+      // Held until the next status says otherwise: a finished receiver often
+      // drops the media from later answers, which carry no entry at all.
+      finished: entry.playerState === 'IDLE' && entry.idleReason === 'FINISHED',
       seconds: entry.currentTime ?? this.lastStatus.seconds,
       duration: entry.media?.duration ?? this.lastStatus.duration,
     }

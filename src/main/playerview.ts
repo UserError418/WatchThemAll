@@ -239,10 +239,15 @@ export interface InlinePlayerOptions {
    * The position used to be written down only when the view was torn down or
    * navigated away from, which meant a crash, a forced quit or the machine
    * losing power threw away the whole session's progress. Sampling into the
-   * store instead costs one coalesced write a minute and makes "where was I"
-   * survive anything.
+   * store every five seconds (`PERSIST_EVERY_MS`) makes "where was I" survive
+   * anything.
    */
   onPosition?: (position: VideoPosition) => void
+  /**
+   * Every reading, every poll — for what cannot wait five seconds: the end of
+   * the episode, which starts auto-next (`upnext.ts`).
+   */
+  onPositionRead?: (position: VideoPosition) => void
   /**
    * URL of the floating chrome document, served by the local renderer server.
    *
@@ -1034,6 +1039,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         lastPosition = found
         judgeRuntime(found)
         maybePersist(found)
+        options.onPositionRead?.(found)
       })
       .catch(() => {})
   }, POSITION_POLL_MS)

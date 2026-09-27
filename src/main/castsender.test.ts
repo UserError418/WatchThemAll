@@ -55,6 +55,8 @@ class FakeReceiver {
   ignoreLaunch = false
   /** Media commands dropped for lacking a requestId, as a real receiver drops them. */
   readonly ignoredForNoRequestId: string[] = []
+  /** Set to answer GET_STATUS as a receiver that played the media to its end. */
+  finished = false
 
   async listen(): Promise<number> {
     const server = createServer({ key: TEST_KEY, cert: TEST_CERT }, (socket) => {
@@ -175,7 +177,9 @@ class FakeReceiver {
         requestId,
         type: 'MEDIA_STATUS',
         status: [
-          { mediaSessionId: 7, playerState: 'PAUSED', currentTime: 99, media: { duration: 8348.5 } },
+          this.finished
+            ? { mediaSessionId: 7, playerState: 'IDLE', idleReason: 'FINISHED' }
+            : { mediaSessionId: 7, playerState: 'PAUSED', currentTime: 99, media: { duration: 8348.5 } },
         ],
       })
     }
@@ -310,12 +314,29 @@ describe('CastSession', () => {
       playing: false, // GET_STATUS answers PAUSED
       seconds: 99,
       duration: 8348.5,
+      finished: false,
       // The receiver's own volume, which arrives on a different namespace to
       // everything else here — this fake's LAUNCH answer carries none, so the
       // floor is what a caller sees until a RECEIVER_STATUS turns up.
       volume: 0,
       muted: false,
     })
+  })
+
+  /**
+   * What starts auto-next on the television. A finished receiver reports no
+   * media at all, so the length is the one it last reported.
+   */
+  it('reports a receiver that played to the end', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+    await session.load(MEDIA)
+    await session.status()
+
+    receiver.finished = true
+    expect(await session.status()).toMatchObject({ playing: false, finished: true, duration: 8348.5 })
   })
 
   it('answers a PING from the receiver, or the receiver hangs up on us', async () => {

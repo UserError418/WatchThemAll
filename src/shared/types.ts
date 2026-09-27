@@ -892,6 +892,11 @@ export interface Settings {
    */
   skipIntro: boolean
   /**
+   * At the end of an episode, count down five seconds and play the next one.
+   * Series only; see `main/upnext.ts`. On by default (the owner, 2026-09-27).
+   */
+  autoNext: boolean
+  /**
    * How sources are ordered within each group — works, may work, does not
    * work — for the source lists and for Automatic alike. Every key, once, in
    * priority order. `list` orders completely, so anything after it never gets

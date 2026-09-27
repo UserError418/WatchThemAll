@@ -54,6 +54,7 @@ import type {
   SkipOffer,
   TitleProviderState,
   TitleRef,
+  UpNextOffer,
   WtaChromeApi,
 } from '@shared/ipc'
 
@@ -64,6 +65,10 @@ export interface ChromeDeps {
   /** The same, read once — see `onContext` for why a subscription is not enough. */
   currentState(): PlayerState | null
   subscribeSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
+  /** The next-episode countdown, and the two answers to it. See `main/upnext.ts`. */
+  subscribeUpNext(cb: (offer: UpNextOffer | null) => void): () => void
+  upNextNow(): void
+  upNextCancel(): void
   /** The chrome's Back: shrink the player into the corner (see `setMini`). */
   minimize(): void
   subscribeMini(cb: (mini: boolean) => void): () => void
@@ -146,6 +151,9 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     },
 
     onSuggestion: (cb) => deps.subscribeSuggestion(cb),
+    onUpNext: (cb) => deps.subscribeUpNext(cb),
+    upNextNow: async () => deps.upNextNow(),
+    upNextCancel: async () => deps.upNextCancel(),
     onMini: (cb) => deps.subscribeMini(cb),
     onSkipOffer: never<SkipOffer | null>,
     onPointerTop: never<boolean>,

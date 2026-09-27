@@ -285,6 +285,7 @@ public class CastPlugin extends Plugin {
             int port = proxy.start();
             proxy.load(toMap(playlistsIn), toMap(targetsIn), toMap(headersIn));
             CastKeepAliveService.start(getContext());
+            startProgress();
 
             JSObject result = new JSObject();
             result.put("base", "http://" + address + ":" + port + "/");
@@ -298,6 +299,7 @@ public class CastPlugin extends Plugin {
     public void stopProxy(PluginCall call) {
         proxy.stop();
         CastKeepAliveService.stop(getContext());
+        stopProgress();
         call.resolve();
     }
 
@@ -452,6 +454,7 @@ public class CastPlugin extends Plugin {
             if (castContext != null) castContext.getSessionManager().endCurrentSession(true);
             proxy.stop();
             CastKeepAliveService.stop(getContext());
+            stopProgress();
             call.resolve();
         });
     }
@@ -613,20 +616,73 @@ public class CastPlugin extends Plugin {
                 result.put("muted", false);
             }
 
-            if (client != null) {
-                result.put("playing", client.isPlaying());
-                result.put("seconds", client.getApproximateStreamPosition() / 1000.0);
-                result.put("duration", client.getStreamDuration() / 1000.0);
-                MediaStatus status = client.getMediaStatus();
-                result.put("idleReason", status != null ? status.getIdleReason() : 0);
-            } else {
-                result.put("playing", false);
-                result.put("seconds", 0);
-                result.put("duration", 0);
-                result.put("idleReason", 0);
-            }
+            putPlayback(result, client);
             call.resolve(result);
         });
+    }
+
+    /**
+     * Where the television is: position, length, playing, and whether it
+     * played to the end (IDLE with reason FINISHED, as opposed to paused or
+     * stopped) — what starts auto-next on the television (main/upnext.ts).
+     * Shared by `status` and the progress ticker so the two cannot disagree.
+     */
+    private static void putPlayback(JSObject result, RemoteMediaClient client) {
+        if (client == null) {
+            result.put("playing", false);
+            result.put("seconds", 0);
+            result.put("duration", 0);
+            result.put("idleReason", 0);
+            result.put("finished", false);
+            return;
+        }
+        MediaStatus status = client.getMediaStatus();
+        result.put("playing", client.isPlaying());
+        result.put("seconds", client.getApproximateStreamPosition() / 1000.0);
+        result.put("duration", client.getStreamDuration() / 1000.0);
+        result.put("idleReason", status != null ? status.getIdleReason() : 0);
+        result.put(
+            "finished",
+            status != null
+                && status.getPlayerState() == MediaStatus.PLAYER_STATE_IDLE
+                && status.getIdleReason() == MediaStatus.IDLE_REASON_FINISHED
+        );
+    }
+
+    /**
+     * The television's position, pushed to JavaScript every five seconds while
+     * a stream is served to it (`castProgress`).
+     *
+     * Pushed from here rather than polled from JavaScript because, measured on
+     * the emulator (2026-09-27), a backgrounded app's JavaScript timers run
+     * once a minute even with the keep-alive service up — and a phone casting
+     * is usually a phone in a pocket. An event from native code is not a
+     * timer, and runs at once. It drives the position being saved and synced,
+     * the television's end being noticed, and auto-next's countdown.
+     */
+    private static final long PROGRESS_EVERY_MS = 5_000L;
+    private final Handler progressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressTick = new Runnable() {
+        @Override
+        public void run() {
+            CastSession session = currentSession();
+            RemoteMediaClient client = session != null && session.isConnected() ? session.getRemoteMediaClient() : null;
+            if (client != null && client.getMediaStatus() != null) {
+                JSObject payload = new JSObject();
+                putPlayback(payload, client);
+                notifyListeners("castProgress", payload);
+            }
+            progressHandler.postDelayed(this, PROGRESS_EVERY_MS);
+        }
+    };
+
+    private void startProgress() {
+        progressHandler.removeCallbacks(progressTick);
+        progressHandler.postDelayed(progressTick, PROGRESS_EVERY_MS);
+    }
+
+    private void stopProgress() {
+        progressHandler.removeCallbacks(progressTick);
     }
 
     private CastSession currentSession() {
@@ -660,6 +716,7 @@ public class CastPlugin extends Plugin {
         public void onSessionEnded(CastSession session, int error) {
             proxy.stop();
             CastKeepAliveService.stop(getContext());
+            stopProgress();
             notifyListeners("castSession", statusObject("ended", session));
         }
 
@@ -668,6 +725,7 @@ public class CastPlugin extends Plugin {
             settleConnect(false, "the TV refused the connection (code " + error + ")");
             proxy.stop();
             CastKeepAliveService.stop(getContext());
+            stopProgress();
             JSObject payload = statusObject("failed", session);
             payload.put("error", error);
             notifyListeners("castSession", payload);
@@ -686,6 +744,7 @@ public class CastPlugin extends Plugin {
             // server running for a session that does not exist.
             proxy.stop();
             CastKeepAliveService.stop(getContext());
+            stopProgress();
             JSObject payload = statusObject("failed", session);
             payload.put("error", error);
             notifyListeners("castSession", payload);
