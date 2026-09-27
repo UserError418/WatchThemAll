@@ -13,20 +13,11 @@
  * every popup denied. Embed pages are an ad-injection surface and will try.
  */
 
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, screen, shell } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { suppressEmbedChrome } from './embedchrome'
-
-interface WindowState {
-  width: number
-  height: number
-  x?: number
-  y?: number
-  maximized?: boolean
-}
-
-const DEFAULT_STATE: WindowState = { width: 1440, height: 900 }
+import { DEFAULT_STATE, fitToDisplay, type WindowState } from './windowstate'
 
 export function loadWindowState(dir: string): WindowState {
   const file = join(dir, 'window-state.json')
@@ -41,6 +32,10 @@ export function loadWindowState(dir: string): WindowState {
 }
 
 export function saveWindowState(dir: string, win: BrowserWindow): void {
+  // A fullscreen window's bounds are the display's. Saved, they became the
+  // next launch's window size, and its bottom went under the screen's edge
+  // (`fitToDisplay`). The state from before fullscreen is already on disk.
+  if (win.isFullScreen()) return
   try {
     mkdirSync(dir, { recursive: true })
     // `getBounds()` on a maximized window reports the maximized size, which
@@ -68,7 +63,12 @@ export function createAppWindow(
   /** Loopback server base URL; null when Vite is serving in dev. */
   rendererBaseUrl: string | null,
 ): BrowserWindow {
-  const state = loadWindowState(dataDir)
+  const saved = loadWindowState(dataDir)
+  const display =
+    saved.x !== undefined && saved.y !== undefined
+      ? screen.getDisplayMatching({ x: saved.x, y: saved.y, width: saved.width, height: saved.height })
+      : screen.getPrimaryDisplay()
+  const state = fitToDisplay(saved, display.workArea)
 
   const win = new BrowserWindow({
     width: state.width,
