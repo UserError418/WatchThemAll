@@ -230,7 +230,11 @@ interface Identified {
  * exactly like the real thing - see `isWholeVideoFile`. They are skipped rather
  * than reported as an error, because a later candidate is usually the real one.
  */
-async function identifyStream(candidates: Candidate[]): Promise<Identified | null> {
+async function identifyStream(
+  candidates: Candidate[],
+  /** Filled with every playlist body read along the way, by URL. */
+  playlists: Map<string, string>,
+): Promise<Identified | null> {
   /** The first playlist seen, used only if no whole file turns up. */
   let playlist: Identified | null = null
 
@@ -247,6 +251,7 @@ async function identifyStream(candidates: Candidate[]): Promise<Identified | nul
     if (response.status !== 200 && response.status !== 206) continue
 
     if (isPlaylist(response.body)) {
+      playlists.set(candidate.url, response.body)
       playlist ??= { url: candidate.url, headers, kind: 'hls' }
       continue
     }
@@ -344,7 +349,8 @@ export function createCastBridge(): CastBridge {
           return { ok: false, error: 'Nothing to cast yet — start playing first, then try again.' }
         }
 
-        const stream = await identifyStream(candidates)
+        const readAlready = new Map<string, string>()
+        const stream = await identifyStream(candidates, readAlready)
         if (stream === null) {
           return {
             ok: false,
@@ -354,6 +360,10 @@ export function createCastBridge(): CastBridge {
 
         delivery = stream.kind === 'hls' ? 'segmented' : 'progressive'
         const bundle = await buildCastBundle(stream.url, stream.kind === 'hls' ? 'hls' : 'progressive', async (url) => {
+          // The master playlist, and often its variants, were read seconds ago
+          // while identifying the stream; the player itself fetched them too.
+          const known = readAlready.get(url)
+          if (known !== undefined) return known
           const response = await Cast.fetchText({ url, headers: stream.headers, limitBytes: SNIFF_LIMIT_BYTES })
           if (response.status !== 200 && response.status !== 206) {
             throw new Error(`the source answered ${response.status}`)
