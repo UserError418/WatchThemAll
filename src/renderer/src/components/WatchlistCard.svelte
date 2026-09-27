@@ -254,7 +254,7 @@
   when the pointer moves onto it is a control nobody can press.
 -->
 <div
-  class="card"
+  class="card watchlist-card"
   class:open
   onmouseenter={onEnter}
   onmouseleave={onLeave}

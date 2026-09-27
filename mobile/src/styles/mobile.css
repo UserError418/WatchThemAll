@@ -81,15 +81,15 @@
   --poster-width: 104px;
 
   /*
-    Two Watchlist cards across, not one.
+    The Watchlist's cards, in rows (see "Watchlist rows" below).
 
-    The desktop's 190px floor is more than half of a phone's 348px column, so
-    the grid fell to a single poster the full width of the screen — one title
-    per screenful, the density complaint the owner made about Browse. Two, not
-    Browse's three: these cards carry a title, a position line and, on tap, a
-    panel of controls, which a third of the screen cannot hold.
+    118px is 70% of the 168px the two-across grid drew them at: the owner asked
+    (2026-09-27) for each band to scroll sideways like Browse, with cards about
+    30% smaller, so that every band shows at once instead of one band filling
+    the screen. It fits three across with part of a fourth showing, which is
+    what tells a thumb there is more.
   */
-  --wl-card: 150px;
+  --wl-card: 118px;
 
   /* ── Rhythm ──────────────────────────────────────────────────────────── */
 
@@ -483,6 +483,56 @@ body {
 :root .filters {
   flex-wrap: wrap !important;
   row-gap: var(--space-2);
+}
+
+/* ── Watchlist rows ────────────────────────────────────────────────────────
+ *
+ * Each band — Nearly finished, Continue watching, and the rest — is one row
+ * that scrolls sideways, as Browse's rows do, instead of a two-across grid.
+ * The owner's request (2026-09-27): with the grid, "Nearly finished" alone
+ * filled the screen and the bands below were a long scroll away; as rows,
+ * every band is on the first screen and a thumb moves along the one it wants.
+ *
+ * The same scroller as `RowShell`'s track: snapping to a card's edge, with
+ * `scroll-padding` so the snap does not scroll the first card under the inset,
+ * and the row running to the screen's edges while its first card lines up
+ * with the heading above it. The top padding is headroom for an opened card,
+ * which lifts by 6px and would otherwise be clipped by the scroller.
+ */
+:root .watchlist-row {
+  display: flex !important;
+  gap: var(--space-3) !important;
+  margin-inline: calc(-1 * var(--space-6));
+  padding: var(--space-2) var(--space-6) var(--space-1) !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: var(--space-6);
+  scrollbar-width: none;
+}
+
+:root .watchlist-row::-webkit-scrollbar {
+  display: none;
+}
+
+:root .watchlist-row > * {
+  flex: 0 0 var(--wl-card);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/*
+  An opened card's buttons, on two lines. At 118px the desktop's single row
+  left the Resume button about twenty pixels beside the three round icons, so
+  it now takes the first line to itself and the icons sit under it.
+*/
+:root .watchlist-card .buttons {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
+:root .watchlist-card .buttons .go {
+  flex: 1 0 100%;
 }
 
 /* ── Episode rows ──────────────────────────────────────────────────────────

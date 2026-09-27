@@ -90,7 +90,8 @@
           <span class="hint">{group.hint}</span>
         </header>
 
-        <div class="grid">
+        <!-- `watchlist-row`: the phone sheet turns each band into a row; see mobile.css. -->
+        <div class="grid watchlist-row">
           {#each group.items as item, index (item.entry.id)}
             <div in:fly={stagger(index)}>
               <WatchlistCard entry={item.entry} activity={item.activity} {onselect} />
