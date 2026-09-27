@@ -106,6 +106,11 @@ export interface IpcDeps {
   setPlayerBounds: (bounds: PlayerBounds) => void
   /** Stop playing and put the app's chrome back. */
   closePlayer: () => void
+  /**
+   * Bring the resume points up to date from the other device, briefly; see
+   * `PositionsChannel.freshen`. A no-op without sync.
+   */
+  freshenPositions: () => Promise<void>
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
   /** The user, or the countdown, took the offer to switch. False if there was none. */
@@ -384,7 +389,7 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
 
-  ipcMain.handle(CH.playOpen, (_e, req: PlayRequest) => {
+  ipcMain.handle(CH.playOpen, async (_e, req: PlayRequest) => {
     /**
      * Only providers the user has enabled, in the order they arranged them.
      *
@@ -408,6 +413,9 @@ export function registerIpc(deps: IpcDeps): void {
      * seek-after-load stays as the fallback for providers that read no
      * parameter, and stands down on its own when one of these does.
      */
+    // The other device may have played this moments ago; its place is worth up
+    // to a second and a half of waiting.
+    await deps.freshenPositions()
     const selection = buildPlayUrl(enabled, req, resumeOfferFor(store.read().resumePoints, req))
     if (selection) {
       openPlayer(selection.url, req.title, req, selection.candidates)

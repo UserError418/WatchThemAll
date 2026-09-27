@@ -27,12 +27,15 @@ import {
 import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
+import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
 import type { TokenStore } from './synctokens'
 
 export interface SyncServiceOptions {
   host: SyncHost
+  /** The resume points, for the positions file; see `sync/positions.ts`. */
+  positionsHost: PositionsHost
   tokens: TokenStore
   /** Called whenever the status changes, so main can push it to the renderer. */
   onStatus: (status: SyncStatus) => void
@@ -42,6 +45,7 @@ export class SyncService {
   private credentials: StoredCredentials | null = null
   private access: OAuthTokens | null = null
   private runner: SyncRunner | null = null
+  private positionsChannel: PositionsChannel | null = null
   private pairing: AbortController | null = null
 
   private state: SyncStatus = {
@@ -195,6 +199,7 @@ export class SyncService {
     this.credentials = null
     this.access = null
     this.runner = null
+    this.positionsChannel = null
     await this.options.tokens.clear()
     this.update({ state: 'off', accountEmail: null, error: null, challenge: null })
   }
@@ -239,5 +244,31 @@ export class SyncService {
   syncSoon(): void {
     if (this.credentials === null) return
     void this.now()
+    void this.positions()
+  }
+
+  /**
+   * Sync the positions file only: a few kilobytes, on its own schedule.
+   *
+   * Called every ten seconds or so while something plays, at once when it
+   * stops, and before a title resumes. Never touches the status line; see
+   * `createPositionsChannel`.
+   */
+  async positions(): Promise<void> {
+    await this.positionsChannelFor()?.sync()
+  }
+
+  /** Before a resume: see `PositionsChannel.freshen`. */
+  async freshenPositions(): Promise<void> {
+    await this.positionsChannelFor()?.freshen()
+  }
+
+  private positionsChannelFor(): PositionsChannel | null {
+    if (this.credentials === null) return null
+    this.positionsChannel ??= createPositionsChannel({
+      host: this.options.positionsHost,
+      accessToken: () => this.accessToken(),
+    })
+    return this.positionsChannel
   }
 }

@@ -764,12 +764,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * tried because providers nest the player in iframes and which one holds the
    * video differs per provider and sometimes per load.
    *
-   * Four seconds is chosen against what is lost when the app dies without
-   * closing cleanly: at worst the user goes back four seconds. Polling faster
-   * would buy nothing anyone could notice and runs script in every frame of an
-   * untrusted page for it.
+   * Two and a half seconds: the position is saved every second poll (five
+   * seconds, see `PERSIST_EVERY_MS`), and the end of an episode, which starts
+   * the next-episode countdown, is noticed within a poll of the last frame.
+   * It was four until auto-next needed the end sooner; faster than this runs
+   * script in every frame of an untrusted page for nothing anyone would notice.
    */
-  const POSITION_POLL_MS = 4_000
+  const POSITION_POLL_MS = 2_500
 
   let lastPosition: VideoPosition | null = null
 
@@ -1040,12 +1041,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   /**
    * Hand a reading to the host, but not on every poll.
    *
-   * The poll is every four seconds because the resume seek and the stall
-   * watchdog want a recent number; the *store* does not need that resolution,
-   * and writing at that rate would serialise the whole document fifteen times a
-   * minute. Thirty seconds is the most anyone loses to a hard crash.
+   * Every five seconds, which is every second poll: the most anyone loses to
+   * a crash, and the pace at which the position reaches the other device
+   * through the positions file (`sync/positions.ts`). It was thirty seconds
+   * until 1.9.8, when the owner asked for positions to cross devices within
+   * seconds. A paused video writes nothing — see `WrittenPositions`.
    */
-  const PERSIST_EVERY_MS = 30_000
+  const PERSIST_EVERY_MS = 5_000
   let lastPersistedAt = 0
 
   const maybePersist = (found: VideoPosition): void => {

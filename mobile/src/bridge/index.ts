@@ -120,12 +120,22 @@ import { Signal } from './events'
 import { MobileStore } from './store'
 import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
+import { throttle } from '@shared/sync/throttle'
 import type { SyncStatus } from '@shared/sync/types'
 import { unreadableLibrary } from '@shared/store/core'
 import { batchChanges } from '@shared/store/changebatch'
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
 const SYNC_AFTER_WRITE_MS = 8_000
+
+/** The positions file's pace while positions keep changing. Matches the desktop. */
+const POSITIONS_PUSH_MS = 10_000
+
+/**
+ * How often the position is written while something plays, from whatever
+ * readings arrive. Matches the desktop's `PERSIST_EVERY_MS`.
+ */
+const POSITION_WRITE_MS = 5_000
 
 export async function createBridge(): Promise<WtaApi> {
   const store = new MobileStore()
@@ -186,6 +196,19 @@ export async function createBridge(): Promise<WtaApi> {
    */
   let applyingRemote = false
   const sync = createMobileSync({
+    positionsHost: {
+      read: () => store.raw().resumePoints,
+      adopt: (points) => {
+        // Flagged like the library's write below, so taking the other device's
+        // position does not schedule a push of it straight back.
+        applyingRemote = true
+        try {
+          store.adoptRecords('resumePoints', points)
+        } finally {
+          applyingRemote = false
+        }
+      },
+    },
     host: {
       read: () => store.raw(),
       write: async (document) => {
@@ -221,9 +244,25 @@ export async function createBridge(): Promise<WtaApi> {
    * Same reasoning and same delay as the desktop: a burst of marks becomes one
    * sync, and nothing is lost by pushing it a few seconds late.
    */
+  /**
+   * The positions push: every change asks, at most one push per ten seconds
+   * goes out, and a stop (pause, close, next episode, the app leaving the
+   * foreground) sends one at once. Ten seconds is the owner's number
+   * (2026-09-27); the file is a few kilobytes. See `sync/positions.ts`.
+   */
+  const pushPositions = throttle(() => void sync.positions(), POSITIONS_PUSH_MS)
+
   let writeSyncTimer: ReturnType<typeof setTimeout> | null = null
-  store.subscribe(() => {
+  store.subscribe((key) => {
     if (applyingRemote) return
+    // Positions change every five seconds while something plays. They go by
+    // the positions file on its own pace; debounced here, they would hold the
+    // library sync off until playback stopped. The library still gets them
+    // with its next sync.
+    if (key === 'resumePoints') {
+      pushPositions.request()
+      return
+    }
     if (writeSyncTimer !== null) clearTimeout(writeSyncTimer)
     writeSyncTimer = setTimeout(() => {
       writeSyncTimer = null
@@ -358,6 +397,8 @@ export async function createBridge(): Promise<WtaApi> {
     episodeOpenedAt: number
     candidateShownAt: number
     candidateReported: boolean
+    /** When a reading was last written as the position; see `POSITION_WRITE_MS`. */
+    writtenAt: number
   }
 
   let progress: Progress | null = null
@@ -369,6 +410,12 @@ export async function createBridge(): Promise<WtaApi> {
     onMediaState: (playing) => {
       videoPlaying = playing
       playerPaused.emit(!playing)
+      // A pause is a stop the other device may pick up from: write the exact
+      // place and send it now, rather than at the next five-second sample.
+      if (!playing && session) {
+        rememberPosition(session.req)
+        pushPositions.now()
+      }
     },
 
     /**
@@ -432,6 +479,14 @@ export async function createBridge(): Promise<WtaApi> {
 
       progress.reading = reading
       progress.candidateReported = true
+
+      // Written as it goes, not only when the player is left: Android can kill
+      // the app at any moment, and until 1.9.8 everything since the last
+      // close, switch or reload went with it.
+      if (Date.now() - progress.writtenAt >= POSITION_WRITE_MS) {
+        progress.writtenAt = Date.now()
+        rememberPosition(session.req)
+      }
     },
   })
   const chrome = createChromeOverlay()
@@ -764,6 +819,9 @@ export async function createBridge(): Promise<WtaApi> {
 
     rememberPosition(req)
 
+    // Leaving is when the other device most wants the place: not in ten seconds.
+    pushPositions.now()
+
     const playedMs = Date.now() - progress.episodeOpenedAt
     const watched = isWatchedEnough({
       seconds: reading?.seconds ?? null,
@@ -1037,7 +1095,11 @@ export async function createBridge(): Promise<WtaApi> {
    * is the last callback guaranteed to run.
    */
   void CapacitorApp.addListener('pause', () => {
+    // The exact place first: Android may not let this process run again for a
+    // while, and the last five-second sample could be up to five seconds old.
+    if (session) rememberPosition(session.req)
     void store.flush().catch(() => {})
+    pushPositions.now()
   })
 
   /**
@@ -1389,6 +1451,9 @@ export async function createBridge(): Promise<WtaApi> {
        * position perfectly and then starts the episode from the beginning,
        * which is exactly how it was reported.
        */
+      // The other device may have played this moments ago; its place is worth
+      // up to a second and a half of waiting. See `PositionsChannel.freshen`.
+      await sync.freshenPositions()
       const selection = buildPlayUrl(
         enabled,
         req,
@@ -1415,6 +1480,7 @@ export async function createBridge(): Promise<WtaApi> {
         episodeOpenedAt: now,
         candidateShownAt: now,
         candidateReported: false,
+        writtenAt: now,
       }
       showCandidate(0)
       chrome.open()

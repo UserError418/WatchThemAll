@@ -38,6 +38,7 @@ import {
 import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
+import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
 import { dualStackFetch } from './net'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
@@ -67,6 +68,8 @@ async function readCredentials(): Promise<StoredCredentials | null> {
 
 export interface MobileSyncOptions {
   host: SyncHost
+  /** The resume points, for the positions file; see `sync/positions.ts`. */
+  positionsHost: PositionsHost
   onStatus: (status: SyncStatus) => void
 }
 
@@ -80,6 +83,7 @@ export function createMobileSync(options: MobileSyncOptions) {
   let credentials: StoredCredentials | null = null
   let access: OAuthTokens | null = null
   let runner: SyncRunner | null = null
+  let positionsChannel: PositionsChannel | null = null
   let pairing: AbortController | null = null
 
   let state: SyncStatus = {
@@ -145,11 +149,29 @@ export function createMobileSync(options: MobileSyncOptions) {
     }
   }
 
+  /**
+   * Sync the positions file only: a few kilobytes, on its own schedule.
+   *
+   * Called every ten seconds or so while something plays, at once when it
+   * stops, and before a title resumes. Never touches the status line; see
+   * `createPositionsChannel`.
+   */
+  const positionsChannelFor = (): PositionsChannel | null => {
+    if (credentials === null) return null
+    positionsChannel ??= createPositionsChannel({ host: options.positionsHost, accessToken, fetchImpl: dualStackFetch })
+    return positionsChannel
+  }
+
+  const positions = async (): Promise<void> => {
+    await positionsChannelFor()?.sync()
+  }
+
   const disconnect = async (): Promise<void> => {
     pairing?.abort()
     credentials = null
     access = null
     runner = null
+    positionsChannel = null
     await Preferences.remove({ key: TOKEN_KEY })
     update({ state: 'off', accountEmail: null, error: null, challenge: null })
   }
@@ -239,7 +261,16 @@ export function createMobileSync(options: MobileSyncOptions) {
 
     /** For the automatic triggers, where nobody is waiting and offline is normal. */
     soon(): void {
-      if (credentials !== null) void now()
+      if (credentials === null) return
+      void now()
+      void positions()
+    },
+
+    positions,
+
+    /** Before a resume: see `PositionsChannel.freshen`. */
+    async freshenPositions(): Promise<void> {
+      await positionsChannelFor()?.freshen()
     },
   }
 }

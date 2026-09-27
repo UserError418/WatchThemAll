@@ -26,6 +26,9 @@
 
 import { mergeResumePoints } from '../store/merge'
 import type { RecordOf } from '../store/document'
+import type { FetchLike } from './devicecode'
+import { createDriveBackend } from './drive'
+import { CoalescingRunner } from './engine'
 import type { SyncBackend } from './types'
 
 /** The filename in the user's Drive, next to the library. */
@@ -111,4 +114,66 @@ export async function syncPositions(
   if (pushed) await backend.push(outgoing, remote?.version ?? null)
 
   return { adopted, pushed }
+}
+
+export interface PositionsChannelOptions {
+  host: PositionsHost
+  /** A token that is valid now; the sync service's own. */
+  accessToken: () => Promise<string>
+  fetchImpl?: FetchLike
+}
+
+export interface PositionsChannel {
+  /** One positions sync, coalesced with any in flight. Null when it failed. */
+  sync(): Promise<PositionsOutcome | null>
+  /**
+   * Bring the positions up to date before a title resumes, without holding
+   * playback up for long: nothing at all if a sync finished moments ago,
+   * otherwise one, waited on for at most `FRESHEN_WAIT_MS`. A slow network
+   * starts the title from what this device knows, as it always did.
+   */
+  freshen(): Promise<void>
+}
+
+/** A sync this recent is fresh enough to resume from. */
+const FRESH_FOR_MS = 15_000
+/** The longest a resume waits for the positions file. */
+const FRESHEN_WAIT_MS = 1_500
+
+/**
+ * The positions file as a sync service holds it: one backend (so its
+ * checksum cache survives between runs) behind one coalescing runner.
+ *
+ * Quiet on purpose. It runs every ten seconds during playback, so it never
+ * touches the status line, and a failure is logged rather than shown: the
+ * next run tries again within seconds, and the library sync, which does
+ * report, carries the same positions on its own schedule.
+ */
+export function createPositionsChannel(options: PositionsChannelOptions): PositionsChannel {
+  const backend = createDriveBackend<PositionsDocument>({
+    accessToken: options.accessToken,
+    fetchImpl: options.fetchImpl,
+    name: POSITIONS_NAME,
+  })
+  const runner = new CoalescingRunner(() => syncPositions(options.host, backend))
+  let syncedAt = -Infinity
+
+  const sync = async (): Promise<PositionsOutcome | null> => {
+    try {
+      const outcome = await runner.request()
+      syncedAt = Date.now()
+      return outcome
+    } catch (error) {
+      console.warn('[sync] positions:', error instanceof Error ? error.message : error)
+      return null
+    }
+  }
+
+  return {
+    sync,
+    async freshen() {
+      if (Date.now() - syncedAt < FRESH_FOR_MS) return
+      await Promise.race([sync(), new Promise((resolve) => setTimeout(resolve, FRESHEN_WAIT_MS))])
+    },
+  }
 }

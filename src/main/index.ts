@@ -59,6 +59,7 @@ import {
 } from './catalog'
 import { fileCatalogStore } from './catalogcache'
 import { oauthClient } from '@shared/sync/credentials'
+import { throttle } from '@shared/sync/throttle'
 import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
 import { localMidnight } from '@shared/aired'
@@ -128,8 +129,23 @@ let sync: SyncService | null = null
  */
 const SYNC_AFTER_WRITE_MS = 8_000
 
+/**
+ * Push the positions file at most this often while positions keep changing.
+ *
+ * The owner's number (2026-09-27): a position should reach the other device
+ * within about ten seconds. It is a few kilobytes, so this costs next to
+ * nothing; the library file keeps `SYNC_AFTER_WRITE_MS`. See `sync/positions.ts`.
+ */
+const POSITIONS_PUSH_MS = 10_000
+
 /** True while sync is writing a merge result, rather than the user changing something. */
 let applyingRemote = false
+
+/**
+ * The positions push: every change asks, at most one push per ten seconds
+ * goes out, and a stop (pause, close, next episode, quit) sends one at once.
+ */
+const pushPositions = throttle(() => void sync?.positions(), POSITIONS_PUSH_MS)
 let mainWindow: BrowserWindow | null = null
 let stopReleaseTimer: (() => void) | null = null
 /** Cleared on quit so a pending refresh cannot outlive the app. */
@@ -331,6 +347,12 @@ function openPlayer(
     onPlayingChange: (playing) => {
       videoPlaying = playing
       send(EV.playerPaused, !playing)
+      // A pause is a stop the other device may pick up from: write the exact
+      // place and send it now, rather than at the next five-second sample.
+      if (!playing && player) {
+        rememberPosition(player.context, player.position())
+        pushPositions.now()
+      }
     },
     /*
       The skip-intro offer, and the switch that governs it.
@@ -536,6 +558,8 @@ function leaveCurrent(): void {
   if (!player) return
   const position = player.position()
   settleProgress(player.context, player.takeProgressMs(), position)
+  // Leaving is when the other device most wants the place: not in ten seconds.
+  pushPositions.now()
 }
 
 /** Tell the app's chrome what is playing, so it can label itself. */
@@ -886,6 +910,19 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       oauthClient() === null
         ? null
         : new SyncService({
+            positionsHost: {
+              read: () => store.raw().resumePoints,
+              adopt: (points) => {
+                // Flagged like the library's write below, so taking the other
+                // device's position does not schedule a push of it straight back.
+                applyingRemote = true
+                try {
+                  store.adoptRecords('resumePoints', points)
+                } finally {
+                  applyingRemote = false
+                }
+              },
+            },
             host: {
               read: () => store.raw(),
               write: async (document) => {
@@ -913,6 +950,9 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       openPlayer,
       setPlayerBounds: (bounds) => player?.setBounds(bounds),
       closePlayer: () => closePlayer(),
+      freshenPositions: async () => {
+        await sync?.freshenPositions()
+      },
       keepWaiting: () => player?.keepWaiting(),
       acceptSuggestion: () => player?.acceptSuggestion() ?? false,
       reloadPlayer: () => player?.reload(),
@@ -1108,8 +1148,16 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
      * caught it anyway.
      */
     let writeSyncTimer: ReturnType<typeof setTimeout> | null = null
-    store.subscribe(() => {
+    store.subscribe((key) => {
       if (sync === null || applyingRemote) return
+      // Positions change every five seconds while something plays. They go by
+      // the positions file on its own pace; debounced here, they would hold
+      // the library sync off until playback stopped. The library still gets
+      // them with its next sync.
+      if (key === 'resumePoints') {
+        pushPositions.request()
+        return
+      }
       if (writeSyncTimer !== null) clearTimeout(writeSyncTimer)
       writeSyncTimer = setTimeout(() => {
         writeSyncTimer = null
@@ -1137,7 +1185,33 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+/**
+ * Quitting with a player open settles it first, and gives the positions file
+ * a moment to go out.
+ *
+ * Until 1.9.8 quitting only flushed the store, so the stretch since the last
+ * saved position was lost and the episode never had "watched" decided. The
+ * push is waited on for at most `QUIT_PUSH_WAIT_MS`: a quit that hangs on the
+ * network is worse than a position that arrives at the next launch instead.
+ */
+const QUIT_PUSH_WAIT_MS = 1_500
+let quitSettled = false
+
+app.on('before-quit', (event) => {
+  if (!quitSettled) {
+    quitSettled = true
+    const watching = player !== null
+    // Settling sends the positions push on its own; the wait below joins it.
+    closePlayer(false)
+    if (sync !== null && watching) {
+      event.preventDefault()
+      const pushed = sync.positions()
+      void Promise.race([pushed, new Promise((resolve) => setTimeout(resolve, QUIT_PUSH_WAIT_MS))]).finally(() =>
+        app.quit(),
+      )
+      return
+    }
+  }
   stopRendererServer()
   stopReleaseTimer?.()
   if (catalogTimer) clearInterval(catalogTimer)
