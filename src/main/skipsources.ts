@@ -32,8 +32,42 @@ export interface EpisodeRef {
   streamSeconds: number | null
 }
 
+/**
+ * Clean answers already given this session, by URL.
+ *
+ * An episode is looked up on every load, and a load is also every provider
+ * switch and every replay — the same three questions with the same answers.
+ * Only a clean 200 is kept: a failure is asked again next time, as before.
+ * The hours bound how long a newly submitted intro can go unseen.
+ */
+const answers = new Map<string, { body: unknown; at: number }>()
+const ANSWER_TTL_MS = 6 * 60 * 60 * 1000
+const MAX_ANSWERS = 200
+
+/** Tests only: answers would otherwise carry over between cases. */
+export function forgetAnswersForTests(): void {
+  answers.clear()
+}
+
 /** A GET returning parsed JSON, or null for anything that is not a clean 200. */
 async function getJson(
+  url: string,
+  fetchImpl: FetchLike,
+  signal?: AbortSignal,
+): Promise<unknown | null> {
+  const known = answers.get(url)
+  if (known && Date.now() - known.at < ANSWER_TTL_MS) return known.body
+
+  const body = await fetchJson(url, fetchImpl, signal)
+  if (body !== null) {
+    // Oldest first out; a Map iterates in insertion order.
+    if (answers.size >= MAX_ANSWERS) answers.delete(answers.keys().next().value!)
+    answers.set(url, { body, at: Date.now() })
+  }
+  return body
+}
+
+async function fetchJson(
   url: string,
   fetchImpl: FetchLike,
   signal?: AbortSignal,

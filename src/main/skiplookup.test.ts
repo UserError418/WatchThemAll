@@ -14,9 +14,12 @@ import { join } from 'node:path'
 
 import { resetForTests } from './animeids'
 import { findIntro } from './skiplookup'
-import type { FetchLike } from './skipsources'
+import { forgetAnswersForTests, type FetchLike } from './skipsources'
 
-afterEach(() => resetForTests())
+afterEach(() => {
+  resetForTests()
+  forgetAnswersForTests()
+})
 
 const REQUEST = {
   tmdbId: 1399,

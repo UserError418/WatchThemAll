@@ -8,9 +8,11 @@
  * array that can contain an ending when an opening was asked for.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fromAniSkip, fromIntroDb, fromSkipDb, type FetchLike } from './skipsources'
+import { forgetAnswersForTests, fromAniSkip, fromIntroDb, fromSkipDb, type FetchLike } from './skipsources'
+
+afterEach(() => forgetAnswersForTests())
 
 /** A `fetch` that answers one body, and records what it was asked for. */
 function stub(
@@ -196,3 +198,36 @@ describe('all three', () => {
     expect(await fromAniSkip(1, 1, null, fetchImpl)).toBeNull()
   })
 })
+
+describe('answers already given', () => {
+  const ref = { imdbId: 'tt0903747', season: 1, episode: 2, streamSeconds: 2800 }
+  const answer = { intro: { start_sec: 5, end_sec: 60 } }
+
+  /** A provider switch reloads the episode and used to ask all over again. */
+  it('asks once per episode in a session', async () => {
+    const source = stub(answer)
+
+    const first = await fromIntroDb(ref, source.fetchImpl)
+    const second = await fromIntroDb(ref, source.fetchImpl)
+
+    expect(second).toEqual(first)
+    expect(source.urls).toHaveLength(1)
+  })
+
+  it('asks again after a failure', async () => {
+    const failing = stub({}, false)
+    await fromIntroDb(ref, failing.fetchImpl)
+    await fromIntroDb(ref, failing.fetchImpl)
+
+    expect(failing.urls).toHaveLength(2)
+  })
+
+  it('asks separately for another episode', async () => {
+    const source = stub(answer)
+    await fromIntroDb(ref, source.fetchImpl)
+    await fromIntroDb({ ...ref, episode: 3 }, source.fetchImpl)
+
+    expect(source.urls).toHaveLength(2)
+  })
+})
+
