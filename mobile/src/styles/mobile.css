@@ -657,16 +657,23 @@ body {
 /*
   Touch-sized controls in a 412px bar.
 
-  The desktop bar is seven items at `padding: 7px 11px` in a window at least
-  three times this wide. At 412px they fit only because the title now
-  truncates, and they are still below the 44px the platform asks for. This
-  keeps the same arrangement and makes each control tappable; the title gives
-  up the room, which is the right trade — it is the one item the user already
-  knows the value of.
+  The desktop's bar buttons are 40px icons (`.tool`). Here they are 44px, the
+  size the platform asks for, because they are pressed with a thumb while the
+  film plays. A series fills the bar with Back, reload, Episodes, Cast and the
+  source: about 330px with the gaps, so it fits at 412px, and the title
+  truncates to give up the rest. It is the one item the user already knows
+  the value of.
+
+  `.ghost` is the cast remote's text buttons, which the chrome also mounts.
 */
 #wta-player-chrome .bar {
   gap: 6px;
   padding: 0 10px;
+}
+
+#wta-player-chrome .tool {
+  height: 44px;
+  min-width: 44px;
 }
 
 #wta-player-chrome .ghost {

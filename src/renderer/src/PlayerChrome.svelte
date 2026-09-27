@@ -23,9 +23,9 @@
     ScanInFlight,
     ScanReason,
     TitleProviderState,
-  CastDevice,
-  CastStatus,
-} from '@shared/ipc'
+    CastDevice,
+    CastStatus,
+  } from '@shared/ipc'
   import {
     formatQuality,
     formatStreamTime,
@@ -405,7 +405,11 @@
   async function refreshSourceState(): Promise<void> {
     if (context === null) return
     try {
-      sourceState = await api.outcomes({ type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId })
+      sourceState = await api.outcomes({
+        type: context.type,
+        imdbId: context.imdbId,
+        tmdbId: context.tmdbId,
+      })
     } catch {
       // No record is a fair answer: every dot is blank, every source unchecked.
       sourceState = NO_SOURCE_STATE
@@ -454,7 +458,6 @@
     await stopCasting()
   }
 
-
   /*
    * Scrubbing, and why the slider does not simply show `castStatus.seconds`.
    *
@@ -473,9 +476,7 @@
   /** Re-evaluated by the same tick that polls status, so the hold can expire. */
   let now = $state(Date.now())
 
-  const scrubSeconds = $derived(
-    now < scrubHeldUntil ? scrubHeld : (castStatus?.seconds ?? 0),
-  )
+  const scrubSeconds = $derived(now < scrubHeldUntil ? scrubHeld : (castStatus?.seconds ?? 0))
 
   function onScrubInput(value: number): void {
     scrubHeld = value
@@ -658,7 +659,6 @@
     await api.cast.disconnect()
     castStatus = await api.cast.status()
   }
-
 
   /**
    * The app's colour tokens, as literals.
@@ -1139,7 +1139,9 @@
    * not a failure — several providers fetch nothing at all until their own play
    * button is pressed, and the honest thing is to say so and offer the screen.
    */
-  async function handOver(token: number): Promise<{ ok: true } | { ok: false; reason: string } | null> {
+  async function handOver(
+    token: number,
+  ): Promise<{ ok: true } | { ok: false; reason: string } | null> {
     const deadline = Date.now() + STREAM_WAIT_MS
     remotePhase = 'beaming'
     remoteNote = `Handing it to ${castStatus?.deviceName ?? 'the television'}…`
@@ -1156,7 +1158,8 @@
       }
       // A stream was found and the television could not take it: asking
       // again would only reload the TV with the same refusal.
-      if (result.final) return { ok: false, reason: result.error ?? 'The television could not play it.' }
+      if (result.final)
+        return { ok: false, reason: result.error ?? 'The television could not play it.' }
       await sleep(1200)
     }
 
@@ -1200,9 +1203,7 @@
   }
 
   /** The season the television is playing, for `canNext` and the still. */
-  const playingEpisodes = $derived(
-    browsingSeason === context?.season ? episodes : [],
-  )
+  const playingEpisodes = $derived(browsingSeason === context?.season ? episodes : [])
 
   const remoteStep = $derived<EpisodeStep | null>(
     context?.season != null && context.episode != null
@@ -1257,7 +1258,11 @@
 {/snippet}
 
 {#snippet castRow(provider: { id: string; name: string }, castable: Castability)}
-  {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
+  {@const dot = providerDot(
+    sourceState.outcomes[provider.id],
+    verdicts[provider.id],
+    reasons[provider.id],
+  )}
   {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
   {@const failed = castFailures[provider.id]}
   <button
@@ -1277,13 +1282,19 @@
     {:else if failed}
       <span class="tag bad">did not cast</span>
     {:else if castable === 'yes'}
-      <span class="tag">{provider.id === context?.providerId ? 'playing · ' : ''}casts{measurement(provider.id)}</span>
+      <span class="tag"
+        >{provider.id === context?.providerId ? 'playing · ' : ''}casts{measurement(
+          provider.id,
+        )}</span
+      >
     {:else if castable === 'likely'}
       <span class="tag">cast on another title</span>
     {:else if provider.id === context?.providerId}
       <span class="tag">playing</span>
     {:else if dot.label || measurement(provider.id)}
-      <span class="tag" class:bad={dot.tone === 'bad'}>{tagText(dot.label, measurement(provider.id))}</span>
+      <span class="tag" class:bad={dot.tone === 'bad'}
+        >{tagText(dot.label, measurement(provider.id))}</span
+      >
     {/if}
   </button>
 {/snippet}
@@ -1362,56 +1373,114 @@
     onmouseenter={() => (hoveringChrome = true)}
     onmouseleave={() => (hoveringChrome = false)}
   >
+    <!--
+      Icons, not words (the owner, 2026-09-27: darker, bigger, "simple icons
+      like cast symbol, crossed out eye for hide button"). Each keeps its words
+      as a tooltip and as the name a screen reader says. The source button
+      alone keeps its text, because that text is information, not a label: it
+      is the one place the bar says which source is playing.
+
+      The shapes are Material Design icons, filled at 24 units, like the mini
+      player's.
+    -->
     <div class="bar" style="height: {BAR_HEIGHT}px">
-      <button class="ghost" onclick={() => api.back()}>← Back</button>
+      <button class="tool" title="Back" aria-label="Back" onclick={() => api.back()}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20z" />
+        </svg>
+      </button>
 
       <span class="title">{context?.title ?? ''}</span>
       {#if positionLabel}<span class="position">{positionLabel}</span>{/if}
 
       <span class="spacer"></span>
 
-      <button class="ghost" title="Reload this source" onclick={() => void api.reload()}>↻</button>
+      <button
+        class="tool"
+        title="Reload this source"
+        aria-label="Reload this source"
+        onclick={() => void api.reload()}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"
+          />
+        </svg>
+      </button>
 
       <!-- Not on a phone: the bar never hides there, so it has no way back. -->
       {#if !touch}
-        <button class="ghost" title="Hide these controls for 5 seconds" onclick={sendAway}>
-          Hide
+        <button
+          class="tool"
+          title="Hide these controls for 5 seconds"
+          aria-label="Hide these controls for 5 seconds"
+          onclick={sendAway}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 7a5 5 0 0 1 4.64 6.83l2.92 2.92A11.8 11.8 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16A4.85 4.85 0 0 1 12 7zM2 4.27l2.74 2.74A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84L19.73 22 21 20.73 3.27 3zM7.53 9.8l1.55 1.55A3 3 0 0 0 12.65 15l1.55 1.55A5 5 0 0 1 7.53 9.8zm4.31-.78 3.15 3.15.02-.16a3 3 0 0 0-3-3z"
+            />
+          </svg>
         </button>
       {/if}
 
       {#if context?.type === 'tv'}
-        <button class="ghost" class:active={panel === 'episodes'} onclick={openEpisodes}>
-          Episodes
+        <button
+          class="tool"
+          class:active={panel === 'episodes'}
+          title="Episodes"
+          aria-label="Episodes"
+          onclick={openEpisodes}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v8l6-4z" />
+          </svg>
         </button>
       {/if}
 
       {#if castAvailable}
         <!--
-          Two states, not one. A cast that is running is the more important
-          fact on this bar — the picture in front of the user is not where the
-          film is any more — so it says the device's name rather than an icon
-          that could mean either thing.
-
-          The word is in its own span because on a phone it has to go. A series
-          adds an Episodes button, and Back + ↻ + Episodes + Cast + source is
-          five pixels wider than a 412px viewport — measured, with the source
-          button hanging off the right edge. The symbol stays, the panel still
-          names the device, and nothing is clipped.
+          Two states. A cast that is running is the more important fact on this
+          bar: the picture in front of the user is no longer where the film is.
+          So while it runs the button is blue and its screen is filled in (the
+          "connected" cast icon), and its tooltip and the cast panel name the
+          television. The name used to be on the button itself, and that is the
+          text the owner asked to lose.
         -->
         <button
-          class="ghost cast"
+          class="tool"
           class:active={panel === 'cast'}
           class:casting={castStatus?.connected === true}
           title={castStatus?.connected ? `Playing on ${castStatus.deviceName}` : 'Play on a TV'}
+          aria-label={castStatus?.connected
+            ? `Playing on ${castStatus.deviceName}`
+            : 'Play on a TV'}
           onclick={casting ? () => (remoteHidden = false) : openCast}
         >
-          <span class="glyph" aria-hidden="true">▣</span>
-          <span class="label">{castStatus?.connected ? castStatus.deviceName : 'Cast'}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            {#if castStatus?.connected}
+              <path
+                d="M1 18v3h3a3 3 0 0 0-3-3zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7zm18-7H5v1.63A13 13 0 0 1 13.37 17H19zM1 10v2a9 9 0 0 1 9 9h2A11 11 0 0 0 1 10zm20-7H3a2 2 0 0 0-2 2v3h2V5h18v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"
+              />
+            {:else}
+              <path
+                d="M21 3H3a2 2 0 0 0-2 2v3h2V5h18v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM1 18v3h3a3 3 0 0 0-3-3zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7zm0-4v2a9 9 0 0 1 9 9h2A11 11 0 0 0 1 10z"
+              />
+            {/if}
+          </svg>
         </button>
       {/if}
 
-      <button class="ghost" class:active={panel === 'sources'} onclick={openSources}>
-        {context?.providerName ?? 'Source'} ▾
+      <button
+        class="tool source-button"
+        class:active={panel === 'sources'}
+        title="Choose the source"
+        onclick={openSources}
+      >
+        <span class="source-name">{context?.providerName ?? 'Source'}</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"
+          ><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z" /></svg
+        >
       </button>
     </div>
 
@@ -1446,7 +1515,11 @@
           {/if}
           {#if touch}
             <span class="spacer"></span>
-            <button class="close" aria-label="Close the episode list" onclick={() => (panel = 'none')}>
+            <button
+              class="close"
+              aria-label="Close the episode list"
+              onclick={() => (panel = 'none')}
+            >
               ✕
             </button>
           {/if}
@@ -1519,7 +1592,8 @@
             "not checked" rows into answers, live.
           -->
           <p class="cast-head">
-            Connected to <span class="name">{castStatus?.deviceName ?? 'the TV'}</span>. Choose a source to cast.
+            Connected to <span class="name">{castStatus?.deviceName ?? 'the TV'}</span>. Choose a
+            source to cast.
           </p>
           {#if castFailureNote}
             <p class="hint bad">{castFailureNote}</p>
@@ -1549,8 +1623,9 @@
             <!-- Counted rather than silently dropped: a list that shrank for
                  no stated reason reads as sources having gone missing. -->
             <p class="hint">
-              {castGroups.hidden === 1 ? '1 source only streams' : `${castGroups.hidden} sources only stream`} in a format
-              this TV cannot play.
+              {castGroups.hidden === 1
+                ? '1 source only streams'
+                : `${castGroups.hidden} sources only stream`} in a format this TV cannot play.
             </p>
           {/if}
           <button class="source stop" onclick={() => void cancelCastChoice()}>Cancel</button>
@@ -1598,7 +1673,9 @@
             >
               {castStatus.playing ? '❚❚ Pause' : '▶ Play'}
             </button>
-            <button class="tv" title="Forward 30 seconds" onclick={() => void nudge(30)}>+30s</button>
+            <button class="tv" title="Forward 30 seconds" onclick={() => void nudge(30)}
+              >+30s</button
+            >
           </div>
 
           <button class="source stop" onclick={() => void stopCasting()}>Stop casting</button>
@@ -1643,8 +1720,14 @@
         </div>
         {#each sourceRows as provider (provider.id)}
           {@const resume = provider.id === sourceState.resume?.providerId}
-          {@const dot = providerDot(sourceState.outcomes[provider.id], verdicts[provider.id], reasons[provider.id])}
-          {@const test = scanning ? scanTesting.find((t) => t.providerId === provider.id) : undefined}
+          {@const dot = providerDot(
+            sourceState.outcomes[provider.id],
+            verdicts[provider.id],
+            reasons[provider.id],
+          )}
+          {@const test = scanning
+            ? scanTesting.find((t) => t.providerId === provider.id)
+            : undefined}
           {@const time = measurement(provider.id)}
           <button
             class="source"
@@ -1678,7 +1761,6 @@
             {/if}
           </button>
         {/each}
-
       </div>
     {/if}
   </div>
@@ -1718,7 +1800,9 @@
         {/if}
       </span>
       <button class="switch" onclick={switchNow}>Switch now</button>
-      <button class="wait" onclick={keepWaiting}>{suggestion.autoSwitch ? 'Keep waiting' : 'Stay'}</button>
+      <button class="wait" onclick={keepWaiting}
+        >{suggestion.autoSwitch ? 'Keep waiting' : 'Stay'}</button
+      >
 
       <!-- A draining bar, so the deadline is legible without reading it. -->
       {#if countdown !== null}
@@ -1854,7 +1938,26 @@
     transition: width 1s linear;
   }
 
+  /*
+    One look for everything the chrome draws: the bar's buttons, the source
+    list, the episode browser and the cast panel. They had grown four styles
+    (pale pills on the bar, near-black panels, a white hover in the lists,
+    amber meaning "this one" in three different ways), and the owner asked for
+    them to match (2026-09-27). The same dark surface, the same hairline, the
+    same hover, and one amber for "active" and "playing". Radii nest: 12 for a
+    panel, 10 for a button, 8 for a row inside a panel.
+  */
   .chrome {
+    --surface: rgba(10, 10, 14, 0.94);
+    /* Opaque enough for things that scroll under it, like a sticky header. */
+    --surface-solid: rgba(10, 10, 14, 0.98);
+    --surface-button: rgba(10, 10, 14, 0.72);
+    --line: rgba(255, 255, 255, 0.1);
+    --hover: rgba(255, 255, 255, 0.08);
+    --accent: #f0b45a;
+    --accent-fill: rgba(240, 180, 90, 0.14);
+    --accent-line: rgba(240, 180, 90, 0.6);
+
     font:
       500 13px/1 Inter,
       system-ui,
@@ -1899,33 +2002,70 @@
     flex: 1;
   }
 
-  /* Never shrinks: these are the controls the title is allowed to give way
-     for, not the other way round. */
-  .ghost {
+  /*
+    The bar's buttons: 40px squares with a 22px icon, dark enough to read over
+    a bright picture. They were 30px pills of white at 8% over the bar's
+    gradient, which on a bright frame went pale grey and hard to tell apart.
+    Near-black at 70% keeps them the darkest thing in the corner whatever is
+    playing. Never shrinks: these are the controls the title gives way for,
+    not the other way round.
+  */
+  .tool {
     flex-shrink: 0;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 7px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 40px;
+    min-width: 40px;
+    padding: 0 8px;
+    background: var(--surface-button);
+    border: 1px solid var(--line);
+    border-radius: 10px;
     color: inherit;
     cursor: pointer;
     font: inherit;
-    padding: 7px 11px;
+    font-size: 14px;
   }
 
-  .ghost:hover {
-    background: rgba(255, 255, 255, 0.16);
+  .tool svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
+    flex-shrink: 0;
   }
 
-  .ghost.active {
-    background: rgba(240, 180, 90, 0.22);
-    border-color: rgba(240, 180, 90, 0.5);
+  /* The hover is laid over the surface rather than replacing it, so a button
+     and a list row light up by the same amount. */
+  .tool:hover {
+    background: linear-gradient(var(--hover), var(--hover)), var(--surface);
+  }
+
+  .tool.active {
+    background: linear-gradient(var(--accent-fill), var(--accent-fill)), var(--surface);
+    border-color: var(--accent-line);
+    color: var(--accent);
+  }
+
+  /* Room on the left for the name; the chevron sits close on the right. */
+  .source-button {
+    padding: 0 6px 0 12px;
+  }
+
+  /* A source's name is short, but a custom provider's can be anything. */
+  .source-name {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .panel {
     margin: 6px 14px 0;
     border-radius: 12px;
-    background: rgba(8, 8, 12, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface);
+    border: 1px solid var(--line);
     overflow: hidden;
     /* Inherited by every list inside. The chrome's document declares no
        colour scheme, so without it a scrollbar is the platform's light one: a
@@ -2054,11 +2194,11 @@
   }
 
   .episode.playing .thumb {
-    box-shadow: 0 0 0 2px rgba(240, 180, 90, 0.85);
+    box-shadow: 0 0 0 2px var(--accent);
   }
 
   .now-playing {
-    background: rgba(240, 180, 90, 0.92);
+    background: var(--accent);
     border-radius: 5px;
     color: #17110a;
     font-size: 11px;
@@ -2098,7 +2238,7 @@
     fixed box of a set width.
   */
   .episodes.touch {
-    background: rgba(12, 12, 16, 0.97);
+    background: var(--surface-solid);
     border-radius: 16px;
     border-width: 1px;
     bottom: calc(var(--safe-bottom, 0px) + var(--below-bar));
@@ -2152,7 +2292,7 @@
   }
 
   .touch .episode.playing {
-    background: rgba(240, 180, 90, 0.1);
+    background: var(--accent-fill);
   }
 
   .touch .play {
@@ -2197,7 +2337,7 @@
     max-height: 288px;
     overflow-y: auto;
     padding: 6px;
-    width: 260px;
+    width: 280px;
     margin-left: auto;
     margin-right: 14px;
   }
@@ -2209,26 +2349,30 @@
     z-index: 1;
     margin: -6px -6px 0;
     padding: 6px 6px 0;
-    background: rgba(8, 8, 12, 0.98);
+    background: var(--surface-solid);
   }
 
   .sources-divider {
     height: 1px;
     margin: 4px 0;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--line);
   }
 
+  /* Rows sized to sit under 40px buttons: 13.5px text, 38px tall. */
   .source {
     align-items: center;
     background: none;
     border: none;
-    border-radius: 7px;
+    border-radius: 8px;
+    box-sizing: border-box;
     color: inherit;
     cursor: pointer;
     display: flex;
     font: inherit;
-    gap: 9px;
-    padding: 9px 10px;
+    font-size: 13.5px;
+    gap: 10px;
+    min-height: 38px;
+    padding: 9px 12px;
     text-align: left;
     width: 100%;
   }
@@ -2251,11 +2395,14 @@
   }
 
   .source:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--hover);
   }
 
+  /* The source playing now: the same amber, and the same tint, as the active
+     button above it and the playing episode. */
   .source.playing {
-    color: #f0b45a;
+    background: var(--accent-fill);
+    color: var(--accent);
   }
 
   .tag {
@@ -2277,53 +2424,10 @@
      ticked: the picture on this screen is no longer where the film is, and
      that has to be readable at a glance from across the room. */
 
-  .ghost.casting {
-    background: rgba(91, 157, 250, 0.22);
-    border-color: rgba(91, 157, 250, 0.55);
+  .tool.casting {
+    background: rgba(24, 46, 84, 0.9);
+    border-color: rgba(91, 157, 250, 0.65);
     color: #cfe0ff;
-  }
-
-  .ghost.cast {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* A television can be called anything at all, and some of them are called
-     "Wohnzimmer Chromecast Ultra". Bounded here rather than trusted. */
-  .ghost.cast .label {
-    max-width: 110px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /*
-    On a phone the word does not fit, and this is measured rather than guessed:
-    with a series on screen the bar runs 417px wide inside a 412px viewport, so
-    the source button — the one people reach for when a provider fails — hangs
-    off the edge. The symbol carries the button on its own; the panel and the
-    tooltip still name the device.
-  */
-  @media (max-width: 470px) {
-    .ghost.cast .label {
-      display: none;
-    }
-
-    /* Without the word, padding alone leaves a 35px target — under the 48dp
-       Material minimum, and this is a button pressed with a thumb while the
-       film is already playing. The width comes back out of the gaps rather
-       than out of the source button, which must not be squeezed: it is the one
-       people reach for when a provider has just failed them. */
-    .ghost.cast {
-      gap: 0;
-      min-width: 44px;
-      justify-content: center;
-    }
-
-    .bar {
-      gap: 8px;
-    }
   }
 
   /* Sized and placed like the source list, and for the same reason: it drops
@@ -2415,11 +2519,11 @@
 
   .tv {
     flex: 1;
-    min-height: 32px;
+    min-height: 36px;
     padding: 0 6px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 7px;
-    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-button);
     color: #e8e8ef;
     font: inherit;
     font-size: 12px;
@@ -2431,7 +2535,7 @@
   }
 
   .tv:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: linear-gradient(var(--hover), var(--hover)), var(--surface);
   }
 
   .stop {
