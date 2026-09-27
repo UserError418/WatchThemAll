@@ -17,7 +17,6 @@
  * (`Settings.subtitleLanguage`). See docs/PRIVACY.md.
  */
 
-import { gunzipSync } from 'node:zlib'
 import { parseSubtitles, type Cue, type LoadedSubtitles, type SubtitleLanguage } from '@shared/subtitles'
 
 const BASE = 'https://rest.opensubtitles.org/search'
@@ -133,12 +132,22 @@ export function rankFiles(files: readonly SubtitleFile[], filmSeconds: number | 
     )
 }
 
+/**
+ * Web streams rather than `node:zlib`, so this runs unchanged in the phone's
+ * WebView (its `fetch` is native there, so the service's lack of CORS does
+ * not matter) as well as in Electron's main process.
+ */
+async function gunzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
 async function download(file: SubtitleFile): Promise<Cue[]> {
   const response = await fetch(file.url, { headers: HEADERS, signal: AbortSignal.timeout(TIMEOUT_MS) })
   if (!response.ok) return []
-  let bytes = Buffer.from(await response.arrayBuffer())
+  let bytes = new Uint8Array(await response.arrayBuffer())
   // The download is gzip'd; the magic bytes say so either way.
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = gunzipSync(bytes)
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = await gunzip(bytes)
   let text: string
   try {
     text = new TextDecoder(file.encoding || 'utf-8').decode(bytes)

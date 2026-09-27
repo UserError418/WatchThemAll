@@ -26,26 +26,11 @@
  */
 
 import type { WebContents } from 'electron'
+import { PRESS_PLAY_SCRIPT } from '@shared/pressplayscript'
 
-/**
- * Start playback in one frame, whatever the control is called there.
- *
- * Deliberately broad and deliberately harmless: at most one element per frame,
- * and every selector describes something that starts playback. The bare
- * `video.play()` is included because several players attach no visible control
- * until the stream is already resolving.
- */
-export const PRESS_PLAY_SCRIPT = `(() => {
-  const pick = () =>
-    document.querySelector('[aria-label*="play" i], [title*="play" i], .play-button, .vjs-big-play-button, .plyr__control--overlaid, #player button') ??
-    document.querySelector('button')
-  try {
-    pick()?.click()
-    const video = document.querySelector('video')
-    if (video?.paused) void video.play().catch(() => {})
-  } catch {}
-  return true
-})()`
+/** The script itself is shared: the film relay runs it on its `press` command. */
+export { PRESS_PLAY_SCRIPT }
+
 
 /** A synthetic left click at the centre of the given viewport. */
 export function clickCentre(contents: WebContents, width: number, height: number): void {

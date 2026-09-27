@@ -50,6 +50,8 @@ import type {
   TitleProviderState,
   TitleRef,
   WtaApi,
+  PlayerOverlayConfig,
+  WtaPlayerApi,
 } from '@shared/ipc'
 
 import * as tmdb from '@main/tmdb'
@@ -104,7 +106,11 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
-import { installMediaRelay } from './mediarelay'
+import { installFilmRelay } from './mediarelay'
+import { createOverlayHub } from './overlayhub'
+import { createOverlayHost } from './overlayhost'
+import { createPhoneFullscreen } from './phonefullscreen'
+import { loadSubtitles, subtitleLanguages, type SubtitleQuery } from '@main/subtitlesearch'
 import { createScanRunner } from './scan'
 import { preferencesCatalogStore } from './catalogstore'
 import { createChromeApi } from './chrome'
@@ -426,7 +432,93 @@ export async function createBridge(): Promise<WtaApi> {
   /** Putting the video back where it was left, for the source now loading; see `resumeUrl`. */
   let resumeSeek: ResumeSeek | null = null
 
+  /*
+    v2's own controls on the phone (2026-09-27): `PlayerOverlay` over the
+    picture, talking to the top bar through `overlayHub` as the desktop's do
+    through main. Declared before the surface, which mounts the overlay on
+    every load; the closures below read the rest of the bridge when they run.
+  */
+  const overlayHub = createOverlayHub()
+  const overlayConfig = new Signal<PlayerOverlayConfig>()
+  const currentOverlayConfig = (): PlayerOverlayConfig => ({
+    ownControls: store.read().settings.ownControls,
+    fullscreen: phoneFullscreen.current(),
+    mini,
+    subtitleLanguage: store.read().settings.subtitleLanguage,
+  })
+  const announceOverlayConfig = (): void => overlayConfig.emit(currentOverlayConfig())
+  const phoneFullscreen = createPhoneFullscreen(() => announceOverlayConfig())
+
+  /** What is playing, for OpenSubtitles; null with nothing playing. */
+  const subtitleQuery = (): SubtitleQuery | null =>
+    session === null
+      ? null
+      : { imdbId: session.req.imdbId, season: session.req.season ?? null, episode: session.req.episode ?? null }
+  const setSubtitleLanguage = (code: string | null): void => {
+    const settings = store.read().settings
+    if (settings.subtitleLanguage !== code) store.applyPatch({ settings: { ...settings, subtitleLanguage: code } })
+  }
+
+  const playerApi: WtaPlayerApi = {
+    onConfig: (cb) => {
+      cb(currentOverlayConfig())
+      return overlayConfig.subscribe(cb)
+    },
+    onContext: (cb) => {
+      if (currentPlayerState !== null) cb(currentPlayerState)
+      return playerState.subscribe((state) => {
+        if (state !== null) cb(state)
+      })
+    },
+    onBarState: (cb) => overlayHub.onBarState(cb),
+    // No keyboard to press them with; the overlay performs its own taps.
+    onTransport: () => () => {},
+    onProviderChanged: () => () => {},
+    action: (action) => {
+      switch (action) {
+        case 'fullscreen':
+          phoneFullscreen.toggle()
+          return
+        case 'episodes':
+        case 'sources':
+        case 'cast':
+          overlayHub.openPanel(action)
+          return
+        case 'back':
+        case 'escape':
+          setMini(true)
+          return
+        case 'reload':
+          void playerReload()
+          return
+        default:
+          return
+      }
+    },
+    activity: (hold) => overlayHub.activity(hold),
+    pressPlay: () => surface.press(),
+    owned: (owned) => overlayHub.owned(owned),
+    dismiss: () => overlayHub.dismiss(),
+    subtitles: {
+      languages: async () => {
+        const query = subtitleQuery()
+        return query === null ? [] : subtitleLanguages(query)
+      },
+      load: async (code, filmSeconds) => {
+        const query = subtitleQuery()
+        if (query === null || !/^[a-z]{3}$/.test(code)) return null
+        setSubtitleLanguage(code)
+        return loadSubtitles(query, code, Number.isFinite(filmSeconds) ? filmSeconds : null)
+      },
+      remember: async (code) => {
+        if (code === null || /^[a-z]{3}$/.test(code)) setSubtitleLanguage(code)
+      },
+    },
+  }
+  const overlayHost = createOverlayHost(playerApi)
+
   const surface = createPlayerSurface({
+    onFrameLoad: (frame) => overlayHost.load(frame),
     onMediaState: (playing) => {
       videoPlaying = playing
       playerPaused.emit(!playing)
@@ -546,16 +638,25 @@ export async function createBridge(): Promise<WtaApi> {
     // Hidden, not closed: the chrome's state is what the full player comes
     // back to. Its countdown to switch source stands down meanwhile.
     chrome.setHidden(next)
+    overlayHost.setHidden(next)
+    phoneFullscreen.setActive(!next && session !== null && !onTv)
+    announceOverlayConfig()
     playerMini.emit(next)
     playerPaused.emit(!videoPlaying)
   }
+
+  // Subscribed here, below everything the config reads: a store write during
+  // start-up must not reach it before those exist.
+  store.subscribe((key) => {
+    if (key === 'settings') announceOverlayConfig()
+  })
 
   /*
     Before any player opens: the relay can only reach documents created after
     it is installed. Without it the mini player's button does nothing, which
     is the whole of the failure; see `mediarelay.ts`.
   */
-  void installMediaRelay(location.origin)
+  void installFilmRelay(location.origin)
 
   /**
    * The last state emitted, kept so a late subscriber can be caught up.
@@ -606,6 +707,8 @@ export async function createBridge(): Promise<WtaApi> {
       onTv = true
       tvStale = false
       surface.blank()
+      // Before the remote's own portrait lock, which is not ours to undo.
+      phoneFullscreen.setActive(false)
       standUpright()
     }
     // A beam that identified a stream measured the source, succeeded or not —
@@ -672,6 +775,7 @@ export async function createBridge(): Promise<WtaApi> {
     const candidate = session?.candidates[session.index]
     surface.restore(candidate ? resumeUrl(candidate) : undefined)
     releaseOrientation()
+    phoneFullscreen.setActive(session !== null && !mini)
   }
 
   /*
@@ -942,8 +1046,10 @@ export async function createBridge(): Promise<WtaApi> {
     upNext.reset()
     setMini(false)
     videoPlaying = false
+    phoneFullscreen.setActive(false)
     chrome.close()
     surface.close()
+    overlayHost.close()
     session = null
     progress = null
     playbackActive.emit(false)
@@ -1299,9 +1405,23 @@ export async function createBridge(): Promise<WtaApi> {
    * binds is the smaller lie.
    */
   void CapacitorApp.addListener('backButton', () => {
-    // Each press takes one layer away: a full player shrinks into the corner
-    // (as the chrome's ← does), then an open panel closes, then the mini
-    // player stops, and only then does the app quit.
+    // Each press takes one layer away: an open panel of the player closes,
+    // fullscreen ends, a full player shrinks into the corner (as the chrome's
+    // ← does), then an open panel of the app closes, then the mini player
+    // stops, and only then does the app quit.
+    // Our controls' own menu (subtitles, quality): the overlay closes it on Escape.
+    if (session && !mini && document.querySelector('#wta-player-overlay .menu')) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      return
+    }
+    if (session && !mini && overlayHub.panelOpen()) {
+      overlayHub.closePanel()
+      return
+    }
+    if (session && !mini && phoneFullscreen.current()) {
+      phoneFullscreen.toggle()
+      return
+    }
     if (session && !mini) {
       setMini(true)
       return
@@ -1462,6 +1582,7 @@ export async function createBridge(): Promise<WtaApi> {
     cancelScan: async () => scanRunner.cancel(),
     subscribeScan: (cb) => providerScan.subscribe(cb),
     outcomes: async (media) => providerStateFor(media),
+    overlay: overlayHub.chrome,
     /**
      * The chrome gets the same cast bridge the main API uses, not a second one.
      *
@@ -1654,6 +1775,7 @@ export async function createBridge(): Promise<WtaApi> {
       }
       showCandidate(0)
       chrome.open()
+      phoneFullscreen.setActive(!onTv)
       playbackActive.emit(true)
 
       return {

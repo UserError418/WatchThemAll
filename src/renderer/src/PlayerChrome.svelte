@@ -37,6 +37,7 @@
   } from '@shared/scanrank'
   import { deliveryCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
+  import { fade } from 'svelte/transition'
   import type { Episode, Season, StreamDelivery } from '@shared/types'
   import { airDate, episodeCode, hasAired, runtime } from './lib/format'
   import CastRemote from './components/CastRemote.svelte'
@@ -152,7 +153,12 @@
    * every button, because nothing else offers them.
    */
   let owned = $state(false)
-  const bottomPanels = $derived(owned && !touch)
+  /**
+   * Panels open at the bottom, from our controls' buttons. On the phone the
+   * source list does; its episode list keeps its own centred sheet, which
+   * already sits clear of the controls.
+   */
+  const bottomPanels = $derived(owned)
   let barVisible = $state(true)
   let hoveringChrome = $state(false)
 
@@ -987,6 +993,20 @@
     }),
   )
 
+  // On the phone, the bar is pinned open whenever our controls do not have the
+  // film (starting, or the source's own page showing): nothing else can bring
+  // it back there, and without it there is no way to another source.
+  $effect(() => {
+    if (touch && !owned) barVisible = true
+  })
+
+  // The phone's tap on the picture while the controls show: all of it goes.
+  $effect(() =>
+    api?.onDismiss(() => {
+      barVisible = false
+    }),
+  )
+
   // A panel open when the layout changes would jump from the bottom to the top.
   $effect(() => {
     void bottomPanels
@@ -1024,12 +1044,17 @@
 
   $effect(() => {
     if (!barVisible) return
-    if (touch) return
+    // A phone could not see a tap on the picture, so its bar stayed up. Our
+    // controls can (they take the taps), so while they have the film the
+    // bar hides with them (the owner, 2026-09-27: "hide together").
+    if (touch && !owned) return
     if (suggestion) return
     if (upNext) return
     // Hovering the chrome holds it open — including hovering a panel, which is
     // a child of it — and so does the shell while paused or in use.
-    if (hoveringChrome) return
+    // A tap is reported as a mouseenter with no leave to follow, so on a
+    // phone hovering means nothing.
+    if (hoveringChrome && !touch) return
     if (heldByShell) return
     // Read so that each report of activity restarts the clock.
     void activityTick
@@ -1659,7 +1684,9 @@
   >
     Controls back in {awaySeconds}s
   </button>
-{:else if !barVisible && !touch}
+{:else if !barVisible && touch}
+  <!-- Nothing: our controls bring the bar back on the next tap. -->
+{:else if !barVisible}
   <!--
     The invisible strip along the top edge. `onmousemove` as well as
     `onmouseenter`, because the enter can be missed: the bar hides by shrinking
@@ -1677,7 +1704,9 @@
 {:else}
   <div
     class="chrome"
+    transition:fade={{ duration: touch ? 200 : 0 }}
     class:bottom-panels={bottomPanels}
+    class:touch-chrome={touch}
     style:--above-controls="{ABOVE_OUR_CONTROLS}px"
     role="group"
     aria-label="Player controls"
@@ -1836,7 +1865,7 @@
       -->
       <div
         class="panel episodes"
-        class:bottom={bottomPanels}
+        class:bottom={bottomPanels && !touch}
         class:touch
         style:height={touch ? null : `${EPISODE_PANEL_HEIGHT}px`}
         style:--below-bar="{BAR_HEIGHT + PANEL_GAP}px"
@@ -2303,6 +2332,11 @@
   .episodes.bottom {
     left: 14px;
     right: 14px;
+  }
+
+  /* The phone's controls sit above the gesture bar. */
+  .touch-chrome .panel.bottom {
+    bottom: calc(var(--above-controls) + var(--safe-bottom, 0px));
   }
 
   .sources.bottom {

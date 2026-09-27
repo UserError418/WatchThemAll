@@ -30,12 +30,14 @@
  * for the two behaviours that cannot survive the move; everything else is the
  * desktop's code path.
  *
- * ## The four members that mean nothing here
+ * ## The members that mean nothing here
  *
- * `setOverlayArea` and `setSkipSize` size a native view so it stops
- * swallowing clicks outside what it draws. A DOM overlay has no such problem:
- * `mobile.css` gives the host `pointer-events: none` and its children `auto`,
- * so the picture below is reachable everywhere the chrome is not painted.
+ * `setSkipSize` sizes a native view so it stops swallowing clicks outside
+ * what it draws. A DOM overlay has no such problem: `mobile.css` gives the
+ * host `pointer-events: none` and its children `auto`, so the picture below
+ * is reachable everywhere the chrome is not painted. `setOverlayArea` does
+ * the same sizing on the desktop; here it only carries the bar's state to
+ * our own controls (`overlayhub.ts`).
  *
  * `onPointerTop` reports a pointer that does not exist. `onSkipOffer` reports
  * an intro timestamp nothing can vet, because vetting one means reading
@@ -45,6 +47,7 @@
  */
 
 import type { Season } from '@shared/types'
+import type { OverlayHub } from './overlayhub'
 import type {
   PlayerContext,
   PlayerState,
@@ -89,6 +92,8 @@ export interface ChromeDeps {
   subscribeScan(cb: (progress: ProviderScanProgress) => void): () => void
   /** The cast controls, already built — see `createCastBridge`. */
   cast: WtaChromeApi['cast']
+  /** v2: what our own controls tell the bar, and the bar them (`overlayhub.ts`). */
+  overlay: OverlayHub['chrome']
 }
 
 /** A subscription that will never fire. Returns an unsubscribe that is a no-op. */
@@ -105,7 +110,6 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
      * makes unclickable. Here the overlay is a DOM node that only intercepts
      * taps where it actually paints.
      */
-    setOverlayArea: () => {},
     setSkipSize: () => {},
 
     back: () => deps.minimize(),
@@ -157,14 +161,11 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     onMini: (cb) => deps.subscribeMini(cb),
     onSkipOffer: never<SkipOffer | null>,
     onPointerTop: never<boolean>,
-    // v2's own controls are desktop-only until the phone port: nothing here
-    // moves a pointer over the picture, presses a player key, or opens a panel
-    // by key.
-    onActivity: never<boolean>,
-    onOpenPanel: never<'episodes' | 'cast' | 'sources'>,
-    // The phone has no shell of its own controls yet: its bar keeps every button.
-    onOwned: never<boolean>,
-    onEpisodeNav: never<'prev' | 'next' | 'play' | 'close'>,
+    // v2's own controls (the phone port): taps on the picture, our controls
+    // having the film, the Sources and Episodes buttons, and the bar's state
+    // back to them. `setOverlayArea` sizes nothing here, but says whether the
+    // bar is up and a panel open.
+    ...deps.overlay,
     action: () => {},
   }
 }

@@ -192,6 +192,11 @@ function listenForReadings(
 ): () => void {
   const onMessage = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow) return
+    // The film relay's navigation guard refused a redirect (`filmrelay.ts`).
+    const refused = (event.data as { wtaMedia?: unknown; refused?: unknown } | null)?.refused
+    if ((event.data as { wtaMedia?: unknown } | null)?.wtaMedia === 1 && typeof refused === 'string') {
+      console.info(`[navguard] refused a redirect to ${refused}`)
+    }
     // The mini player's relay reporting the video starting or stopping. See
     // `mediarelay.ts`; it shares this listener for the sender check.
     const playing = parseRelayState(event.data)
@@ -256,6 +261,12 @@ export interface PlayerSurfaceOptions {
    * describe another title altogether.
    */
   onFilmTime?(time: RelayTime): void
+  /**
+   * A new document is loading into the frame (the frame), or the surface was
+   * blanked or closed (null). v2's overlay is mounted afresh on each load,
+   * as the desktop's shell is (`overlayhub.ts`).
+   */
+  onFrameLoad?(frame: HTMLIFrameElement | null): void
 }
 
 export interface PlayerSurface {
@@ -268,6 +279,8 @@ export interface PlayerSurface {
   setPaused(paused: boolean): void
   /** Move the film to `seconds`, through the relay; see `relaySeek`. */
   seek(seconds: number, duration: number): void
+  /** Press the source's own play control in every frame, through the film relay (`press`). */
+  press(): void
   /**
    * Load the current source again. `url` replaces the current one: the same
    * source with a newer start position in it.
@@ -344,6 +357,7 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       // through here, not through `restore`.
       el.style.visibility = 'visible'
       current = candidate.url
+      options.onFrameLoad?.(el)
       // `src` rather than `location.replace`: the frame is cross-origin, so its
       // `contentWindow` is off limits from here.
       el.src = candidate.url
@@ -359,9 +373,14 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       frame?.contentWindow?.postMessage(relaySeek(seconds, duration), '*')
     },
 
+    press() {
+      frame?.contentWindow?.postMessage({ wtaMedia: 1, command: 'press' }, '*')
+    },
+
     reload(url) {
       if (!frame || !current) return
       current = url ?? current
+      options.onFrameLoad?.(frame)
       // Re-assigning the same `src` is a no-op in Chromium, so blank it first.
       frame.src = 'about:blank'
       frame.src = current
@@ -379,12 +398,14 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
        */
       frame.style.visibility = 'hidden'
       frame.src = 'about:blank'
+      options.onFrameLoad?.(null)
     },
 
     restore(url) {
       if (!frame || !current) return
       current = url ?? current
       frame.style.visibility = 'visible'
+      options.onFrameLoad?.(frame)
       frame.src = current
     },
 
@@ -398,6 +419,7 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
     },
 
     close() {
+      if (frame) options.onFrameLoad?.(null)
       host?.remove()
       host = null
       frame = null

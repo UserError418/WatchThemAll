@@ -120,6 +120,9 @@ const api: WtaChromeApi = {
     return () => ipcRenderer.removeListener(EV.chromeOpenPanel, listener)
   },
 
+  /** The phone's tap-to-hide; the desktop's bar hides when the pointer leaves, so this never fires. */
+  onDismiss: (): (() => void) => () => {},
+
   /** Whether our own controls have the film (v2): the bar lays itself out by it. */
   onOwned: (callback: (owned: boolean) => void): (() => void) => {
     const listener = (_event: unknown, owned: unknown): void => callback(owned === true)

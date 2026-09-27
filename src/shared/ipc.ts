@@ -1222,6 +1222,8 @@ export interface WtaChromeApi {
   onOpenPanel(cb: (panel: 'episodes' | 'cast' | 'sources') => void): () => void
   /** Whether our own controls have the film (v2); see `EV.chromeOwned`. */
   onOwned(cb: (owned: boolean) => void): () => void
+  /** Hide the bar now: a tap on the picture while it shows (the phone's `WtaPlayerApi.dismiss`). */
+  onDismiss(cb: () => void): () => void
   /** The arrows and Enter while the episode strip is open. */
   onEpisodeNav(cb: (nav: EpisodeNav) => void): () => void
   /** A player key pressed in the chrome; main routes it. */
@@ -1317,6 +1319,11 @@ export interface WtaPlayerApi {
   pressPlay(): void
   /** Whether our controls have the film now; the chrome lays itself out by it. */
   owned(owned: boolean): void
+  /**
+   * Hide the controls and the bar now: a tap on the picture while they show.
+   * The phone only; on the desktop the pointer leaving does it.
+   */
+  dismiss?(): void
   subtitles: {
     languages(): Promise<SubtitleLanguage[]>
     /** The best file in `code` for a film this long; remembered as the language to start with. */

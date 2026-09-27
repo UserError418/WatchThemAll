@@ -185,6 +185,11 @@ export class FilmLink {
     this.send(film === null ? { command: 'hide' } : { command: 'hide', film: film.id })
   }
 
+  /** Press the source's own play control in every frame: its poster, before there is a film (the phone's way). */
+  pressPlay(): void {
+    this.send({ command: 'press' })
+  }
+
   /** Ask the film's frame what qualities its engine has. */
   askQuality(): void {
     this.aimed((duration) => this.send({ command: 'levels', duration }))

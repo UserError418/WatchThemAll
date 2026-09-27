@@ -19,7 +19,7 @@
    * The design is in `docs/internal/v2-player.md`.
    */
   import { fade } from 'svelte/transition'
-  import type { BarState, PlayerContext, PlayerOverlayConfig } from '@shared/ipc'
+  import type { BarState, PlayerContext, PlayerOverlayConfig, WtaPlayerApi } from '@shared/ipc'
   import type { FilmTrack } from '@shared/filmrelay'
   import { actionForEvent, SEEK_STEP_SECONDS, VOLUME_STEP, type TransportAction } from '@shared/playerkeys'
   import { clock } from '../lib/format'
@@ -30,9 +30,21 @@
   import SeekBar from './SeekBar.svelte'
   import { ICONS } from './icons'
 
-  const api = window.wtaPlayer
-  const frame = document.getElementById('provider') as HTMLIFrameElement | null
+  interface Props {
+    /** The desktop's shell has `window.wtaPlayer`; the phone's bridge passes its own. */
+    api?: WtaPlayerApi
+    /** The source's iframe: the shell's `#provider`, or the phone's surface. */
+    frame?: HTMLIFrameElement | null
+    /** A phone: taps rather than a pointer (see "Taps on the picture"). */
+    touch?: boolean
+  }
+  const {
+    api = window.wtaPlayer,
+    frame = document.getElementById('provider') as HTMLIFrameElement | null,
+    touch = false,
+  }: Props = $props()
 
+  // The frame is fixed for this mount: the phone mounts a new overlay per load (`overlayhub.ts`).
   const link = new FilmLink((message) => frame?.contentWindow?.postMessage(message, '*'))
 
   /*
@@ -277,6 +289,48 @@
     api?.action('fullscreen')
   }
 
+  /* ── Taps, on a phone ──────────────────────────────────────────────────── */
+
+  /**
+   * A tap shows or hides the controls, and the top bar with them. Two quick
+   * taps on the left or right third jump back or forward, and every further
+   * tap there jumps again while the ripple shows, as on YouTube and Netflix
+   * (the owner, 2026-09-27). Our layer takes every tap on the picture, so the
+   * source's own gestures are gone; that was agreed with it.
+   */
+  const DOUBLE_TAP_MS = 300
+  let lastTap: { at: number; side: 'back' | 'forward' | null } | null = null
+  let tapTimer: ReturnType<typeof setTimeout> | undefined
+  function onStageTap(event: MouseEvent): void {
+    if (menu !== 'none') {
+      menu = 'none'
+      return
+    }
+    const x = event.clientX / Math.max(1, root?.clientWidth ?? 1)
+    const side = x < 1 / 3 ? 'back' : x > 2 / 3 ? 'forward' : null
+    const time = performance.now()
+    const quick = lastTap !== null && lastTap.side === side && time - lastTap.at < DOUBLE_TAP_MS
+    const stillJumping = side !== null && nudge !== null && nudge.side === side
+    lastTap = { at: time, side }
+    clearTimeout(tapTimer)
+    if (side !== null && (quick || stillJumping)) {
+      perform(side === 'back' ? 'seekBack' : 'seekForward')
+      return
+    }
+    tapTimer = setTimeout(toggleControls, DOUBLE_TAP_MS)
+  }
+  function toggleControls(): void {
+    if (controlsVisible) {
+      recentMove = false
+      api?.dismiss?.()
+      return
+    }
+    recentMove = true
+    clearTimeout(moveTimer)
+    moveTimer = setTimeout(() => (recentMove = false), 600)
+    api?.activity(hold)
+  }
+
   /* ── Doing things, with something to see ───────────────────────────────── */
 
   /** The big icon that pops in the middle on play and pause. */
@@ -360,6 +414,16 @@
   )
 
   function onKeydown(event: KeyboardEvent): void {
+    // On the phone this document is the whole app: a key belongs to it, not to
+    // the film. Escape, which the bridge sends for Back, closes our menu.
+    if (touch) {
+      if (event.key === 'Escape' && menu !== 'none') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        menu = 'none'
+      }
+      return
+    }
     const action = actionForEvent(event)
     if (action === null) return
     event.preventDefault()
@@ -593,19 +657,21 @@
   class:engaged
   class:mini={config.mini}
   class:show={controlsVisible}
+  class:touch
   role="presentation"
   tabindex="-1"
   bind:this={root}
   onpointermove={engaged ? onPointerMove : undefined}
 >
   {#if engaged}
-    <!-- The picture itself: a click plays or pauses, a double-click goes fullscreen. -->
+    <!-- The picture itself: a click plays or pauses, a double-click goes
+         fullscreen; on a phone, a tap shows the controls (`onStageTap`). -->
     <button
       class="stage"
-      aria-label={paused ? 'Play' : 'Pause'}
+      aria-label={touch ? 'Show the controls' : paused ? 'Play' : 'Pause'}
       tabindex="-1"
-      onclick={onStageClick}
-      ondblclick={onStageDoubleClick}
+      onclick={touch ? onStageTap : onStageClick}
+      ondblclick={touch ? undefined : onStageDoubleClick}
     ></button>
 
     {#if film !== null && film.waiting && !paused}
@@ -683,6 +749,24 @@
     </div>
   {/if}
 
+  {#if engaged && film !== null && touch}
+    <!-- A phone's row has no room for these: they sit in the middle of the
+         picture, where a thumb finds them, as in every phone player. -->
+    <div class="centre" class:shown={controlsVisible}>
+      <button class="centre-button" aria-label="Back 10 seconds" onclick={() => perform('seekBack')}>
+        <svg viewBox="0 0 24 24"><path d={ICONS.replay} /><text x="12" y="15.9" text-anchor="middle">10</text></svg>
+      </button>
+      <button class="centre-button play-big" aria-label={paused ? 'Play' : 'Pause'} onclick={() => perform('togglePlay')}>
+        <svg viewBox="0 0 24 24"><path d={paused ? ICONS.play : ICONS.pause} /></svg>
+      </button>
+      <button class="centre-button" aria-label="Forward 10 seconds" onclick={() => perform('seekForward')}>
+        <svg viewBox="0 0 24 24"
+          ><path d={ICONS.replay} transform="matrix(-1 0 0 1 24 0)" /><text x="12" y="15.9" text-anchor="middle">10</text></svg
+        >
+      </button>
+    </div>
+  {/if}
+
   {#if engaged && film !== null}
     <div class="scrim" aria-hidden="true"></div>
     <div
@@ -701,6 +785,7 @@
       />
 
       <div class="row">
+        {#if !touch}
         <button class="control play" aria-label={paused ? 'Play' : 'Pause'} title={paused ? 'Play (Space)' : 'Pause (Space)'} onclick={() => perform('togglePlay')}>
           <svg viewBox="0 0 24 24" class="morph" class:on={paused}><path d={ICONS.play} /></svg>
           <svg viewBox="0 0 24 24" class="morph" class:on={!paused}><path d={ICONS.pause} /></svg>
@@ -736,6 +821,7 @@
             oninput={onVolumeInput}
           />
         </div>
+        {/if}
 
         <span class="time">
           {clock(shownSeconds)}<span class="of">&nbsp;/&nbsp;{clock(film.duration)}</span>
@@ -1530,6 +1616,9 @@
   }
 
   .big-play {
+    /* Shown while the overlay passes taps through (the film is not ours yet),
+       so it takes its own: inherited, `none` left it unclickable. */
+    pointer-events: auto;
     position: absolute;
     left: 50%;
     top: 50%;
@@ -1602,5 +1691,111 @@
     text-align: center;
     transform: translateX(-50%);
     pointer-events: none;
+  }
+  /* ── A phone (`touch`) ───────────────────────────────────────────────────
+     The picture runs under the status bar and any cutout, so the controls
+     keep clear of them (`--safe-*` come from the phone's own sheet). The row
+     is 44px buttons, the size of the phone's top bar; play and the jumps sit
+     in the middle of the picture instead (`.centre`). */
+
+  .touch .controls {
+    padding: 0 max(12px, env(safe-area-inset-right, 0px)) calc(8px + var(--safe-bottom, 0px))
+      max(12px, env(safe-area-inset-left, 0px));
+  }
+
+  .touch .control {
+    width: 44px;
+    height: 44px;
+  }
+
+  .touch .control svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  /* The two that carry words size to them, as on the desktop. */
+  .touch .control.source,
+  .touch .control.quality {
+    width: auto;
+  }
+
+  .touch .control.source {
+    padding: 0 4px 0 12px;
+    font-size: 14px;
+  }
+
+  .touch .source-name {
+    max-width: 96px;
+  }
+
+  .touch .time {
+    margin-left: 4px;
+    font-size: 13px;
+  }
+
+  .touch .note {
+    top: calc(var(--safe-top, 0px) + 64px);
+  }
+
+  .centre {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: flex;
+    align-items: center;
+    gap: 36px;
+    transform: translate(-50%, -50%) scale(0.92);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 200ms ease,
+      transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .centre.shown {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+  }
+
+  .centre-button {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(10, 10, 14, 0.5);
+    color: inherit;
+  }
+
+  .centre-button:active {
+    transform: scale(0.92);
+  }
+
+  .centre-button svg {
+    width: 32px;
+    height: 32px;
+    fill: currentColor;
+    overflow: visible;
+  }
+
+  .centre-button text {
+    font:
+      800 7.2px/1 Inter,
+      system-ui,
+      sans-serif;
+    fill: currentColor;
+  }
+
+  .centre-button.play-big {
+    width: 72px;
+    height: 72px;
+  }
+
+  .centre-button.play-big svg {
+    width: 40px;
+    height: 40px;
   }
 </style>

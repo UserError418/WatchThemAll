@@ -31,6 +31,8 @@
  * the film among the reporting frames by length (`chooseFilm`).
  */
 
+import { PRESS_PLAY_SCRIPT } from './pressplayscript'
+
 /**
  * How near a video's length must be to the one a command was aimed at.
  *
@@ -71,6 +73,8 @@ export type FilmCommand =
   /** `film` is the relay id of the frame that holds the film; see `STRICT_CSS`. */
   | { command: 'hide'; film?: string }
   | { command: 'unhide' }
+  /** Press the source's own play control in every frame (`PRESS_PLAY_SCRIPT`): its poster, before there is a film. */
+  | { command: 'press' }
   | { command: 'track'; index: number; duration: number }
   /** Report the film's qualities; see `FilmQuality`. */
   | { command: 'levels'; duration: number }
@@ -270,7 +274,7 @@ export const STRICT_CSS =
  * nothing the second time, so main can install on every load event without
  * keeping track.
  */
-export function filmRelayScript(appOrigin: string): string {
+export function filmRelayScript(appOrigin: string, options: { guardNavigation?: boolean } = {}): string {
   return `(() => {
   if (window.top === window) return
   if (window.__wtaFilmRelay) return
@@ -407,8 +411,32 @@ export function filmRelayScript(appOrigin: string): string {
     }
   }
 
+  // ── The phone's navigation guard ───────────────────────────────────────
+  // The desktop refuses a provider document's navigation to another site in
+  // main (\`navguard.ts\`); the phone's WebView cannot tell which frame is
+  // navigating. So the outermost provider frame refuses it itself, with the
+  // same rule: another site than its own is an advert (Videasy took the whole
+  // picture to AliExpress on the emulator, 2026-09-27). The navigate event
+  // fires only for navigations this page starts, so the app changing the
+  // frame's source is untouched.
+  if (${options.guardNavigation === true} && window.parent === window.top && window.navigation) {
+    const siteOf = (host) =>
+      /^[0-9.]+$/.test(host) || host.includes(':') ? host : host.split('.').slice(-2).join('.')
+    window.navigation.addEventListener('navigate', (event) => {
+      try {
+        const to = new URL(event.destination.url)
+        if (to.protocol !== 'http:' && to.protocol !== 'https:') return
+        if (siteOf(to.hostname) === siteOf(location.hostname)) return
+        if (!event.cancelable) return
+        event.preventDefault()
+        // Said, as the desktop's guard logs it: the app logs what was refused.
+        send({ [TAG]: 1, refused: to.hostname })
+      } catch (error) {}
+    })
+  }
+
   // ── Commands, from the parent only ─────────────────────────────────────
-  const COMMANDS = ['watch', 'play', 'pause', 'toggle', 'setPaused', 'seek', 'seekBy', 'volume', 'mute', 'hide', 'unhide', 'track', 'levels', 'level']
+  const COMMANDS = ['watch', 'play', 'pause', 'toggle', 'setPaused', 'seek', 'seekBy', 'volume', 'mute', 'hide', 'unhide', 'track', 'levels', 'level', 'press']
 
   // ── Quality: the page's streaming engine, found by its shape ──────────────
   // An hls.js-like engine: a list of levels, the one playing, and an
@@ -672,6 +700,11 @@ export function filmRelayScript(appOrigin: string): string {
           style(HIDE_ID, HIDE_CSS)
           if (data.film === ID) onWay(video)
           else if (document.querySelector('[' + MARK + ']')) style(STRICT_ID, STRICT_CSS)
+          break
+        case 'press':
+          // The phone's way to press a poster: nothing outside a frame can run
+          // a script in it there. The desktop runs the same script from main.
+          ${PRESS_PLAY_SCRIPT}
           break
         case 'unhide':
           hiding = false

@@ -215,7 +215,7 @@
         </label>
 
         <!-- `desktop-only`: the phone gets these controls in the v2 port; see mobile.css. -->
-        <label class="check desktop-only">
+        <label class="check">
           <input
             type="checkbox"
             checked={library.settings.ownControls}

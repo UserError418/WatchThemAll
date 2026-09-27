@@ -36,6 +36,7 @@
  */
 
 import { registerPlugin } from '@capacitor/core'
+import { filmRelayScript } from '@shared/filmrelay'
 
 /** Marks the relay's messages among everything else providers post. */
 const TAG = 'wtaMedia'
@@ -219,6 +220,21 @@ const PlayerRelay = registerPlugin<PlayerRelayNative>('PlayerRelay')
  * False where the WebView lacks document-start scripts (it predates them),
  * in which case the mini player's button does nothing and the provider's own
  * controls remain the way to pause.
+ */
+export async function installFilmRelay(appOrigin: string): Promise<boolean> {
+  try {
+    const { installed } = await PlayerRelay.install({ script: filmRelayScript(appOrigin, { guardNavigation: true }) })
+    return installed
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The v1 relay, kept for its tests and its parsers. The phone installs the
+ * film relay instead since the v2 port (`installFilmRelay`): it speaks this
+ * relay's messages unchanged, and the native side holds one script at a time,
+ * so installing both would not stack them.
  */
 export async function installMediaRelay(appOrigin: string): Promise<boolean> {
   try {
