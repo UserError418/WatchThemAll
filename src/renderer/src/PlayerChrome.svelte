@@ -1360,13 +1360,9 @@
         On a phone the same strip was two cards wide, so a ten-episode season
         was five screens of sideways swiping, each card too big to be anything
         but in the way. There it is a vertical list, a row per episode with the
-        synopsis beside the still, like the detail view's own season list. It
-        sits at the bottom of the screen, because a phone held upright shows a
-        film as a band across the middle with black above and below. The sheet
-        is sized to fill the black below, so the picture stays in view, and
-        it is where a thumb already is. On a phone turned sideways the black is
-        at the sides, and the list becomes a panel in the middle, hanging from
-        the bar.
+        synopsis beside the still, like the detail view's own season list, in a
+        panel centred on the screen. Held upright, the panel takes most of the
+        screen; turned sideways, it hangs from the bar, two-thirds wide.
 
         Each episode carries what makes it recognisable at a glance: the still,
         its number and name, and how long it runs, or when it airs if it has
@@ -2015,24 +2011,26 @@
   }
 
   /*
-    The phone's list: a sheet at the foot of the screen, filling the black
-    below a film that is playing across the middle. The black is half the
-    screen less half the picture, and the picture is 9/16 of the width. The
-    floor keeps two rows on a short phone and the ceiling keeps the picture
-    on a tall one.
+    The phone's list, held upright: a panel centred on the screen, taking most
+    of it, with the same gap above and below (the bar's height). It was a
+    sheet sized to the black under the picture until the owner asked for it
+    centred and larger (2026-09-27): half a phone held only three or four
+    rows. `margin: auto` between `left: 0` and `right: 0` is what centres a
+    fixed box of a set width.
   */
   .episodes.touch {
     background: rgba(12, 12, 16, 0.97);
-    border-radius: 16px 16px 0 0;
-    border-width: 1px 0 0;
-    bottom: 0;
-    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.45);
-    height: calc(clamp(260px, 50vh - 50vw * 9 / 16, 60vh) + var(--safe-bottom, 0px));
+    border-radius: 16px;
+    border-width: 1px;
+    bottom: calc(var(--safe-bottom, 0px) + var(--below-bar));
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+    height: auto;
     left: 0;
-    margin: 0;
-    padding-bottom: var(--safe-bottom, 0px);
+    margin: 0 auto;
     position: fixed;
     right: 0;
+    top: calc(var(--safe-top, 0px) + var(--below-bar));
+    width: min(640px, calc(100vw - 24px));
   }
 
   .touch .episodes-head {
@@ -2104,21 +2102,14 @@
     overflow: hidden;
   }
 
-  /* A phone turned sideways: the black is beside the picture now, not below
-     it, and a sheet from the bottom would cover most of it. A panel hanging
-     from the bar instead, centred and two-thirds of the width. The owner chose
+  /* A phone turned sideways has little height to spare, so the panel runs
+     down to the screen's foot and is two-thirds of the width. The owner chose
      that over a narrow column down the right edge (2026-09-26): the synopsis
-     gets room to be read. `margin: auto` between `left: 0` and `right: 0` is
-     what centres a fixed box of a set width. */
+     gets room to be read. */
   @media (orientation: landscape) {
     .episodes.touch {
       border-radius: 12px;
-      border-width: 1px;
       bottom: calc(8px + var(--safe-bottom, 0px));
-      height: auto;
-      margin: 0 auto;
-      padding-bottom: 0;
-      top: calc(var(--safe-top, 0px) + var(--below-bar));
       width: min(640px, 66vw);
     }
   }
