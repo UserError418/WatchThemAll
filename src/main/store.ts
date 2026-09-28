@@ -18,10 +18,13 @@ import { StoreCore } from '@shared/store/core'
 import type { StorePersistence } from '@shared/store/core'
 import { migrate } from '@shared/store/migrate'
 
-class NodePersistence implements StorePersistence {
+/** A JSON file written atomically: the library's, and the test history's (`resultstore.ts`). */
+export class NodePersistence implements StorePersistence {
   constructor(
     readonly dir: string,
     readonly file: string,
+    /** Indented, for a file someone may open to read or repair by hand. */
+    readonly pretty = true,
   ) {}
 
   read(): Promise<string | null> {
@@ -32,9 +35,9 @@ class NodePersistence implements StorePersistence {
   write(text: string): Promise<void> {
     const tmp = `${this.file}.tmp`
     mkdirSync(this.dir, { recursive: true })
-    // Pretty-printed: this file is the user's whole library and the one thing
-    // they might open in an editor to check or repair by hand.
-    writeFileSync(tmp, JSON.stringify(JSON.parse(text), null, 2), 'utf-8')
+    // The library is pretty-printed: it is the user's whole library and the
+    // one thing they might open in an editor to check or repair by hand.
+    writeFileSync(tmp, this.pretty ? JSON.stringify(JSON.parse(text), null, 2) : text, 'utf-8')
     renameSync(tmp, this.file)
     return Promise.resolve()
   }

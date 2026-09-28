@@ -24,11 +24,6 @@ import { StoreCore } from '@shared/store/core'
 import type { StorePersistence } from '@shared/store/core'
 import { migrate } from '@shared/store/migrate'
 
-const FILE = 'watchthemall.json'
-/** Where each write lands before it replaces `FILE`; see `write`. */
-const TEMP_FILE = 'watchthemall.json.tmp'
-/** Where an unparseable document is kept, so a fresh start is not a data loss. */
-const CORRUPT_FILE = 'watchthemall.corrupt.json'
 /** App-private storage: not world-readable, and removed when the app is. */
 const DIRECTORY = Directory.Data
 
@@ -44,11 +39,23 @@ function isMissingFile(err: unknown): boolean {
   return code === 'OS-PLUG-FILE-0008' || (typeof message === 'string' && /does not exist/i.test(message))
 }
 
-class CapacitorPersistence implements StorePersistence {
+/** A JSON file written atomically: the library's, and the test history's (`resultstore.ts`). */
+export class CapacitorPersistence implements StorePersistence {
+  /** Where each write lands before it replaces the file; see `write`. */
+  private readonly tempFile: string
+  /** Where an unparseable document is kept, so a fresh start is not a data loss. */
+  private readonly corruptFile: string
+
+  /** `file` is a name ending in `.json`, such as `watchthemall.json`. */
+  constructor(private readonly file: string) {
+    this.tempFile = `${file}.tmp`
+    this.corruptFile = file.replace(/\.json$/, '.corrupt.json')
+  }
+
   async read(): Promise<string | null> {
     try {
       const file = await Filesystem.readFile({
-        path: FILE,
+        path: this.file,
         directory: DIRECTORY,
         encoding: Encoding.UTF8,
       })
@@ -76,12 +83,12 @@ class CapacitorPersistence implements StorePersistence {
    */
   async write(text: string): Promise<void> {
     await Filesystem.writeFile({
-      path: TEMP_FILE,
+      path: this.tempFile,
       directory: DIRECTORY,
       encoding: Encoding.UTF8,
       data: text,
     })
-    await Filesystem.rename({ from: TEMP_FILE, to: FILE, directory: DIRECTORY, toDirectory: DIRECTORY })
+    await Filesystem.rename({ from: this.tempFile, to: this.file, directory: DIRECTORY, toDirectory: DIRECTORY })
   }
 
   async quarantine(): Promise<void> {
@@ -90,9 +97,9 @@ class CapacitorPersistence implements StorePersistence {
     // the most data — so a repeat launch must not overwrite it. `copy` fails
     // silently here if the destination exists, which is the behaviour wanted.
     await Filesystem.copy({
-      from: FILE,
+      from: this.file,
       directory: DIRECTORY,
-      to: CORRUPT_FILE,
+      to: this.corruptFile,
       toDirectory: DIRECTORY,
     })
   }
@@ -100,6 +107,6 @@ class CapacitorPersistence implements StorePersistence {
 
 export class MobileStore extends StoreCore {
   constructor() {
-    super(new CapacitorPersistence(), migrate, 'phone')
+    super(new CapacitorPersistence('watchthemall.json'), migrate, 'phone')
   }
 }
