@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**WatchThemAll** · Last updated: 13 September 2026
+**WatchThemAll** · Last updated: 28 September 2026
 
 WatchThemAll is an open-source desktop and Android application with no backend.
 There is no server operated by this project, no account to create, and no
@@ -10,10 +10,12 @@ analytics or telemetry of any kind.
 
 Your library — what you have watched, what you are part-way through, which
 providers you enabled, and your settings — is stored **on your own device** as a
-single JSON file. On desktop, Settings shows you exactly where; on Android it
-lives in the app's private storage.
+JSON file. Beside it, a second file keeps the results of testing the providers:
+which provider played which title and episode, when, how fast and at what
+quality, and whether that was measured on a desktop or a phone. On desktop,
+Settings shows you where; on Android both live in the app's private storage.
 
-Nothing in that file is sent anywhere unless you turn on sync.
+Nothing in these files is sent anywhere unless you turn on sync.
 
 ## Optional sync
 
@@ -22,16 +24,20 @@ If you connect a Google account, WatchThemAll asks for one permission:
 > `https://www.googleapis.com/auth/drive.file` — "See, edit, create and delete
 > only the specific Google Drive files you use with this app"
 
-This grants access only to files the application itself creates, in practice one
-file. Your other documents and photos are not merely off-limits; they are absent
-from every listing the application can make.
+This grants access only to files the application itself creates, in practice
+the three below. Your other documents and photos are not merely off-limits; they
+are absent from every listing the application can make.
 
 With sync on:
 
 - A copy of your library is written to `WatchThemAll library.json` in your own
   Drive, against your own storage quota. You can see it, move it and delete it
   like any other file.
-- Your other devices read and write that same file, which is how they agree.
+- Where you are in whatever you are watching also goes to
+  `WatchThemAll positions.json`, a small file updated about every ten seconds while
+  something plays, so another device can carry on from there.
+- The provider test results go to `WatchThemAll tests.json`.
+- Your other devices read and write the same files, which is how they agree.
 - **The data never passes through any system operated by this project.** Your
   device talks to Google directly. We do not host it, cannot read it, and never
   receive a copy.
@@ -44,8 +50,9 @@ same boundary as the library file itself.
 **Turning it off:** disconnect the account in Settings, which deletes the stored
 tokens. Revoke access at
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
-Delete `WatchThemAll library.json` from your Drive to remove the synced copy;
-nothing else is left behind.
+Delete `WatchThemAll library.json`, `WatchThemAll positions.json` and
+`WatchThemAll tests.json` from your Drive to remove the synced copies; nothing
+else is left behind.
 
 ## Third parties the application contacts
 
