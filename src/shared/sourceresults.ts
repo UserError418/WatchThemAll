@@ -18,10 +18,15 @@
  * ## Where results come from
  *
  * - `test`: "Test all sources" and the background tester, as before.
- * - `play`: the player, when a source really streams, and when it fails in a
- *   way that cannot be mistaken (an error page, a refused stream, the wrong
- *   film). A slow source is not a failure here.
- * - `preview`: the detail view's stream preview, when its stream arrives.
+ * - `play`: the player, when a source really streams (with its time, and on
+ *   the desktop its picture), and when the source's own servers declare a
+ *   failure: an error status for its page or its backend, or its video
+ *   refused. A slow source, a dropped network or a crash is not a result.
+ *   The phone files successes only. See `PlayMeasurement`.
+ * - `preview`: the detail view's stream preview, once its film plays.
+ *
+ * Each device keeps its history in a file of its own, and it syncs as a
+ * file of its own (`store/results.ts`, `sync/results.ts`).
  *
  * ## How a row is decided, per source
  *
@@ -40,7 +45,7 @@
  *    failure newer than it turns the source amber, and two in a row turn it
  *    red.
  * 4. **Speed and quality from several results.** The time to stream is the
- *    median of the latest successes, so one slow evening does not move a
+ *    median of the latest successes (`SAMPLE_SIZE`), so one slow evening does not move a
  *    source down. The quality is the best of them, since a player's first
  *    picture is often a lower rung of the stream's ladder.
  *
