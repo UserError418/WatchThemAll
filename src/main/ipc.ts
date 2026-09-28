@@ -37,7 +37,15 @@ import { resumeOfferFor } from './resume'
 import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
 import { outcomesForTitle, titleKey } from './outcomes'
-import { pruneScans, recordCast, recordScan, scanEpisode, titleResults, type AutomaticOrder } from './providerscan'
+import {
+  castResult,
+  everyRow,
+  scanEpisode,
+  titleResults,
+  type AutomaticOrder,
+  type ResultsAccess,
+} from './providerscan'
+import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { airedEpisode, notOutYet } from '@shared/aired'
 import type { ScanService } from './scanservice'
@@ -104,7 +112,9 @@ export interface IpcDeps {
    * ever depended on which title it is — and the source pickers need the same
    * order for a title nobody has pressed play on yet.
    */
-  automaticOrder: (media: TitleRef) => AutomaticOrder
+  automaticOrder: (media: TitleRef & { season?: number | null; episode?: number | null }) => AutomaticOrder
+  /** The test results: see `ResultsAccess`. */
+  results: ResultsAccess
   /** The detail view's stream preview; see `previewPlanFor` in `index.ts`. */
   preview: {
     plan: (req: PlayRequest) => PreviewPlan | null
@@ -240,24 +250,31 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
    * appended to by the player as it plays, so anything held here would be stale
    * exactly when the user opens the picker to see what just happened.
    */
-  ipcMain.handle(CH.providersOutcomes, (_e, media: TitleRef): TitleProviderState => {
-    const doc = store.read()
-    const key = titleKey(media)
-    const now = Date.now()
-    // From the same store read a moment later, by the function Automatic
-    // itself calls — so the rows and the fallback chain cannot disagree.
-    const automatic = deps.automaticOrder(media)
-    const order = automatic.providers.map((provider) => provider.id)
-    const results = titleResults(doc, key, 'desktop', now)
-    return {
-      outcomes: outcomesForTitle(doc.streamOutcomes, key),
-      resume: automatic.resume,
-      scan: results.scan,
-      sharedFrom: results.sharedFrom,
-      castability: castabilities(order, results.scan, [...doc.providerScans, ...doc.sharedScans], now),
-      order,
-    }
-  })
+  ipcMain.handle(
+    CH.providersOutcomes,
+    (_e, media: TitleRef, episode?: { season: number; episode: number } | null): TitleProviderState => {
+      const doc = store.read()
+      const key = titleKey(media)
+      const now = Date.now()
+      // The episode's own results where there are any (see `titleResults`);
+      // without one, the whole title's, as before results were per episode.
+      const request = { ...media, season: episode?.season ?? null, episode: episode?.episode ?? null }
+      // From the same store read a moment later, by the function Automatic
+      // itself calls — so the rows and the fallback chain cannot disagree.
+      const automatic = deps.automaticOrder(request)
+      const order = automatic.providers.map((provider) => provider.id)
+      const sources = deps.results.sources()
+      const results = titleResults(sources, key, episodeOf(request), 'desktop', now)
+      return {
+        outcomes: outcomesForTitle(doc.streamOutcomes, key),
+        resume: automatic.resume,
+        scan: results.scan,
+        sharedFrom: results.sharedFrom,
+        castability: castabilities(order, results.scan, everyRow(sources, 'desktop', now), now),
+        order,
+      }
+    },
+  )
 
   /**
    * Try every enabled provider and report which ones actually stream.
@@ -306,10 +323,9 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
         runtimeMinutes: null,
       })
 
-      // Pruned on the way in rather than on load: this is the only moment the
-      // list grows, so it is the only moment it can need trimming, and doing it
-      // here keeps the expiry rule beside the code that depends on it.
-      store.setProviderScans(recordScan(pruneScans(store.read().providerScans), scan))
+      // Filed under the episode it tested, which is not always the one asked
+      // for: see `scanEpisode` and `airedEpisode`.
+      deps.results.record(resultsFromScan(scan, deps.results.device(), target))
       return scan
     },
   )
@@ -412,9 +428,8 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     // Succeeded or not, a beam that identified a stream measured the source:
     // filed, so the cast list knows it next time. See `recordCast`.
     if (result.learned && now.titleKey && now.providerId) {
-      store.setProviderScans(
-        recordCast(pruneScans(store.read().providerScans), now.titleKey, now.providerId, result.learned, Date.now()),
-      )
+      const where = { device: deps.results.device(), titleKey: now.titleKey, episode: now.episode, providerId: now.providerId }
+      deps.results.record([castResult(where, result.learned, Date.now())])
     }
     return { ok: result.ok, error: result.error, final: !result.ok && result.learned !== undefined }
   }

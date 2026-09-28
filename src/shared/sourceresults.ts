@@ -196,6 +196,44 @@ export function mergeResults(local: readonly SourceResult[], remote: readonly So
 }
 
 /**
+ * The episode a request is about, for reading and writing results: null for
+ * a film, and for a series request that names no episode (the whole title).
+ */
+export function episodeOf(ref: {
+  type: 'tv' | 'movie'
+  season?: number | null
+  episode?: number | null
+}): { season: number; episode: number } | null {
+  if (ref.type !== 'tv' || typeof ref.season !== 'number' || typeof ref.episode !== 'number') return null
+  return { season: ref.season, episode: ref.episode }
+}
+
+/** Where a measurement was made: which title, episode and source, on which device. */
+export interface MeasuredAt {
+  device: ResultDevice
+  titleKey: string
+  /** Null for a film. */
+  episode: { season: number; episode: number } | null
+  providerId: string
+}
+
+/** What was measured: everything a result says besides where. */
+export type Measured = Omit<SourceResult, 'titleKey' | 'season' | 'episode' | 'providerId' | 'deviceId' | 'deviceKind'>
+
+/** One result, from where it was measured and what was found. */
+export function measurement(where: MeasuredAt, what: Measured): SourceResult {
+  return {
+    titleKey: where.titleKey,
+    season: where.episode?.season ?? null,
+    episode: where.episode?.episode ?? null,
+    providerId: where.providerId,
+    deviceId: where.device.deviceId,
+    deviceKind: where.device.deviceKind,
+    ...what,
+  }
+}
+
+/**
  * A test's row (`ProviderScan`, as "Test all sources" and the background
  * tester produce it) as results: one per source it reached.
  */

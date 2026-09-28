@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, PreviewPlan, TitleRef } from '@shared/ipc'
-import { Store } from './store'
+import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
 import { UpNextController, isEpisodeEnd, type UpNextPlace } from './upnext'
@@ -39,20 +39,20 @@ import {
   defaultProviderOrder,
   lastWorkingForTitle,
   mediaKey,
-  lastPlayedAt,
   outcomesForTitle,
   record,
   titleKey,
 } from './outcomes'
 import {
-  freshScan,
-  pruneScans,
-  recordScan,
+  ownRows,
   resumeFirst,
   scanAwareOrder,
   titleResults,
   type AutomaticOrder,
+  type ResultsAccess,
 } from './providerscan'
+import { ResultStore } from '@shared/store/results'
+import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { createScanService } from './scanservice'
 import { createWatchlistTester } from './watchlisttester'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
@@ -117,6 +117,20 @@ const store = new Store()
  */
 store.subscribe(batchChanges((keys) => send(EV.storeChanged, keys)))
 
+/**
+ * Every test result this install has, its own and the other devices': the
+ * history (`@shared/sourceresults`), in its own file beside the library.
+ * Compact rather than indented: nobody repairs it by hand, and it syncs.
+ */
+const resultStore = new ResultStore(new NodePersistence(store.dir, join(store.dir, 'source-results.json'), false))
+
+/** The results as everything that reads or records them reaches them. */
+const testResults: ResultsAccess = {
+  sources: () => ({ history: resultStore.all(), doc: store.read() }),
+  device: () => ({ deviceId: store.read().deviceId, deviceKind: 'desktop' }),
+  record: (results) => resultStore.record(results),
+}
+
 
 /**
  * Set once the app is ready, and null in a build with no OAuth client.
@@ -152,6 +166,15 @@ let applyingRemote = false
  * goes out, and a stop (pause, close, next episode, quit) sends one at once.
  */
 const pushPositions = throttle(() => void sync?.positions(), POSITIONS_PUSH_MS)
+
+/**
+ * Push the test history at most this often while this device keeps
+ * measuring. Nothing waits on another device's results, and the file is the
+ * largest of the three, so this is the calm pace: the background tester
+ * measures a source a minute.
+ */
+const RESULTS_PUSH_MS = 2 * 60_000
+const pushResults = throttle(() => void sync?.results(), RESULTS_PUSH_MS)
 let mainWindow: BrowserWindow | null = null
 let stopReleaseTimer: (() => void) | null = null
 /** Cleared on quit so a pending refresh cannot outlive the app. */
@@ -251,7 +274,7 @@ const scan = createScanService({
 const watchlistTester = createWatchlistTester({
   watchlist: () => store.read().watchlist,
   history: () => store.read().history,
-  scans: () => store.read().providerScans,
+  scans: () => ownRows(testResults.sources(), 'desktop'),
   // A film's watched fraction, as the Watchlist tab computes it for its order.
   filmPercent: (tmdbId) => {
     const key = resumeKey({ tmdbId, season: null, episode: null })
@@ -274,7 +297,7 @@ const watchlistTester = createWatchlistTester({
   },
   probeOne: (key, subject, provider) => scan.probeOne(key, subject, provider),
   pausedFor: () => (player ? 'playback' : scan.busy() ? 'scan' : null),
-  save: (result) => store.setProviderScans(recordScan(pruneScans(store.read().providerScans), result)),
+  save: (result, episode) => testResults.record(resultsFromScan(result, testResults.device(), episode)),
   onStatus: (status) => send(EV.watchlistTest, status),
   // Two minutes after launch: start-up, the catalogue refresh and the release
   // sweep all want the network first.
@@ -519,7 +542,9 @@ function openPlayer(
       same results the source pickers show.
     */
     testedWorking: (providerId) =>
-      titleResults(store.read(), titleKey(context), 'desktop').scan?.verdicts[providerId] === 'stream',
+      titleResults(testResults.sources(), titleKey(context), episodeOf(context), 'desktop').scan?.verdicts[
+        providerId
+      ] === 'stream',
     // Where this was left last time; the view only acts on it if the provider
     // has not restored the position itself.
     resumeAt: savedPositionFor(context),
@@ -710,7 +735,7 @@ function previewPlanFor(req: PlayRequest): PreviewPlan | null {
   const key = titleKey(req)
   const choice = choosePreview({
     providers: automaticOrderFor(req).providers,
-    scan: freshScan(doc.providerScans, key, Date.now(), lastPlayedAt(doc.streamOutcomes, key)),
+    scan: titleResults(testResults.sources(), key, episodeOf(req), 'desktop').scan,
     req,
     resume: resumeOfferFor(doc.resumePoints, req),
   })
@@ -927,12 +952,12 @@ function enabledProviders(): Provider[] {
  * fallback use the same measurement, so "Automatic" stops walking into sources
  * that were measured dead a minute ago.
  */
-function automaticOrderFor(req: TitleRef): AutomaticOrder {
-  const doc = store.read()
-  const { streamOutcomes, favouriteProviderIds, settings } = doc
+function automaticOrderFor(req: TitleRef & { season?: number | null; episode?: number | null }): AutomaticOrder {
+  const { streamOutcomes, favouriteProviderIds, settings } = store.read()
   const key = titleKey(req)
   const outcomes = outcomesForTitle(streamOutcomes, key)
-  const { scan } = titleResults(doc, key, 'desktop')
+  // The episode's own results where there are any: see `titleResults`.
+  const { scan } = titleResults(testResults.sources(), key, episodeOf(req), 'desktop')
   const ordered = scanAwareOrder(enabledProviders(), outcomes, {
     order: providerOrder(),
     favouriteIds: favouriteProviderIds,
@@ -1072,6 +1097,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(async () => {
     await store.load()
+    await resultStore.load()
 
     // Before any window is created: providers reject Electron's own
     // User-Agent, so every request the app makes has to look like Chrome.
@@ -1118,6 +1144,10 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
                   applyingRemote = false
                 }
               },
+            },
+            resultsHost: {
+              read: () => resultStore.all(),
+              adopt: (results) => resultStore.adopt(results),
             },
             host: {
               read: () => store.raw(),
@@ -1184,11 +1214,13 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
           startSeconds: player.position()?.seconds ?? 0,
           titleKey: titleKey(context),
           providerId: provider?.id ?? null,
+          episode: episodeOf(context),
         }
       },
       checkReleases,
       allProviders,
       automaticOrder: automaticOrderFor,
+      results: testResults,
       preview: { plan: previewPlanFor, keep: keepPreviewPosition },
       scan,
     })
@@ -1372,6 +1404,11 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
         sync?.syncSoon()
       }, SYNC_AFTER_WRITE_MS)
     })
+    // What this device measures goes out at the history's own pace; what it
+    // took from another device is already there.
+    resultStore.subscribe((change) => {
+      if (change === 'local') pushResults.request()
+    })
   })
 }
 
@@ -1425,4 +1462,5 @@ app.on('before-quit', (event) => {
   if (catalogTimer) clearInterval(catalogTimer)
   // A coalesced write may still be pending.
   void store.flush()
+  void resultStore.flush()
 })

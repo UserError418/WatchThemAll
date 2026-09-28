@@ -11,20 +11,20 @@ import { describe, expect, it } from 'vitest'
 import type { Provider, SourceSortKey } from '@shared/types'
 import type { ProviderScan } from '@shared/ipc'
 import {
-  MAX_SCANS,
   RESULT_TTL_MS,
   RETEST_AFTER_MS,
-  freshScan,
+  castResult,
   isRetestDue,
+  ownRows,
   providerRank,
-  pruneScans,
-  recordCast,
-  recordScan,
   resumeFirst,
   scanAwareOrder,
   scanEpisode,
   scanProgress,
+  titleResults,
+  type ResultSources,
 } from './providerscan'
+import type { SourceResult } from '@shared/sourceresults'
 
 const provider = (id: string): Provider => ({
   id,
@@ -239,122 +239,6 @@ describe('scanEpisode', () => {
   })
 })
 
-describe('freshScan', () => {
-  const now = 1_700_000_000_000
-  const day = 24 * 60 * 60 * 1000
-
-  it('returns results taken within the window', () => {
-    const scans = [scanOf({ a: 'stream' }, now - 60_000)]
-    expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'stream' })
-  })
-
-  it('keeps a result for thirty days', () => {
-    const scans = [scanOf({ a: 'dead' }, now - 29 * day)]
-    expect(freshScan(scans, 'tv:tt1', now)?.verdicts).toEqual({ a: 'dead' })
-  })
-
-  it('discards one that has aged out rather than showing it faded', () => {
-    const scans = [scanOf({ a: 'stream' }, now - RESULT_TTL_MS - 1)]
-    expect(freshScan(scans, 'tv:tt1', now)).toBeNull()
-  })
-
-  it('ages each provider on its own clock, keeping the rest of the row', () => {
-    const row: ProviderScan = {
-      titleKey: 'tv:tt1',
-      at: now - day,
-      verdicts: { old: 'stream', recent: 'dead' },
-      testedAt: { old: now - RESULT_TTL_MS - 1, recent: now - day },
-      reasons: { recent: { kind: 'error', status: 500 } },
-    }
-    const fresh = freshScan([row], 'tv:tt1', now)
-    expect(fresh?.verdicts).toEqual({ recent: 'dead' })
-    expect(fresh?.reasons).toEqual({ recent: { kind: 'error', status: 500 } })
-    expect(fresh?.at).toBe(now - day)
-  })
-
-  it('lets a real play since the test overrule a red or amber result', () => {
-    // Nobody clicks a red source, so without this a wrong red would hide a
-    // working one for a month — and a red outranks play history.
-    const scans = [scanOf({ red: 'dead', amber: 'unsure', green: 'stream' }, now - 2 * day)]
-    const fresh = freshScan(scans, 'tv:tt1', now, { red: now - day, amber: now - day, green: now - day })
-    expect(fresh?.verdicts).toEqual({ green: 'stream' })
-  })
-
-  it('keeps a red that is newer than the last play', () => {
-    const scans = [scanOf({ red: 'dead' }, now - day)]
-    expect(freshScan(scans, 'tv:tt1', now, { red: now - 2 * day })?.verdicts).toEqual({ red: 'dead' })
-  })
-
-  it('returns null for a title that has never been scanned', () => {
-    expect(freshScan([scanOf({ a: 'stream' }, now)], 'movie:tt9', now)).toBeNull()
-  })
-})
-
-describe('recordScan', () => {
-  it('merges per provider: a new result replaces only the providers it measured', () => {
-    // The background tester writes one provider at a time; a row replaced
-    // whole would forget every other provider each time.
-    const first: ProviderScan = { titleKey: 'tv:tt1', at: 1, verdicts: { a: 'stream', b: 'dead' } }
-    const second: ProviderScan = { titleKey: 'tv:tt1', at: 2, verdicts: { b: 'stream' } }
-    const [merged] = recordScan([first], second)
-    expect(merged?.verdicts).toEqual({ a: 'stream', b: 'stream' })
-    // Each keeps its own test time; an old row's providers were tested at its `at`.
-    expect(merged?.testedAt).toEqual({ a: 1, b: 2 })
-    expect(merged?.at).toBe(2)
-  })
-
-  it("replaces a re-tested provider's details entirely, clearing stale ones", () => {
-    const first: ProviderScan = {
-      titleKey: 'tv:tt1',
-      at: 1,
-      verdicts: { a: 'dead', b: 'stream' },
-      timings: { b: 900 },
-      reasons: { a: { kind: 'timeout', seconds: 20 } },
-    }
-    const second: ProviderScan = {
-      titleKey: 'tv:tt1',
-      at: 2,
-      verdicts: { a: 'stream', b: 'dead' },
-      timings: { a: 1200 },
-      reasons: { b: { kind: 'error', status: 500 } },
-    }
-    const [merged] = recordScan([first], second)
-    expect(merged?.timings).toEqual({ a: 1200 })
-    expect(merged?.reasons).toEqual({ b: { kind: 'error', status: 500 } })
-  })
-
-  it('treats how the video arrived and what a TV said like every other detail', () => {
-    const first: ProviderScan = {
-      titleKey: 'tv:tt1',
-      at: 1,
-      verdicts: { a: 'stream', b: 'stream' },
-      delivery: { a: 'progressive', b: 'progressive' },
-      casts: { a: 'played' },
-    }
-    // `a` re-tested and now serves a playlist; `b` untouched.
-    const second: ProviderScan = { titleKey: 'tv:tt1', at: 2, verdicts: { a: 'stream' }, delivery: { a: 'segmented' } }
-    const [merged] = recordScan([first], second)
-    expect(merged?.delivery).toEqual({ a: 'segmented', b: 'progressive' })
-    // The cast that played was of the file `a` no longer hands out.
-    expect(merged?.casts).toEqual({})
-  })
-
-  it('keeps scans of other titles', () => {
-    const other = { titleKey: 'movie:tt2', at: 1, verdicts: {} }
-    const next = recordScan([other], { titleKey: 'tv:tt1', at: 2, verdicts: {} })
-    expect(next.map((s) => s.titleKey)).toEqual(['movie:tt2', 'tv:tt1'])
-  })
-
-  it('drops the least recently updated once full', () => {
-    let scans: ProviderScan[] = []
-    for (let i = 0; i < MAX_SCANS + 5; i += 1) {
-      scans = recordScan(scans, { titleKey: `tv:tt${i}`, at: i, verdicts: {} })
-    }
-    expect(scans).toHaveLength(MAX_SCANS)
-    expect(scans[0]?.titleKey).toBe('tv:tt5')
-  })
-})
-
 describe('isRetestDue', () => {
   const now = 1_700_000_000_000
   // Greens as they are recorded today, saying how their video arrived.
@@ -395,25 +279,6 @@ describe('isRetestDue', () => {
     }
     expect(isRetestDue(row, 'a', now)).toBe(true)
     expect(isRetestDue(row, 'b', now)).toBe(false)
-  })
-})
-
-describe('pruneScans', () => {
-  it('drops expired results, and rows left empty by that', () => {
-    const now = 1_700_000_000_000
-    const scans: ProviderScan[] = [
-      { titleKey: 'fresh', at: now - 1_000, verdicts: { a: 'stream' } },
-      { titleKey: 'stale', at: now - RESULT_TTL_MS - 1, verdicts: { a: 'stream' } },
-      {
-        titleKey: 'mixed',
-        at: now,
-        verdicts: { a: 'stream', b: 'dead' },
-        testedAt: { a: now, b: now - RESULT_TTL_MS - 1 },
-      },
-    ]
-    const pruned = pruneScans(scans, now)
-    expect(pruned.map((s) => s.titleKey)).toEqual(['fresh', 'mixed'])
-    expect(pruned[1]?.verdicts).toEqual({ a: 'stream' })
   })
 })
 
@@ -486,39 +351,108 @@ describe('resumeFirst', () => {
   })
 })
 
-describe('recordCast', () => {
+describe('titleResults', () => {
   const now = 1_800_000_000_000
+  const day = 24 * 60 * 60 * 1000
+  const here = { deviceId: 'pc-1', deviceKind: 'desktop' as const }
 
-  it('files a cast as a green measured now, with what the TV said', () => {
-    const [row] = recordCast([], 'tv:tt1', 'a', { delivery: 'progressive', outcome: 'played' }, now)
-    expect(row).toMatchObject({
-      verdicts: { a: 'stream' },
-      testedAt: { a: now },
-      delivery: { a: 'progressive' },
-      casts: { a: 'played' },
+  const tested = (providerId: string, verdict: SourceResult['verdict'], at: number, episode = 1): SourceResult => ({
+    titleKey: 'tv:tt1',
+    season: 1,
+    episode,
+    providerId,
+    at,
+    ...here,
+    origin: 'test',
+    verdict,
+  })
+
+  const sources = (parts: Partial<ResultSources['doc']> & { history?: SourceResult[] }): ResultSources => ({
+    history: parts.history ?? [],
+    doc: {
+      deviceId: here.deviceId,
+      providerScans: parts.providerScans ?? [],
+      sharedScans: parts.sharedScans ?? [],
+      streamOutcomes: parts.streamOutcomes ?? [],
+    },
+  })
+
+  it('reads the history for the episode asked about', () => {
+    const history = [tested('a', 'stream', now - day, 1), tested('a', 'dead', now - day, 2)]
+    expect(titleResults(sources({ history }), 'tv:tt1', { season: 1, episode: 1 }, 'desktop', now).scan?.verdicts).toEqual({ a: 'stream' })
+    expect(titleResults(sources({ history }), 'tv:tt1', { season: 1, episode: 2 }, 'desktop', now).scan?.verdicts).toEqual({ a: 'dead' })
+  })
+
+  it('still reads the rows stored before the history, as results of the whole title', () => {
+    const own: ProviderScan = { titleKey: 'tv:tt1', at: now - 2 * day, verdicts: { a: 'dead', b: 'stream' } }
+    const phone = { titleKey: 'tv:tt1', at: now - day, verdicts: { c: 'stream' as const }, deviceId: 'phone-1', deviceKind: 'phone' as const }
+    // The episode's own result decides for a; b and c have only the old rows.
+    const read = titleResults(
+      sources({ providerScans: [own], sharedScans: [phone], history: [tested('a', 'stream', now - day)] }),
+      'tv:tt1',
+      { season: 1, episode: 1 },
+      'desktop',
+      now,
+    )
+    expect(read.scan?.verdicts).toEqual({ a: 'stream', b: 'stream', c: 'unsure' })
+    expect(read.sharedFrom).toEqual({ c: 'phone' })
+  })
+
+  it('lets a play in the play log overtake an older failure, as it did', () => {
+    const history = [tested('a', 'dead', now - 2 * day)]
+    const streamOutcomes = [
+      { mediaKey: 'tv:tt1:1:1', providerId: 'a', outcome: 'stream' as const, at: now - day, updatedAt: now - day, deletedAt: null },
+    ]
+    const read = titleResults(sources({ history, streamOutcomes }), 'tv:tt1', { season: 1, episode: 1 }, 'desktop', now)
+    expect(read.scan).toBeNull()
+  })
+})
+
+describe('ownRows', () => {
+  it("is this device's own results only, one title-wide row per title", () => {
+    const now = 1_800_000_000_000
+    const mine: SourceResult = {
+      titleKey: 'tv:tt1',
+      season: 1,
+      episode: 3,
+      providerId: 'a',
+      at: now - 1_000,
+      deviceId: 'pc-1',
+      deviceKind: 'desktop',
+      origin: 'test',
+      verdict: 'stream',
+    }
+    const theirs: SourceResult = { ...mine, providerId: 'b', deviceId: 'pc-2' }
+    const rows = ownRows(
+      { history: [mine, theirs], doc: { deviceId: 'pc-1', providerScans: [], sharedScans: [], streamOutcomes: [] } },
+      'desktop',
+      now,
+    )
+    expect(rows.map((row) => [row.titleKey, row.verdicts])).toEqual([['tv:tt1', { a: 'stream' }]])
+  })
+})
+
+describe('castResult', () => {
+  const now = 1_800_000_000_000
+  const where = { device: { deviceId: 'pc-1', deviceKind: 'desktop' as const }, titleKey: 'tv:tt1', episode: { season: 2, episode: 5 }, providerId: 'a' }
+
+  it('files a cast as a success seen while playing, with how the video came and what the TV said', () => {
+    expect(castResult(where, { delivery: 'progressive', outcome: 'played' }, now)).toEqual({
+      titleKey: 'tv:tt1',
+      season: 2,
+      episode: 5,
+      providerId: 'a',
+      deviceId: 'pc-1',
+      deviceKind: 'desktop',
+      at: now,
+      origin: 'play',
+      verdict: 'stream',
+      delivery: 'progressive',
+      cast: 'played',
     })
   })
 
-  it("keeps the source's measured start time and quality, which a cast does not measure", () => {
-    const tested: ProviderScan = {
-      titleKey: 'tv:tt1',
-      at: 1,
-      verdicts: { a: 'stream', b: 'dead' },
-      timings: { a: 900 },
-      qualities: { a: 1080 },
-      delivery: { a: 'progressive' },
-    }
-    const [row] = recordCast([tested], 'tv:tt1', 'a', { delivery: 'segmented', outcome: 'refused' }, now)
-    expect(row?.timings).toEqual({ a: 900 })
-    expect(row?.qualities).toEqual({ a: 1080 })
-    expect(row?.delivery).toEqual({ a: 'segmented' })
-    expect(row?.casts).toEqual({ a: 'refused' })
-    // The other sources are left as they were.
-    expect(row?.verdicts.b).toBe('dead')
-  })
-
-  it('records no outcome where the television did not answer clearly', () => {
-    const [row] = recordCast([], 'tv:tt1', 'a', { delivery: 'progressive', outcome: null }, now)
-    expect(row?.casts ?? {}).toEqual({})
+  it('records no answer where the television did not give a clear one', () => {
+    expect(castResult(where, { delivery: 'segmented', outcome: null }, now)).not.toHaveProperty('cast')
   })
 })

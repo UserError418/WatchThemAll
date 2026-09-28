@@ -165,8 +165,8 @@ export interface WatchlistTesterOptions {
   probeOne: (titleKey: string, subject: ProbeSubject, provider: Provider) => Promise<ProviderScan | null>
   /** Why testing must wait right now, or null to go ahead. */
   pausedFor: () => 'playback' | 'scan' | null
-  /** Keep a result. */
-  save: (result: ProviderScan) => void
+  /** Keep a result, for the episode it tested (null for a film). */
+  save: (result: ProviderScan, episode: { season: number; episode: number } | null) => void
   onStatus: (status: WatchlistTestStatus) => void
   /** Between the end of one test and the start of the next. */
   intervalMs?: number
@@ -286,7 +286,7 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
         plan.provider,
       )
       // Null when a scan by hand ran meanwhile; it measured this provider too.
-      if (result) options.save(result)
+      if (result) options.save(result, episode)
       publish('waiting')
     } finally {
       testing = false

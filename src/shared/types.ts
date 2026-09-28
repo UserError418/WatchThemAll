@@ -573,7 +573,10 @@ export interface StoreShape {
    */
   providerOrder: string[]
   /**
-   * This device's own test results, one row per title, newest last.
+   * This device's own test results, one row per title, newest last, as
+   * builds before 2.0.3 kept them. No longer written: results are a history
+   * in a file of their own now (`sourceresults.ts`), and these rows are read
+   * as results of the whole title (`legacyResults`) until they age out.
    *
    * **Not** a synced collection. A red measures what this device's network and
    * engine could reach at one moment; taken as a fact about the title, a phone
@@ -586,7 +589,9 @@ export interface StoreShape {
    */
   providerScans: ProviderScan[]
   /**
-   * The user's other devices' test results, as each last published them.
+   * The user's other devices' test results, as each last published them,
+   * the way builds before 2.0.3 shared them. Still filled by the library
+   * merge while a device on such a build syncs, and read like `providerScans`.
    *
    * Agreed with the owner 2026-09-26: only good news crosses devices. A green
    * from elsewhere fills a gap here, and castability travels; a red never

@@ -160,16 +160,17 @@ export function providerDot(
 }
 
 /**
- * How both pickers credit a result measured on another of the user's devices.
+ * How both pickers credit a result measured on another kind of device.
  *
- * Appended to the row's label, as the timing is: "3.8 s · 720p · on your
- * computer". The result is honest either way — only good news crosses (see
- * `scanshare.ts`) — but a green this device never measured should say whose
- * it is, or the list claims a measurement that did not happen here.
+ * Appended to the row's label, as the timing is: "may work · Phone". Only
+ * good news crosses, and only as amber (see `sourceresults.ts`), but a
+ * source this device never measured should say where it worked, or the list
+ * claims a measurement that did not happen here. Just the device, the
+ * owner's wording (2026-09-28): the amber already says "may work".
  */
 export function sharedLabel(from: DeviceKind | undefined): string {
-  if (from === 'desktop') return ' · on your computer'
-  if (from === 'phone') return ' · on your phone'
+  if (from === 'desktop') return ' · PC'
+  if (from === 'phone') return ' · Phone'
   return ''
 }
 

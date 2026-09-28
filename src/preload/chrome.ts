@@ -154,8 +154,8 @@ const api: WtaChromeApi = {
    * this log while the user is looking at it — the source they tried a minute
    * ago is exactly the row whose colour they came to check.
    */
-  outcomes: (media: TitleRef): Promise<TitleProviderState> =>
-    ipcRenderer.invoke(CH.providersOutcomes, media) as Promise<TitleProviderState>,
+  outcomes: (media: TitleRef, episode?: { season: number; episode: number } | null): Promise<TitleProviderState> =>
+    ipcRenderer.invoke(CH.providersOutcomes, media, episode ?? null) as Promise<TitleProviderState>,
   scan: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
     ipcRenderer.invoke(CH.providersScan, media, episode ?? null) as Promise<ProviderScan>,
   cancelScan: (): Promise<void> => ipcRenderer.invoke(CH.providersScanCancel) as Promise<void>,

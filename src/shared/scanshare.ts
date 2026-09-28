@@ -1,5 +1,16 @@
 /**
- * Test results across the user's own devices.
+ * Test results across the user's own devices, as builds before 2.0.3 shared
+ * them: one row per device and title, inside the library file.
+ *
+ * ## Since 2.0.3
+ *
+ * Results are a history now (`sourceresults.ts`) that travels in a file of
+ * its own, and nothing writes these rows any more. This merge stays for as
+ * long as a device on an older build is still syncing: it keeps filing that
+ * device's rows in `sharedScans`, where `legacyResults` reads them as results
+ * of the whole title. The rules below are how those builds read each other,
+ * and the rules the history keeps are `sourceresults.ts`'s: this kind of
+ * device first, the other kind's good news filling gaps as amber.
  *
  * ## What crosses, agreed with the owner 2026-09-26
  *
@@ -32,7 +43,7 @@
  * found dead stops being reported as working here.
  */
 
-import { MAX_SCANS, RESULT_TTL_MS, testedAtOf } from './scanrow'
+import { MAX_SCANS, RESULT_TTL_MS } from './scanrow'
 import type { DeviceKind, ProviderScan, SharedScan, StoreShape } from './types'
 
 /** The parts of a document the merge reads. */
@@ -82,70 +93,4 @@ export interface TitleResults {
   scan: ProviderScan | null
   /** The providers whose result came from another device, and what kind of device. */
   sharedFrom: Record<string, DeviceKind>
-}
-
-/**
- * Fold the other devices' good news for one title into this device's own row.
- *
- * `own` is this device's fresh row for the title — `freshScan`'s answer, so it
- * is already past its lifetime and real-play checks. `playedAt` is when each
- * provider last streamed the title *here*: a play is stronger evidence than a
- * result read as amber, as it is for this device's own ambers.
- */
-export function withSharedResults(
-  own: ProviderScan | null,
-  shared: readonly SharedScan[],
-  titleKey: string,
-  here: DeviceKind,
-  now: number,
-  playedAt: Readonly<Record<string, number>> = {},
-): TitleResults {
-  const out: ProviderScan = own
-    ? {
-        ...own,
-        verdicts: { ...own.verdicts },
-        testedAt: Object.fromEntries(Object.keys(own.verdicts).map((id) => [id, testedAtOf(own, id)!])),
-        timings: { ...own.timings },
-        qualities: { ...own.qualities },
-        reasons: { ...own.reasons },
-        delivery: { ...own.delivery },
-        casts: { ...own.casts },
-      }
-    : { titleKey, at: 0, verdicts: {}, testedAt: {}, timings: {}, qualities: {}, reasons: {}, delivery: {}, casts: {} }
-  const sharedFrom: Record<string, DeviceKind> = {}
-
-  for (const row of shared) {
-    if (row.titleKey !== titleKey) continue
-    // What the other kind of device's green is worth here.
-    const readAs = row.deviceKind === 'phone' && here === 'desktop' ? 'unsure' : 'stream'
-
-    for (const [id, verdict] of Object.entries(row.verdicts)) {
-      if (verdict !== 'stream') continue
-      const testedAt = testedAtOf(row, id)!
-      if (now - testedAt > RESULT_TTL_MS) continue
-      // Newer here, whether measured here or taken from another device already.
-      if (id in out.verdicts && out.testedAt![id]! >= testedAt) continue
-      if (readAs === 'unsure' && (playedAt[id] ?? -Infinity) > testedAt) continue
-
-      out.verdicts[id] = readAs
-      out.testedAt![id] = testedAt
-      // A timing and a quality describe a stream; beside an amber they would
-      // describe a moment this device has no reason to believe happened.
-      setDetail(out.timings!, id, readAs === 'stream' ? row.timings?.[id] : undefined)
-      setDetail(out.qualities!, id, readAs === 'stream' ? row.qualities?.[id] : undefined)
-      setDetail(out.reasons!, id, undefined)
-      setDetail(out.delivery!, id, row.delivery?.[id])
-      setDetail(out.casts!, id, row.casts?.[id])
-      sharedFrom[id] = row.deviceKind
-    }
-  }
-
-  if (Object.keys(out.verdicts).length === 0) return { scan: null, sharedFrom }
-  out.at = Math.max(...Object.values(out.testedAt!))
-  return { scan: out, sharedFrom }
-}
-
-function setDetail<T>(map: Record<string, T>, id: string, value: T | undefined): void {
-  if (value === undefined) delete map[id]
-  else map[id] = value
 }

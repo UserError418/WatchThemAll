@@ -55,7 +55,16 @@ import type { CastOutcome, DeviceKind, Provider, SourceSortKey, StoreShape, Stre
 import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 import { MAX_SCANS, RESULT_TTL_MS, testedAtOf } from '@shared/scanrow'
-import { withSharedResults, type TitleResults } from '@shared/scanshare'
+import type { TitleResults } from '@shared/scanshare'
+import {
+  deviceRows,
+  legacyResults,
+  measurement,
+  titleResults as decideTitle,
+  type MeasuredAt,
+  type ResultDevice,
+  type SourceResult,
+} from '@shared/sourceresults'
 import { lastPlayedAt } from './outcomes'
 
 /**
@@ -80,178 +89,107 @@ export const RETEST_AFTER_MS: Record<ProbeVerdict, number> = {
   stream: RESULT_TTL_MS,
 }
 
+/* ── Reading results ─────────────────────────────────────────────────── */
+
 /**
- * A copy of `scan` holding only the providers `keep` accepts, or null if none
- * are left. `at` follows the newest provider kept.
+ * Where test results come from: the history (`@shared/sourceresults`, its own
+ * file and its own synced file), and the library's title-wide rows from
+ * before it, this device's (`providerScans`) and the other devices'
+ * (`sharedScans`).
+ *
+ * The old rows are no longer written. They are read as results of the whole
+ * title until they age out, and a device still on an older build keeps
+ * adding its rows to `sharedScans` through the library until it is updated.
  */
-function keepProviders(
-  scan: ProviderScan,
-  keep: (providerId: string, testedAt: number) => boolean,
-): ProviderScan | null {
-  const out: ProviderScan = { titleKey: scan.titleKey, at: 0, verdicts: {}, testedAt: {} }
-  for (const [id, verdict] of Object.entries(scan.verdicts)) {
-    const testedAt = testedAtOf(scan, id) ?? scan.at
-    if (!keep(id, testedAt)) continue
-    out.verdicts[id] = verdict
-    out.testedAt![id] = testedAt
-    out.at = Math.max(out.at, testedAt)
-    copyDetails(scan, out, id)
-  }
-  return Object.keys(out.verdicts).length > 0 ? out : null
+export interface ResultSources {
+  history: readonly SourceResult[]
+  doc: Pick<StoreShape, 'deviceId' | 'providerScans' | 'sharedScans' | 'streamOutcomes'>
+}
+
+function everyResult(sources: ResultSources, here: DeviceKind): SourceResult[] {
+  const legacy = legacyResults(sources.doc, { deviceId: sources.doc.deviceId, deviceKind: here })
+  return legacy.length === 0 ? [...sources.history] : [...sources.history, ...legacy]
 }
 
 /**
- * Move one provider's details — timing, quality, reason, how its video arrived
- * and what a television made of it — from `from` to `to`, or clear them there.
+ * One title's results as this device reads them, for one episode: null for a
+ * film, or for a series when no episode is in question. The rules are
+ * `@shared/sourceresults`'s.
  *
- * All or nothing per provider: a new measurement replaces everything the old
- * one said about that provider, so a detail it did not produce is removed
- * rather than left standing beside a result it no longer describes.
+ * Everything that acts on test results reads them through this: Automatic's
+ * order, the pickers' dots, the resume rule, the player's switch offer, the
+ * stream preview. So a green means the same thing in all of them.
+ *
+ * `playedAt` comes from the play log, where a real play from before plays
+ * were kept as results still overtakes an older failure.
  */
-function copyDetails(from: ProviderScan, to: ProviderScan, id: string): void {
-  // The maps hold different value types, which one loop can only see as unknown.
-  const source = from as Details
-  const target = to as Details
-  for (const key of DETAIL_KEYS) {
-    const value = source[key]?.[id]
-    if (value !== undefined) (target[key] ??= {})[id] = value
-    else delete target[key]?.[id]
-  }
-}
-
-/** Every per-provider detail a row can carry besides the verdict and its time. */
-const DETAIL_KEYS = ['timings', 'qualities', 'reasons', 'delivery', 'casts'] as const
-
-type Details = Partial<Record<(typeof DETAIL_KEYS)[number], Record<string, unknown>>>
-
-/**
- * What is still worth believing about one title, or null if nothing is.
- *
- * Two things take a result out:
- *
- * - **Age.** Older than `RESULT_TTL_MS`.
- * - **A real play since.** `playedAt` is when each provider last actually
- *   streamed this title in the player. A red or amber test result older than
- *   that is overtaken by the stronger evidence — the source demonstrably
- *   played — and leaving it in would keep a working source at the bottom of
- *   the list, because a red outranks play history in `providerRank`. Plays only
- *   ever upgrade: the player records `failed` on ambiguous symptoms (a source
- *   that is merely slow), so a failure there is not allowed to overrule a test.
- */
-export function freshScan(
-  scans: readonly ProviderScan[],
-  titleKey: string,
+export function titleResults(
+  sources: ResultSources,
+  key: string,
+  episode: { season: number; episode: number } | null,
+  here: DeviceKind,
   now: number = Date.now(),
-  playedAt: Readonly<Record<string, number>> = {},
-): ProviderScan | null {
-  const found = scans.find((scan) => scan.titleKey === titleKey)
-  if (!found) return null
-  return keepProviders(found, (id, testedAt) => {
-    if (now - testedAt > RESULT_TTL_MS) return false
-    const played = playedAt[id]
-    return found.verdicts[id] === 'stream' || played === undefined || played <= testedAt
+): TitleResults {
+  return decideTitle({
+    results: everyResult(sources, here),
+    titleKey: key,
+    episode,
+    here,
+    now,
+    playedAt: lastPlayedAt(sources.doc.streamOutcomes, key),
   })
 }
 
 /**
- * One title's results as this device reads them: its own fresh ones, with the
- * user's other devices' good news folded in (the rule is `scanshare.ts`'s).
- *
- * Everything that acts on test results reads them through this — Automatic's
- * order, the pickers' dots, the resume rule, the player's switch offer — so
- * a green that came from the desktop means the same thing in all of them.
- * Only the background tester reads the device's own rows alone: what it
- * decides is what *this* device should measure next.
+ * This device's own results, one title-wide row per title: what the
+ * background tester schedules from. It decides what *this* device should
+ * measure next, so another device's results do not count.
  */
-export function titleResults(
-  doc: Pick<StoreShape, 'providerScans' | 'sharedScans' | 'streamOutcomes'>,
-  key: string,
-  here: DeviceKind,
-  now: number = Date.now(),
-): TitleResults {
-  const playedAt = lastPlayedAt(doc.streamOutcomes, key)
-  const own = freshScan(doc.providerScans, key, now, playedAt)
-  return withSharedResults(own, doc.sharedScans, key, here, now, playedAt)
+export function ownRows(sources: ResultSources, here: DeviceKind, now: number = Date.now()): ProviderScan[] {
+  return deviceRows(
+    everyResult(sources, here).filter((result) => result.deviceId === sources.doc.deviceId),
+    now,
+  )
+}
+
+/** Every device's title-wide rows: a source's castability record across titles. */
+export function everyRow(sources: ResultSources, here: DeviceKind, now: number = Date.now()): ProviderScan[] {
+  return deviceRows(everyResult(sources, here), now)
+}
+
+/* ── Writing results ─────────────────────────────────────────────────── */
+
+/**
+ * The test results as a platform holds them: what is known, which install
+ * this is, and where to keep what it measures. One per app, handed to
+ * everything that reads or records results.
+ */
+export interface ResultsAccess {
+  sources(): ResultSources
+  device(): ResultDevice
+  record(results: readonly SourceResult[]): void
 }
 
 /**
- * Store test results for one title, merged into what is already known.
+ * What a real cast found out about one source: it streamed (the stream was
+ * fetched and classified), how the video arrived, and where the television
+ * answered unambiguously, what it said.
  *
- * Merged per provider, not replaced. This used to replace the whole row,
- * because a row was one scan measured at one moment and merging two would have
- * produced a row that was never true all at once. The background tester tests
- * one provider at a time, days apart, so rows are now mixed by design — and
- * every provider carries its own `testedAt`, which is what makes the mix
- * honest rather than misleading.
- *
- * `result` may hold every provider (a scan by hand) or just one (the tester).
- * Each provider it holds replaces that provider's earlier result entirely,
- * timing, quality and reason included; the others are left alone.
+ * A play, not a test: it measured no start time and no quality, and the
+ * speed and quality are taken from the results that did.
  */
-export function recordScan(
-  scans: readonly ProviderScan[],
-  result: ProviderScan,
-): ProviderScan[] {
-  const previous = scans.find((entry) => entry.titleKey === result.titleKey)
-  const merged: ProviderScan = previous
-    ? {
-        ...previous,
-        verdicts: { ...previous.verdicts },
-        testedAt: Object.fromEntries(
-          Object.keys(previous.verdicts).map((id) => [id, testedAtOf(previous, id) ?? previous.at]),
-        ),
-        timings: { ...previous.timings },
-        qualities: { ...previous.qualities },
-        reasons: { ...previous.reasons },
-        delivery: { ...previous.delivery },
-        casts: { ...previous.casts },
-      }
-    : { titleKey: result.titleKey, at: 0, verdicts: {}, testedAt: {} }
-
-  for (const [id, verdict] of Object.entries(result.verdicts)) {
-    const testedAt = testedAtOf(result, id) ?? result.at
-    merged.verdicts[id] = verdict
-    merged.testedAt![id] = testedAt
-    copyDetails(result, merged, id)
-  }
-  merged.at = Math.max(0, ...Object.values(merged.testedAt!))
-
-  // Most recently updated last, so the cap below drops the stalest title.
-  const next = [...scans.filter((entry) => entry.titleKey !== result.titleKey), merged]
-  return next.length > MAX_SCANS ? next.slice(next.length - MAX_SCANS) : next
-}
-
-/**
- * File what a real cast found out about one source for one title.
- *
- * A cast that identified a stream is a measurement — the source streamed, and
- * the stream was fetched and classified — so it is stored as one: a green
- * verdict, tested now, with how the video arrived and, where the television
- * answered unambiguously, what it said. Unlike a test it measured no start
- * time and no quality, so the ones already known for the source are kept
- * rather than cleared.
- */
-export function recordCast(
-  scans: readonly ProviderScan[],
-  titleKey: string,
-  providerId: string,
+export function castResult(
+  where: MeasuredAt,
   learned: { delivery: StreamDelivery; outcome: CastOutcome | null },
-  now: number,
-): ProviderScan[] {
-  const previous = scans.find((entry) => entry.titleKey === titleKey)
-  const result: ProviderScan = {
-    titleKey,
-    at: now,
-    verdicts: { [providerId]: 'stream' },
-    testedAt: { [providerId]: now },
-    delivery: { [providerId]: learned.delivery },
-  }
-  const timing = previous?.verdicts[providerId] === 'stream' ? previous.timings?.[providerId] : undefined
-  const quality = previous?.verdicts[providerId] === 'stream' ? previous.qualities?.[providerId] : undefined
-  if (timing !== undefined) result.timings = { [providerId]: timing }
-  if (quality !== undefined) result.qualities = { [providerId]: quality }
-  if (learned.outcome !== null) result.casts = { [providerId]: learned.outcome }
-  return recordScan(scans, result)
+  at: number,
+): SourceResult {
+  return measurement(where, {
+    at,
+    origin: 'play',
+    verdict: 'stream',
+    delivery: learned.delivery,
+    ...(learned.outcome === null ? {} : { cast: learned.outcome }),
+  })
 }
 
 /**
@@ -303,17 +241,6 @@ export function scanEpisode(
   if (type === 'movie') return null
   if (episode && episode.season >= 1 && episode.episode >= 1) return episode
   return { season: 1, episode: 1 }
-}
-
-/**
- * Drop results that have aged out, and rows left empty by that. Called when a
- * result is stored.
- */
-export function pruneScans(
-  scans: readonly ProviderScan[],
-  now: number = Date.now(),
-): ProviderScan[] {
-  return scans.flatMap((scan) => keepProviders(scan, (_id, testedAt) => now - testedAt <= RESULT_TTL_MS) ?? [])
 }
 
 /**

@@ -28,6 +28,7 @@ import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
+import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
 import type { TokenStore } from './synctokens'
@@ -36,6 +37,8 @@ export interface SyncServiceOptions {
   host: SyncHost
   /** The resume points, for the positions file; see `sync/positions.ts`. */
   positionsHost: PositionsHost
+  /** The test history, for the results file; see `sync/results.ts`. */
+  resultsHost: ResultsHost
   tokens: TokenStore
   /** Called whenever the status changes, so main can push it to the renderer. */
   onStatus: (status: SyncStatus) => void
@@ -46,6 +49,7 @@ export class SyncService {
   private access: OAuthTokens | null = null
   private runner: SyncRunner | null = null
   private positionsChannel: PositionsChannel | null = null
+  private resultsChannel: ResultsChannel | null = null
   private pairing: AbortController | null = null
 
   private state: SyncStatus = {
@@ -200,6 +204,7 @@ export class SyncService {
     this.access = null
     this.runner = null
     this.positionsChannel = null
+    this.resultsChannel = null
     await this.options.tokens.clear()
     this.update({ state: 'off', accountEmail: null, error: null, challenge: null })
   }
@@ -245,6 +250,7 @@ export class SyncService {
     if (this.credentials === null) return
     void this.now()
     void this.positions()
+    void this.results()
   }
 
   /**
@@ -261,6 +267,20 @@ export class SyncService {
   /** Before a resume: see `PositionsChannel.freshen`. */
   async freshenPositions(): Promise<void> {
     await this.positionsChannelFor()?.freshen()
+  }
+
+  /**
+   * Sync the test history only: with every library sync, and a while after
+   * this device measures something. Quiet, like the positions; see
+   * `createResultsChannel`.
+   */
+  async results(): Promise<void> {
+    if (this.credentials === null) return
+    this.resultsChannel ??= createResultsChannel({
+      host: this.options.resultsHost,
+      accessToken: () => this.accessToken(),
+    })
+    await this.resultsChannel.sync()
   }
 
   private positionsChannelFor(): PositionsChannel | null {

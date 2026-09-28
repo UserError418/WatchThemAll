@@ -51,7 +51,8 @@ const api: WtaApi = {
   resolve: (item: MediaSummary) => ipcRenderer.invoke(CH.searchResolve, item),
   providers: {
     list: () => ipcRenderer.invoke(CH.providersList),
-    outcomes: (media: TitleRef) => ipcRenderer.invoke(CH.providersOutcomes, media),
+    outcomes: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
+      ipcRenderer.invoke(CH.providersOutcomes, media, episode ?? null),
     scan: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
       ipcRenderer.invoke(CH.providersScan, media, episode ?? null),
     cancelScan: () => ipcRenderer.invoke(CH.providersScanCancel),

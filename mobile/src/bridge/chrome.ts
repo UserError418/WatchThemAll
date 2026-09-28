@@ -79,7 +79,7 @@ export interface ChromeDeps {
   switchProvider(providerId: string): Promise<boolean>
   reload(): Promise<void>
   season(tmdbId: number, season: number): Promise<Season | null>
-  outcomes(media: TitleRef): Promise<TitleProviderState>
+  outcomes(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<TitleProviderState>
   /**
    * Test every enabled source against what is playing.
    *
@@ -117,7 +117,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     switchProvider: (providerId) => void deps.switchProvider(providerId),
     reload: () => deps.reload(),
     season: (tmdbId, season) => deps.season(tmdbId, season),
-    outcomes: (media) => deps.outcomes(media),
+    outcomes: (media, episode) => deps.outcomes(media, episode),
     scan: (media, episode) => deps.scan(media, episode),
     cancelScan: () => deps.cancelScan(),
     onProviderScan: (cb) => deps.subscribeScan(cb),

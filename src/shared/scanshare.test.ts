@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeSharedScans, withSharedResults } from './scanshare'
+import { mergeSharedScans } from './scanshare'
 import { MAX_SCANS, RESULT_TTL_MS } from './scanrow'
 import type { ProviderScan, SharedScan } from './types'
 
@@ -72,67 +72,3 @@ describe('mergeSharedScans', () => {
   })
 })
 
-describe('withSharedResults', () => {
-  it("fills a gap with another device's green, and says where it came from", () => {
-    const pc = shared('desktop', row('tv:tt1', now - HOUR, { a: 'stream' }, { timings: { a: 900 }, delivery: { a: 'progressive' } }))
-    const { scan, sharedFrom } = withSharedResults(null, [pc], 'tv:tt1', 'phone', now)
-    expect(scan?.verdicts).toEqual({ a: 'stream' })
-    expect(scan?.timings).toEqual({ a: 900 })
-    expect(scan?.delivery).toEqual({ a: 'progressive' })
-    expect(sharedFrom).toEqual({ a: 'desktop' })
-  })
-
-  it('never lets a red or an amber cross', () => {
-    const pc = shared('desktop', row('tv:tt1', now - HOUR, { a: 'dead', b: 'unsure' }))
-    const { scan, sharedFrom } = withSharedResults(null, [pc], 'tv:tt1', 'phone', now)
-    expect(scan).toBeNull()
-    expect(sharedFrom).toEqual({})
-  })
-
-  it("keeps this device's own newer result, whatever it says", () => {
-    const own = row('tv:tt1', now - HOUR, { a: 'dead' })
-    const pc = shared('desktop', row('tv:tt1', now - 2 * HOUR, { a: 'stream' }))
-    const { scan, sharedFrom } = withSharedResults(own, [pc], 'tv:tt1', 'phone', now)
-    expect(scan?.verdicts).toEqual({ a: 'dead' })
-    expect(sharedFrom).toEqual({})
-  })
-
-  it("lets another device's newer green replace an older red here", () => {
-    // The hotel-wifi red from yesterday, and the desktop at home streaming it today.
-    const own = row('tv:tt1', now - 24 * HOUR, { a: 'dead' }, { reasons: { a: { kind: 'unreachable' } } })
-    const pc = shared('desktop', row('tv:tt1', now - HOUR, { a: 'stream' }))
-    const { scan } = withSharedResults(own, [pc], 'tv:tt1', 'phone', now)
-    expect(scan?.verdicts).toEqual({ a: 'stream' })
-    expect(scan?.reasons).toEqual({})
-  })
-
-  it("reads the phone's green as amber on the desktop, without a timing", () => {
-    const phone = shared('phone', row('tv:tt1', now - HOUR, { a: 'stream' }, { timings: { a: 700 }, delivery: { a: 'segmented' } }))
-    const { scan, sharedFrom } = withSharedResults(null, [phone], 'tv:tt1', 'desktop', now)
-    expect(scan?.verdicts).toEqual({ a: 'unsure' })
-    expect(scan?.timings).toEqual({})
-    // Castability still crosses: how the source hands out video is about its servers.
-    expect(scan?.delivery).toEqual({ a: 'segmented' })
-    expect(sharedFrom).toEqual({ a: 'phone' })
-  })
-
-  it('does not read a phone green as amber over a play here that came after it', () => {
-    const phone = shared('phone', row('tv:tt1', now - 2 * HOUR, { a: 'stream' }))
-    const { scan } = withSharedResults(null, [phone], 'tv:tt1', 'desktop', now, { a: now - HOUR })
-    expect(scan).toBeNull()
-  })
-
-  it('ignores other titles and results past their lifetime', () => {
-    const other = shared('desktop', row('tv:tt2', now, { a: 'stream' }))
-    const stale = shared('desktop', row('tv:tt1', now - RESULT_TTL_MS - 1, { a: 'stream' }))
-    expect(withSharedResults(null, [other, stale], 'tv:tt1', 'phone', now).scan).toBeNull()
-  })
-
-  it('takes the newest green when two other devices both have one', () => {
-    const pc = shared('desktop', row('tv:tt1', now - 3 * HOUR, { a: 'stream' }, { delivery: { a: 'segmented' } }), 'pc-1')
-    const laptop = shared('desktop', row('tv:tt1', now - HOUR, { a: 'stream' }, { delivery: { a: 'progressive' } }), 'pc-2')
-    const { scan } = withSharedResults(null, [pc, laptop], 'tv:tt1', 'phone', now)
-    expect(scan?.delivery).toEqual({ a: 'progressive' })
-    expect(scan?.testedAt).toEqual({ a: now - HOUR })
-  })
-})

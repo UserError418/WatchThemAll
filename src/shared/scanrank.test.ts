@@ -110,7 +110,7 @@ describe('tagText', () => {
     expect(tagText('may work', ' · 3.8 s')).toBe('may work · 3.8 s')
     // A working source: no label, so no separator in front of its numbers.
     expect(tagText(null, ' · 3.4 s · 720p')).toBe('3.4 s · 720p')
-    expect(tagText(null, ' · on your phone')).toBe('on your phone')
+    expect(tagText(null, ' · Phone')).toBe('Phone')
     expect(tagText(null, '')).toBe('')
   })
 })

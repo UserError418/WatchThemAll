@@ -57,6 +57,8 @@ export interface NowPlaying {
   /** The title and source being cast, so what the cast learns is filed under them. Null when unknown. */
   titleKey: string | null
   providerId: string | null
+  /** The episode being cast, null for a film: a cast's result is filed under it. */
+  episode: { season: number; episode: number } | null
 }
 
 /**

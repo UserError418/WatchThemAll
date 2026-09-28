@@ -247,7 +247,7 @@
     }
     await scan.start(media, episode)
     // Re-read so the stored scan and the outcome dots come from one moment.
-    sourceState = await window.wta.providers.outcomes(media)
+    sourceState = await window.wta.providers.outcomes(media, episode)
   }
 
   /**
@@ -261,7 +261,7 @@
     open = !open
     if (!open) return
     placeMenu()
-    void window.wta.providers.outcomes(media).then((result) => (sourceState = result))
+    void window.wta.providers.outcomes(media, episode).then((result) => (sourceState = result))
   }
 
   // The overlay behind the menu scrolls and the window resizes; a fixed menu

@@ -934,9 +934,10 @@ export interface WtaApi {
     list(): Promise<Provider[]>
     /**
      * Per-provider outcomes for one title, plus which provider last streamed
-     * it. See `TitleProviderState`.
+     * it. See `TitleProviderState`. The test results are the episode's own
+     * where it has any; without an episode, the whole title's.
      */
-    outcomes(media: TitleRef): Promise<TitleProviderState>
+    outcomes(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<TitleProviderState>
     /**
      * Measure every enabled provider against this title.
      *
@@ -1224,9 +1225,9 @@ export interface WtaChromeApi {
   /**
    * This title's recorded playback, per provider — the same call the detail
    * view's source picker makes, so the two lists cannot disagree about which
-   * sources have worked.
+   * sources have worked. `episode` is the one playing.
    */
-  outcomes(media: TitleRef): Promise<TitleProviderState>
+  outcomes(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<TitleProviderState>
   /**
    * Test every enabled source against what is playing.
    *

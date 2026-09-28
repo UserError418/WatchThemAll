@@ -43,6 +43,7 @@
   import CastRemote from './components/CastRemote.svelte'
   import { actionForEvent } from '@shared/playerkeys'
   import { nextAiredEpisode, previousEpisode, type NextEpisode } from '@shared/episodesteps'
+  import { episodeOf } from '@shared/sourceresults'
   import {
     nudgeTarget,
     parseRememberedDevice,
@@ -292,8 +293,8 @@
   }
 
   /**
-   * " · on your computer" for a result measured on another of the user's
-   * devices, so a green from elsewhere is not passed off as this device's own.
+   * " · PC" or " · Phone" for a result measured on another kind of device,
+   * so a result from elsewhere is not passed off as this device's own.
    * Not during a live run here, whose results are all this device's.
    */
   function sharedNote(id: string): string {
@@ -322,7 +323,7 @@
         : null
     await api.scan(media, episode)
     // Re-read so the dots and the stored scan describe one moment.
-    sourceState = await api.outcomes(media)
+    sourceState = await api.outcomes(media, episode)
   }
 
   /* ── Casting ──────────────────────────────────────────────────────────────
@@ -461,11 +462,10 @@
   async function refreshSourceState(): Promise<void> {
     if (context === null) return
     try {
-      sourceState = await api.outcomes({
-        type: context.type,
-        imdbId: context.imdbId,
-        tmdbId: context.tmdbId,
-      })
+      sourceState = await api.outcomes(
+        { type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId },
+        episodeOf(context),
+      )
     } catch {
       // No record is a fair answer: every dot is blank, every source unchecked.
       sourceState = NO_SOURCE_STATE
@@ -758,7 +758,7 @@
     panel = 'sources'
     if (context === null) return
     void api
-      .outcomes({ type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId })
+      .outcomes({ type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId }, episodeOf(context))
       .then((result) => (sourceState = result))
       .catch(() => {
         // No record is a fair answer: every dot is simply blank, which is what

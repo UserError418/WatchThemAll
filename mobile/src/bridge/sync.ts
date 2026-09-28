@@ -39,6 +39,7 @@ import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
+import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import { dualStackFetch } from './net'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
@@ -70,6 +71,8 @@ export interface MobileSyncOptions {
   host: SyncHost
   /** The resume points, for the positions file; see `sync/positions.ts`. */
   positionsHost: PositionsHost
+  /** The test history, for the results file; see `sync/results.ts`. */
+  resultsHost: ResultsHost
   onStatus: (status: SyncStatus) => void
 }
 
@@ -84,6 +87,7 @@ export function createMobileSync(options: MobileSyncOptions) {
   let access: OAuthTokens | null = null
   let runner: SyncRunner | null = null
   let positionsChannel: PositionsChannel | null = null
+  let resultsChannel: ResultsChannel | null = null
   let pairing: AbortController | null = null
 
   let state: SyncStatus = {
@@ -166,12 +170,20 @@ export function createMobileSync(options: MobileSyncOptions) {
     await positionsChannelFor()?.sync()
   }
 
+  /** Sync the test history only; see `createResultsChannel`. */
+  const results = async (): Promise<void> => {
+    if (credentials === null) return
+    resultsChannel ??= createResultsChannel({ host: options.resultsHost, accessToken, fetchImpl: dualStackFetch })
+    await resultsChannel.sync()
+  }
+
   const disconnect = async (): Promise<void> => {
     pairing?.abort()
     credentials = null
     access = null
     runner = null
     positionsChannel = null
+    resultsChannel = null
     await Preferences.remove({ key: TOKEN_KEY })
     update({ state: 'off', accountEmail: null, error: null, challenge: null })
   }
@@ -264,9 +276,11 @@ export function createMobileSync(options: MobileSyncOptions) {
       if (credentials === null) return
       void now()
       void positions()
+      void results()
     },
 
     positions,
+    results,
 
     /** Before a resume: see `PositionsChannel.freshen`. */
     async freshenPositions(): Promise<void> {

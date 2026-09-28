@@ -70,7 +70,6 @@ import { buildPlayUrl, renderTemplate } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
-  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -79,16 +78,17 @@ import {
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
 import {
-  freshScan,
-  pruneScans,
-  recordCast,
-  recordScan,
+  castResult,
+  everyRow,
   resumeFirst,
   scanAwareOrder,
   scanEpisode,
   titleResults,
   type AutomaticOrder,
+  type ResultsAccess,
 } from '@main/providerscan'
+import { ResultStore } from '@shared/store/results'
+import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { choosePreview } from '@main/previewplan'
 import { checkAll, sweepDueIn } from '@main/releases'
@@ -137,7 +137,7 @@ import { applyMalImport } from '@main/malapply'
 import type { ResolvedTitle } from '@main/malapply'
 
 import { Signal } from './events'
-import { MobileStore } from './store'
+import { CapacitorPersistence, MobileStore } from './store'
 import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
 import { throttle } from '@shared/sync/throttle'
@@ -150,6 +150,8 @@ const SYNC_AFTER_WRITE_MS = 8_000
 
 /** The positions file's pace while positions keep changing. Matches the desktop. */
 const POSITIONS_PUSH_MS = 10_000
+/** The test history's push, at most this often; the desktop's `RESULTS_PUSH_MS`. */
+const RESULTS_PUSH_MS = 2 * 60_000
 
 /**
  * How often the position is written while something plays, from whatever
@@ -160,6 +162,18 @@ const POSITION_WRITE_MS = 5_000
 export async function createBridge(): Promise<WtaApi> {
   const store = new MobileStore()
   await store.load()
+
+  /**
+   * Every test result this install has, its own and the other devices': the
+   * history (`@shared/sourceresults`), in its own file beside the library.
+   */
+  const resultStore = new ResultStore(new CapacitorPersistence('source-results.json'))
+  await resultStore.load()
+  const testResults: ResultsAccess = {
+    sources: () => ({ history: resultStore.all(), doc: store.read() }),
+    device: () => ({ deviceId: store.read().deviceId, deviceKind: 'phone' }),
+    record: (results) => resultStore.record(results),
+  }
 
   const storeChanged = new Signal<Array<keyof StoreShape> | null>()
   /**
@@ -230,6 +244,10 @@ export async function createBridge(): Promise<WtaApi> {
         }
       },
     },
+    resultsHost: {
+      read: () => resultStore.all(),
+      adopt: (results) => resultStore.adopt(results),
+    },
     host: {
       read: () => store.raw(),
       write: async (document) => {
@@ -272,6 +290,16 @@ export async function createBridge(): Promise<WtaApi> {
    * (2026-09-27); the file is a few kilobytes. See `sync/positions.ts`.
    */
   const pushPositions = throttle(() => void sync.positions(), POSITIONS_PUSH_MS)
+
+  /**
+   * The test history's push: at most every two minutes while this device
+   * measures, as on the desktop. Nothing waits on it, and it is the largest
+   * of the three files.
+   */
+  const pushResults = throttle(() => void sync.results(), RESULTS_PUSH_MS)
+  resultStore.subscribe((change) => {
+    if (change === 'local') pushResults.request()
+  })
 
   let writeSyncTimer: ReturnType<typeof setTimeout> | null = null
   store.subscribe((key) => {
@@ -720,9 +748,8 @@ export async function createBridge(): Promise<WtaApi> {
     const providerId = currentPlayerState?.providerId
     if (result.delivery && session && providerId) {
       const learned = { delivery: result.delivery, outcome: null }
-      store.setProviderScans(
-        recordCast(pruneScans(store.read().providerScans), titleKey(session.req), providerId, learned, Date.now()),
-      )
+      const where = { device: testResults.device(), titleKey: titleKey(session.req), episode: episodeOf(session.req), providerId }
+      testResults.record([castResult(where, learned, Date.now())])
     }
     return {
       ok: result.ok,
@@ -1376,6 +1403,7 @@ export async function createBridge(): Promise<WtaApi> {
     // while, and the last five-second sample could be up to five seconds old.
     if (session) rememberPosition(session.req)
     void store.flush().catch(() => {})
+    void resultStore.flush().catch(() => {})
     pushPositions.now()
   })
 
@@ -1460,12 +1488,12 @@ export async function createBridge(): Promise<WtaApi> {
    * dots are drawn from the same ranking, and the renderer that draws them is
    * shared. The same goes for `resumeFirst` after it.
    */
-  const automaticOrderFor = (req: TitleRef): AutomaticOrder => {
-    const doc = store.read()
-    const { streamOutcomes, favouriteProviderIds, settings } = doc
+  const automaticOrderFor = (req: TitleRef & { season?: number | null; episode?: number | null }): AutomaticOrder => {
+    const { streamOutcomes, favouriteProviderIds, settings } = store.read()
     const key = titleKey(req)
     const outcomes = outcomesForTitle(streamOutcomes, key)
-    const { scan } = titleResults(doc, key, 'phone')
+    // The episode's own results where there are any: see `titleResults`.
+    const { scan } = titleResults(testResults.sources(), key, episodeOf(req), 'phone')
     const ordered = scanAwareOrder(enabledProviders(), outcomes, {
       order: providerOrder(),
       favouriteIds: favouriteProviderIds,
@@ -1475,7 +1503,8 @@ export async function createBridge(): Promise<WtaApi> {
     // Then back to the source this title was last watched on — see `resumeFirst`.
     return resumeFirst(ordered, lastWorkingForTitle(streamOutcomes, key), outcomes, scan)
   }
-  const orderedForRequest = (req: TitleRef): Provider[] => automaticOrderFor(req).providers
+  const orderedForRequest = (req: TitleRef & { season?: number | null; episode?: number | null }): Provider[] =>
+    automaticOrderFor(req).providers
 
   /**
    * Everything a source picker draws for one title, including the order.
@@ -1485,19 +1514,22 @@ export async function createBridge(): Promise<WtaApi> {
    * order comes from `orderedForRequest`, the function playback itself uses,
    * so the rows read top to bottom in the order Automatic will try them.
    */
-  const providerStateFor = (media: TitleRef): TitleProviderState => {
+  const providerStateFor = (media: TitleRef, episode?: { season: number; episode: number } | null): TitleProviderState => {
     const doc = store.read()
     const key = titleKey(media)
     const now = Date.now()
-    const automatic = automaticOrderFor(media)
+    // The episode's own results where there are any; without one, the whole title's.
+    const request = { ...media, season: episode?.season ?? null, episode: episode?.episode ?? null }
+    const automatic = automaticOrderFor(request)
     const order = automatic.providers.map((provider) => provider.id)
-    const results = titleResults(doc, key, 'phone', now)
+    const sources = testResults.sources()
+    const results = titleResults(sources, key, episodeOf(request), 'phone', now)
     return {
       outcomes: outcomesForTitle(doc.streamOutcomes, key),
       resume: automatic.resume,
       scan: results.scan,
       sharedFrom: results.sharedFrom,
-      castability: castabilities(order, results.scan, [...doc.providerScans, ...doc.sharedScans], now),
+      castability: castabilities(order, results.scan, everyRow(sources, 'phone', now), now),
       order,
     }
   }
@@ -1564,7 +1596,8 @@ export async function createBridge(): Promise<WtaApi> {
       season: target?.season ?? null,
       episode: target?.episode ?? null,
     })
-    store.setProviderScans(recordScan(pruneScans(store.read().providerScans), result))
+    // Filed under the episode it tested: see `scanEpisode` and `airedEpisode`.
+    testResults.record(resultsFromScan(result, testResults.device(), target))
     return result
   }
 
@@ -1593,7 +1626,7 @@ export async function createBridge(): Promise<WtaApi> {
     scan: (media, episode) => runProviderScan(media, episode),
     cancelScan: async () => scanRunner.cancel(),
     subscribeScan: (cb) => providerScan.subscribe(cb),
-    outcomes: async (media) => providerStateFor(media),
+    outcomes: async (media, episode) => providerStateFor(media, episode),
     overlay: overlayHub.chrome,
     /**
      * The chrome gets the same cast bridge the main API uses, not a second one.
@@ -1716,7 +1749,8 @@ export async function createBridge(): Promise<WtaApi> {
 
     providers: {
       list: async () => allProviders(),
-      outcomes: async (media: TitleRef): Promise<TitleProviderState> => providerStateFor(media),
+      outcomes: async (media: TitleRef, episode?: { season: number; episode: number } | null): Promise<TitleProviderState> =>
+        providerStateFor(media, episode),
       scan: (media, episode) => runProviderScan(media, episode),
       cancelScan: async () => scanRunner.cancel(),
       // No background tester here: a probe needs the visible surface, and a
@@ -1926,7 +1960,7 @@ export async function createBridge(): Promise<WtaApi> {
         const key = titleKey(req)
         const choice = choosePreview({
           providers: automaticOrderFor(req).providers,
-          scan: freshScan(doc.providerScans, key, Date.now(), lastPlayedAt(doc.streamOutcomes, key)),
+          scan: titleResults(testResults.sources(), key, episodeOf(req), 'phone').scan,
           req,
           resume: resumeOfferFor(doc.resumePoints, req),
         })
