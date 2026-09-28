@@ -545,8 +545,14 @@
    * only to be replaced, and comes back if the stream does not show.
    */
 
-  /** The question as asked: what the preview plays, and the answer (`undefined` while waiting for it). */
-  let stream = $state<{ key: string; req: PlayRequest; plan: PreviewPlan | null | undefined } | null>(null)
+  /**
+   * The question as asked: what the preview plays, and the answer (`undefined`
+   * while waiting for it). Raw, because it is only ever replaced whole, and
+   * because a deep `$state` would hand `stream.req` out as a proxy, which
+   * cannot cross to main: `preview.keep` and `preview.record` failed on it,
+   * silently, until 2.0.3.
+   */
+  let stream = $state.raw<{ key: string; req: PlayRequest; plan: PreviewPlan | null | undefined } | null>(null)
   /** Given up on (`StreamPreview`'s `onfail`), or stopped because the real player is starting. */
   let streamOff = $state(false)
   let grace = new PreviewGrace()
