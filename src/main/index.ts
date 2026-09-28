@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
-import type { PlayRequest, TitleRef } from '@shared/ipc'
+import type { PlayRequest, PreviewPlan, TitleRef } from '@shared/ipc'
 import { Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
@@ -24,6 +24,8 @@ import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
 import { applyBrowserIdentity } from './identity'
 import { playerShellUrl, startRendererServer, stopRendererServer } from './localserver'
+import { choosePreview } from './previewplan'
+import { allowStreamPreviews } from './previewview'
 import { isProbeRun, probeAndQuit } from './probecli'
 import type { PlayCandidate } from './providers'
 import type { VideoPosition } from './playerview'
@@ -37,11 +39,13 @@ import {
   defaultProviderOrder,
   lastWorkingForTitle,
   mediaKey,
+  lastPlayedAt,
   outcomesForTitle,
   record,
   titleKey,
 } from './outcomes'
 import {
+  freshScan,
   pruneScans,
   recordScan,
   resumeFirst,
@@ -192,6 +196,7 @@ async function createMainWindow(): Promise<void> {
     rendererBaseUrl ??= await startRendererServer(join(dirname, '../renderer'))
   }
   mainWindow = createAppWindow(dirname, store.dir, rendererBaseUrl)
+  if (rendererBaseUrl) allowStreamPreviews(mainWindow, dirname, rendererBaseUrl)
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -692,6 +697,40 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
   })
 }
 
+/**
+ * The detail view's stream preview for one episode or film, or null.
+ *
+ * The rule is `choosePreview`'s: this device's own fresh test results, the
+ * enabled sources in Automatic's order for the ties. Without the local server
+ * (a dev build on Vite) there is no shell to preview in, so none.
+ */
+function previewPlanFor(req: PlayRequest): PreviewPlan | null {
+  if (!rendererBaseUrl) return null
+  const doc = store.read()
+  const key = titleKey(req)
+  const choice = choosePreview({
+    providers: automaticOrderFor(req).providers,
+    scan: freshScan(doc.providerScans, key, Date.now(), lastPlayedAt(doc.streamOutcomes, key)),
+    req,
+    resume: resumeOfferFor(doc.resumePoints, req),
+  })
+  if (choice === null) return null
+  return {
+    surface: 'webview',
+    src: playerShellUrl(rendererBaseUrl, choice.url, { preview: { startSeconds: choice.startSeconds } }),
+    providerId: choice.provider.id,
+    providerName: choice.provider.name,
+    startSeconds: choice.startSeconds,
+  }
+}
+
+/** Keep where a preview got to, past its grace period, as the player would have. */
+function keepPreviewPosition(req: PlayRequest, seconds: number, duration: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0) return
+  rememberPosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false, paused: false })
+  pushPositions.now()
+}
+
 /** Where this episode or film was left, in seconds. Zero if it was not. */
 function savedPositionFor(context: PlayRequest): number {
   const key = resumeKey(context)
@@ -1150,6 +1189,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       checkReleases,
       allProviders,
       automaticOrder: automaticOrderFor,
+      preview: { plan: previewPlanFor, keep: keepPreviewPosition },
       scan,
     })
 

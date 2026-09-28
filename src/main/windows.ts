@@ -87,6 +87,9 @@ export function createAppWindow(
       nodeIntegration: false,
       sandbox: false,
       webSecurity: true,
+      // The detail view's stream preview, and nothing else: every webview is
+      // vetted and configured by `previewview.ts` before it may attach.
+      webviewTag: true,
       /*
        * Previews are unmuted by default, and Chromium blocks unmuted autoplay
        * without a user gesture.

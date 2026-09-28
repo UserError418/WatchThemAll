@@ -19,6 +19,7 @@ import type {
   DiscoverRequest,
   GenreRowRequest,
   PlayRequest,
+  PreviewPlan,
   RowRequest,
   ForYouPlanRequest,
   ForYouRowRequest,
@@ -104,6 +105,11 @@ export interface IpcDeps {
    * order for a title nobody has pressed play on yet.
    */
   automaticOrder: (media: TitleRef) => AutomaticOrder
+  /** The detail view's stream preview; see `previewPlanFor` in `index.ts`. */
+  preview: {
+    plan: (req: PlayRequest) => PreviewPlan | null
+    keep: (req: PlayRequest, seconds: number, duration: number) => void
+  }
   /** Move the inline player's video to the rectangle the renderer reserved. */
   setPlayerBounds: (bounds: PlayerBounds) => void
   /** Stop playing and put the app's chrome back. */
@@ -318,6 +324,11 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
    * resolves far more than http — so the guard is not optional, and it is
    * shared with the phone rather than written twice.
    */
+  ipcMain.handle(CH.previewPlan, (_e, req: PlayRequest) => deps.preview.plan(req))
+  ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number) =>
+    deps.preview.keep(req, Number(seconds), Number(duration)),
+  )
+
   ipcMain.handle(CH.openExternal, async (_e, url: string): Promise<boolean> => {
     if (typeof url !== 'string' || !isOpenableExternally(url)) return false
     try {

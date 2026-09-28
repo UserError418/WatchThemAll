@@ -43,12 +43,11 @@ import type { BarState, EpisodeNav, OverlayArea, PlayRequest, PlayerSuggestion }
 import { filmRelayScript } from '@shared/filmrelay'
 import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 import { applyProviderReferer } from './identity'
-import { decide } from './adblock'
+import { blockAdverts, installFilmRelay, keepProviderInPlace, refusePopupsAndDownloads } from './providerguard'
 import { clickPlayInFrames, pressPlay as pressPlayIn } from './pressplay'
 import { beginStallWatch, frozenSeconds, observeStall, type StallWatch } from './playbackstall'
 import { checkRuntime } from './runtimecheck'
 import { findIntro } from './skiplookup'
-import { isForeignNavigation } from './navguard'
 import { skipButtonBounds } from './skipplacement'
 import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
 import type { PlayCandidate } from './providers'
@@ -476,17 +475,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   const contents = view.webContents
   contents.setBackgroundThrottling(false)
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  /*
-    Never a download from a source's page. Electron answers an unhandled
-    download with a save dialog, so a source could put the system's file
-    picker in front of the user (reported by the owner, 2026-09-27). The
-    session is this player's own partition, so this reaches nothing else.
-  */
-  contents.session.on('will-download', (event, item) => {
-    console.log(`[download] refused ${new URL(item.getURL()).origin} (${item.getFilename()})`)
-    event.preventDefault()
-  })
+  refusePopupsAndDownloads(contents)
   // Black rather than white: an embed page paints its own background late, and
   // a white flash between the app and the video is the most jarring thing a
   // player can do.
@@ -547,46 +536,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
   applyIdentityFor(currentCandidate())
 
-  /**
-   * Cancel the advertising, on this partition only.
-   *
-   * `onBeforeRequest` allows one handler per session, which is exactly why the
-   * player has its own partition — registering this on the app's session would
-   * replace whatever else wanted it, and would also apply the rules to the
-   * app's own TMDB traffic.
-   *
-   * The page origin is re-read from the player on every request rather than
-   * captured: switching provider mid-episode replaces the candidate, and rules
-   * that still trusted the previous provider's domain would either block the
-   * new stream or wave through the new page's ads.
-   *
-   * Set `WTA_ADBLOCK_LOG=1` to see every decision. That is the switch to reach
-   * for when a provider stops playing after a rule changes — each line names
-   * the rule, so "which rule killed the video" is a grep rather than a bisect.
-   */
-  const logBlocking = process.env.WTA_ADBLOCK_LOG === '1'
-  // An off switch, because the first question when a provider stops playing is
-  // "is it the blocker?" and the only honest way to answer it is to run the
-  // same thing twice.
-  const blockingEnabled = process.env.WTA_ADBLOCK !== '0'
-  contents.session.webRequest.onBeforeRequest((details, callback) => {
-    if (!blockingEnabled) {
-      callback({ cancel: false })
-      return
-    }
-    const decision = decide({
-      url: details.url,
-      resourceType: details.resourceType,
-      pageOrigin: currentCandidate()?.provider.rootUrl ?? null,
-    })
-    if (logBlocking) {
-      console.log(
-        `[adblock] ${decision.blocked ? 'BLOCK' : 'allow'} ${decision.rule} ` +
-          `${details.resourceType} ${details.url.slice(0, 160)}`,
-      )
-    }
-    callback({ cancel: decision.blocked })
-  })
+  blockAdverts(contents.session, () => currentCandidate()?.provider.rootUrl ?? null)
 
   // Read from the player rather than the captured argument: navigating to
   // another episode replaces `player.context`, and the controls must reflect
@@ -729,20 +679,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   contents.on('did-finish-load', sendContext)
   contents.on('did-navigate-in-page', sendContext)
 
-  /**
-   * Keep the provider's page where we put it: `isForeignNavigation`. The
-   * provider's document is the shell's direct child. The shell's own
-   * navigations are ours (every source change is a `loadURL` of the shell),
-   * and the provider's inner frames may go where they like, because what the
-   * user sees is decided by the document that holds them.
-   */
-  contents.on('will-frame-navigate', (details) => {
-    const frame = details.frame
-    if (details.isMainFrame || frame === null || frame.parent !== contents.mainFrame) return
-    if (!isForeignNavigation(frame.url, details.url, currentCandidate()?.url ?? null)) return
-    console.log(`[navguard] kept ${frame.origin} from navigating to ${new URL(details.url).origin}`)
-    details.preventDefault()
-  })
+  keepProviderInPlace(contents, () => currentCandidate()?.url ?? null)
 
   /* ── v2: the film relay, and what the shell is told ────────────────────── */
 
@@ -762,27 +699,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   })()
   const relayScript = shellOrigin === null ? null : filmRelayScript(shellOrigin)
 
-  /**
-   * Put the relay into one provider frame. Idempotent in the frame, so it is
-   * installed on every event that might be the first: early, when a new
-   * frame's DOM is ready, and again when any frame finishes loading, since a
-   * cross-origin navigation gives a frame a new document without a new
-   * `frame-created`.
-   */
-  const installRelay = (frame: Electron.WebFrameMain | null | undefined): void => {
-    if (relayScript === null || !frame || frame === contents.mainFrame) return
-    try {
-      void frame.executeJavaScript(relayScript).catch(() => {})
-    } catch {
-      // Disposed between the event and this call; its successor gets one.
-    }
-  }
-  contents.on('frame-created', (_event, { frame }) => {
-    frame?.on('dom-ready', () => installRelay(frame))
-  })
-  contents.on('did-frame-finish-load', (_event, isMainFrame, processId, routingId) => {
-    if (!isMainFrame) installRelay(webFrameMain.fromId(processId, routingId))
-  })
+  if (relayScript !== null) installFilmRelay(contents, relayScript)
 
   /** A source change to announce once the next shell is up; see `advance`. */
   let pendingChange: { providerId: string; providerName: string; reason: string } | null = null

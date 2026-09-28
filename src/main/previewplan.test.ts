@@ -1,0 +1,104 @@
+/**
+ * Which source a detail view previews from, if any.
+ */
+
+import { describe, expect, it } from 'vitest'
+import type { Provider, ProviderScan } from '@shared/types'
+import { PREVIEW_MAX_START_MS, choosePreview } from './previewplan'
+
+const provider = (id: string, extra: Partial<Provider> = {}): Provider => ({
+  id,
+  name: id,
+  rootUrl: `https://${id}.test/`,
+  tv: { urlTemplate: '{rootUrl}tv/{imdb}/{season}/{episode}' },
+  movie: { urlTemplate: '{rootUrl}movie/{imdb}' },
+  ...extra,
+})
+
+const slow = provider('slow')
+const fast = provider('fast')
+const faster = provider('faster', { resumeParam: 'startAt' })
+const providers = [slow, fast, faster]
+
+const scan = (verdicts: ProviderScan['verdicts'], timings: Record<string, number>): ProviderScan => ({
+  titleKey: 'tv:tt0903747',
+  at: 0,
+  verdicts,
+  timings,
+})
+
+const episode = { imdbId: 'tt0903747', tmdbId: 1396, type: 'tv' as const, season: 2, episode: 3 }
+
+describe('choosePreview', () => {
+  it('takes the fastest source that started within the limit', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ slow: 'stream', fast: 'stream', faster: 'stream' }, { slow: 9_000, fast: 3_100, faster: 2_400 }),
+      req: episode,
+      resume: null,
+    })
+    expect(choice?.provider.id).toBe('faster')
+    expect(choice?.streamMs).toBe(2_400)
+    expect(choice?.startSeconds).toBe(0)
+  })
+
+  it('counts exactly the limit as fast enough, and a millisecond over as not', () => {
+    const at = choosePreview({ providers, scan: scan({ fast: 'stream' }, { fast: PREVIEW_MAX_START_MS }), req: episode, resume: null })
+    const over = choosePreview({ providers, scan: scan({ fast: 'stream' }, { fast: PREVIEW_MAX_START_MS + 1 }), req: episode, resume: null })
+    expect(at?.provider.id).toBe('fast')
+    expect(over).toBeNull()
+  })
+
+  it('ignores a fast timing whose verdict was not a stream', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ faster: 'unsure', fast: 'stream' }, { faster: 1_000, fast: 3_000 }),
+      req: episode,
+      resume: null,
+    })
+    expect(choice?.provider.id).toBe('fast')
+  })
+
+  it('breaks a tie by the user’s order', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ fast: 'stream', faster: 'stream' }, { fast: 2_000, faster: 2_000 }),
+      req: episode,
+      resume: null,
+    })
+    expect(choice?.provider.id).toBe('fast')
+  })
+
+  it('previews nothing without a test, or with nothing fast enough', () => {
+    expect(choosePreview({ providers, scan: null, req: episode, resume: null })).toBeNull()
+    expect(choosePreview({ providers, scan: scan({ slow: 'stream' }, { slow: 9_000 }), req: episode, resume: null })).toBeNull()
+    expect(choosePreview({ providers, scan: scan({ fast: 'stream' }, {}), req: episode, resume: null })).toBeNull()
+  })
+
+  /** A source that was disabled since the test is not in `providers`. */
+  it('only previews from enabled sources', () => {
+    const choice = choosePreview({ providers: [slow], scan: scan({ fast: 'stream' }, { fast: 1_000 }), req: episode, resume: null })
+    expect(choice).toBeNull()
+  })
+
+  it('starts at the saved position, in the URL where the source takes one', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ faster: 'stream' }, { faster: 2_000 }),
+      req: episode,
+      resume: { seconds: 754, duration: 2_700 },
+    })
+    expect(choice?.startSeconds).toBe(754)
+    expect(choice?.url).toContain('startAt=754')
+  })
+
+  it('previews a film too', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ fast: 'stream' }, { fast: 2_000 }),
+      req: { imdbId: 'tt0137523', tmdbId: 550, type: 'movie', season: null, episode: null },
+      resume: null,
+    })
+    expect(choice?.url).toBe('https://fast.test/movie/tt0137523')
+  })
+})

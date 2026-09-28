@@ -78,7 +78,7 @@ let server: Server | null = null
  * nothing about that.
  */
 
-const PLAYER_SHELL_PATH = '/__player'
+export const PLAYER_SHELL_PATH = '/__player'
 
 /**
  * The URL to load in a player view, for a given provider URL.
@@ -87,9 +87,18 @@ const PLAYER_SHELL_PATH = '/__player'
  * nothing else, as before v2. The source tests load it: a hidden probe has no
  * one to show controls to, and must measure the source, not our layer.
  */
-export function playerShellUrl(baseUrl: string, providerUrl: string, options: { bare?: boolean } = {}): string {
+export function playerShellUrl(
+  baseUrl: string,
+  providerUrl: string,
+  options: { bare?: boolean; preview?: { startSeconds: number } } = {},
+): string {
   const bare = options.bare === true ? '&bare=1' : ''
-  return `${baseUrl}${PLAYER_SHELL_PATH}?src=${encodeURIComponent(providerUrl)}${bare}`
+  // The detail view's stream preview (`player/previewshell.ts`): the built
+  // shell, running `PreviewFilm` instead of our controls.
+  const preview = options.preview
+    ? `&preview=1&start=${Math.max(0, Math.floor(options.preview.startSeconds))}`
+    : ''
+  return `${baseUrl}${PLAYER_SHELL_PATH}?src=${encodeURIComponent(providerUrl)}${bare}${preview}`
 }
 
 /** Where the built `player.html` put its placeholder for the provider's frame. */

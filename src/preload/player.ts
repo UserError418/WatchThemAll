@@ -18,7 +18,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { CH, EV } from '@shared/ipc'
+import { CH, EV, PREVIEW_MUTED, PREVIEW_STATE } from '@shared/ipc'
 import type { BarState, PlayerContext, PlayerOverlayConfig, WtaPlayerApi } from '@shared/ipc'
 import { isPlayerAction, isTransportAction, type TransportAction } from '@shared/playerkeys'
 
@@ -68,6 +68,18 @@ const api: WtaPlayerApi = {
   activity: (hold) => ipcRenderer.send(EV.playerActivity, hold === true),
   pressPlay: () => ipcRenderer.send(EV.playerPressPlay),
   owned: (owned) => ipcRenderer.send(EV.playerOwned, owned === true),
+  // Only meaningful in a `<webview>` (the detail view's preview), where the
+  // host is the app's page; see `PREVIEW_STATE`.
+  preview: {
+    report: (state) => ipcRenderer.sendToHost(PREVIEW_STATE, state),
+    onMuted: (callback) => {
+      const listener = (_event: unknown, muted: unknown): void => {
+        if (typeof muted === 'boolean') callback(muted)
+      }
+      ipcRenderer.on(PREVIEW_MUTED, listener)
+      return () => ipcRenderer.removeListener(PREVIEW_MUTED, listener)
+    },
+  },
   subtitles: {
     languages: () => ipcRenderer.invoke(CH.subtitleLanguages),
     load: (code, filmSeconds) => ipcRenderer.invoke(CH.subtitleLoad, code, filmSeconds),

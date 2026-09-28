@@ -136,6 +136,10 @@ export const CH = {
    */
   openExternal: 'shell:open-external',
 
+  /** The detail view's stream preview: whether and from where, and keeping its place. */
+  previewPlan: 'preview:plan',
+  previewKeep: 'preview:keep',
+
   /**
    * Cross-device sync.
    *
@@ -847,6 +851,34 @@ export interface SkipOffer {
 }
 
 /** The surface `window.wta` exposes in the renderer. */
+/**
+ * How a detail view previews a title's stream.
+ *
+ * `surface` is the one platform difference the page has to know about. On the
+ * desktop a source's page cannot live in the app's document, so it is a
+ * `<webview>` of the player shell in its preview mode: its own webContents
+ * and session, which the page still draws over. On the phone the source is an
+ * ordinary iframe in the app's page, driven from the page itself (the relay
+ * is installed in every frame of the WebView).
+ */
+export interface PreviewPlan {
+  surface: 'webview' | 'iframe'
+  /** The shell's preview URL (webview), or the provider's own URL (iframe). */
+  src: string
+  providerId: string
+  providerName: string
+  /** Where the film should be: the saved position, or 0. */
+  startSeconds: number
+}
+
+/**
+ * Between the desktop's preview shell and the page holding its `<webview>`:
+ * `ipcRenderer.sendToHost` one way and `webview.send` the other, so main is
+ * not in between.
+ */
+export const PREVIEW_STATE = 'wta:preview-state'
+export const PREVIEW_MUTED = 'wta:preview-muted'
+
 export interface WtaApi {
   store: {
     read(): Promise<StoreShape>
@@ -884,6 +916,20 @@ export interface WtaApi {
    * an intent with no handler, a user who dismissed the chooser.
    */
   openExternal(url: string): Promise<boolean>
+  /**
+   * The detail view's stream preview (the owner, 2026-09-27): the title itself
+   * in the trailer's place, when a tested source starts fast enough. See
+   * `main/previewplan.ts` for when, and `PreviewPlan` for what comes back.
+   */
+  preview: {
+    /** How this episode or film would preview, or null when it does not. */
+    plan(req: PlayRequest): Promise<PreviewPlan | null>
+    /**
+     * Keep where the preview got to as the place to resume from. Only called
+     * past the grace period: five seconds heard, not just seen.
+     */
+    keep(req: PlayRequest, seconds: number, duration: number): Promise<void>
+  }
   providers: {
     list(): Promise<Provider[]>
     /**
@@ -1335,4 +1381,19 @@ export interface WtaPlayerApi {
      */
     remember(code: string | null): Promise<void>
   }
+  /** The preview shell's end of `PREVIEW_STATE` / `PREVIEW_MUTED`; desktop only. */
+  preview?: {
+    report(state: PreviewReport): void
+    onMuted(cb: (muted: boolean) => void): () => void
+  }
+}
+
+/** What a preview says about its film, as often as it changes. */
+export interface PreviewReport {
+  /** The film's time has moved while it played: it may be shown. */
+  started: boolean
+  seconds: number
+  duration: number
+  playing: boolean
+  muted: boolean
 }

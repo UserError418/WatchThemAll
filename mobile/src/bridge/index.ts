@@ -39,6 +39,7 @@ import type {
   MalPreview,
   Paged,
   PlayRequest,
+  PreviewPlan,
   PlayerState,
   PlayerSuggestion,
   UpNextOffer,
@@ -69,6 +70,7 @@ import { buildPlayUrl, renderTemplate } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
+  lastPlayedAt,
   lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
@@ -77,6 +79,7 @@ import {
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
 import {
+  freshScan,
   pruneScans,
   recordCast,
   recordScan,
@@ -87,6 +90,7 @@ import {
   type AutomaticOrder,
 } from '@main/providerscan'
 import { castabilities } from '@shared/castability'
+import { choosePreview } from '@main/previewplan'
 import { checkAll, sweepDueIn } from '@main/releases'
 import { UpNextController, isEpisodeEnd, type UpNextPlace } from '@main/upnext'
 import { nextAiredEpisode } from '@shared/episodesteps'
@@ -923,29 +927,37 @@ export async function createBridge(): Promise<WtaApi> {
     // the resume seek is seen to take; see `ResumeSeek.inFlight`.
     if (resumeSeek?.inFlight) return
     const reading = progress?.reading ?? null
-    const context = contextFor(req, reading)
+    writePosition(
+      contextFor(req, reading),
+      reading === null ? null : { seconds: reading.seconds, duration: reading.duration ?? 0, ended: reading.ended },
+    )
+  }
+
+  /** Write one reading down for `context`: save it, forget a finished one, or leave the memory alone. */
+  const writePosition = (
+    context: PlayRequest,
+    reading: { seconds: number; duration: number; ended: boolean } | null,
+  ): void => {
     const points = store.collection('resumePoints')
 
     // `resumeAction` rather than a threshold of our own. Its three answers exist
     // because collapsing "nothing was learned" into "forget what you knew" is
     // what made resuming flaky on the desktop, and a provider that reports
     // nothing is the *normal* case here rather than the exception.
-    const action = resumeAction(
-      reading === null ? null : { seconds: reading.seconds, duration: reading.duration ?? 0, ended: reading.ended },
-    )
+    const action = resumeAction(reading)
     if (action === 'keep') return
     if (action === 'forget') {
       points.remove(resumeKey(context))
       writtenPositions.forget(resumeKey(context))
       return
     }
-    if (!writtenPositions.isChange(resumeKey(context), reading!.seconds, reading!.duration ?? 0)) return
+    if (!writtenPositions.isChange(resumeKey(context), reading!.seconds, reading!.duration)) return
 
     points.put({
       key: resumeKey(context),
       tmdbId: context.tmdbId,
       seconds: reading!.seconds,
-      duration: reading!.duration ?? 0,
+      duration: reading!.duration,
     })
   }
 
@@ -1900,6 +1912,39 @@ export async function createBridge(): Promise<WtaApi> {
      * not the same as a tab having appeared. The false this can return means
      * the app refused to hand the URL over, not that displaying it failed.
      */
+    /*
+     * The detail view's stream preview, on the phone: the provider's own URL,
+     * which the page puts in an iframe of its own and drives itself. The relay
+     * is already in every frame of this WebView (`installFilmRelay`), and the
+     * preview iframe is a direct child of the page, which is the parent the
+     * relay obeys. It is not the player's surface, so the player's controls
+     * never mount over it.
+     */
+    preview: {
+      plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
+        const doc = store.read()
+        const key = titleKey(req)
+        const choice = choosePreview({
+          providers: automaticOrderFor(req).providers,
+          scan: freshScan(doc.providerScans, key, Date.now(), lastPlayedAt(doc.streamOutcomes, key)),
+          req,
+          resume: resumeOfferFor(doc.resumePoints, req),
+        })
+        if (choice === null) return null
+        return {
+          surface: 'iframe',
+          src: choice.url,
+          providerId: choice.provider.id,
+          providerName: choice.provider.name,
+          startSeconds: choice.startSeconds,
+        }
+      },
+      keep: async (req: PlayRequest, seconds: number, duration: number): Promise<void> => {
+        if (!Number.isFinite(seconds) || seconds <= 0) return
+        writePosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false })
+        pushPositions.now()
+      },
+    },
     openExternal: async (url: string): Promise<boolean> => {
       if (!isOpenableExternally(url)) return false
       try {

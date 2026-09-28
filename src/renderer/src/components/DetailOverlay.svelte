@@ -19,6 +19,10 @@
   import { airDate, countdown, episodeCode, hasAired, runtime, year } from '../lib/format'
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
+  import StreamPreview from './StreamPreview.svelte'
+  import { PreviewGrace } from '../lib/previewgrace'
+  import type { PlayRequest, PreviewPlan } from '@shared/ipc'
+  import { untrack } from 'svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
   import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
   import { resumeAnchor } from '@shared/watchlistrank'
@@ -296,10 +300,9 @@
    */
   const playable = $derived(detail ?? { ...subject, imdbId: subject.imdbId ?? null })
 
-  async function play(episode: (EpisodeRef & { runtime?: number | null }) | null): Promise<void> {
-    playError = null
-
-    const result = await window.wta.play({
+  /** What Play would ask for this episode (or the film): also what the stream preview plays. */
+  function requestFor(episode: (EpisodeRef & { runtime?: number | null }) | null): PlayRequest {
+    return {
       tmdbId: playable.tmdbId,
       imdbId: playable.imdbId ?? null,
       type: playable.type,
@@ -317,7 +320,16 @@
        * first press of next.
        */
       runtimeMinutes: episode?.runtime ?? detail?.runtime ?? null,
-    })
+    }
+  }
+
+  async function play(episode: (EpisodeRef & { runtime?: number | null }) | null): Promise<void> {
+    playError = null
+    // The real player takes over: the preview stops first, and a place it
+    // earned is written down before the player reads where to start.
+    await leavePreview()
+
+    const result = await window.wta.play(requestFor(episode))
 
     if (!result.ok) {
       playError = result.error ?? 'Could not open a player'
@@ -392,17 +404,16 @@
   })
 
   /** Play exactly the episode the button names. */
+  /** The episode Resume starts (null for a film): also the one the stream preview plays. */
+  function resumeEpisode(): (EpisodeRef & { runtime?: number | null }) | null {
+    if (playable.type === 'movie') return null
+    // No episode list to resume from — use the numbers the user picked.
+    if (degraded) return { season: manualSeason, episode: manualEpisode }
+    return episodeToPlay(resumeAt, [resumeSeason?.episodes ?? [], season?.episodes ?? []])
+  }
+
   function resume(): void {
-    if (playable.type === 'movie') {
-      void play(null)
-      return
-    }
-    if (degraded) {
-      // No episode list to resume from — use the numbers the user picked.
-      void play({ season: manualSeason, episode: manualEpisode })
-      return
-    }
-    void play(episodeToPlay(resumeAt, [resumeSeason?.episodes ?? [], season?.episodes ?? []]))
+    void play(resumeEpisode())
   }
 
   /** What pressing "+ Watched" will actually file, in words. */
@@ -506,15 +517,100 @@
      * the artwork and text to paint first, so the panel does not assemble
      * itself around a video that arrived before it.
      */
-    const timer = setTimeout(() => {
-      showHeroTrailer = true
-      previewAudio.claim(audioId)
-    }, 350)
+    const timer = setTimeout(() => (showHeroTrailer = true), 350)
+    return () => clearTimeout(timer)
+  })
 
+  /* ── The stream preview ──────────────────────────────────────────────────
+   *
+   * The title itself in the trailer's place (the owner, 2026-09-27), when
+   * this device's tests found a source that starts within 4 s: main or the
+   * phone's bridge decide (`previewplan.ts`), this only asks and shows. It
+   * plays the episode Resume would start, from the saved place, and needs no
+   * watch history. The trailer waits for the answer, so it never flashes up
+   * only to be replaced, and comes back if the stream does not show.
+   */
+
+  /** The question as asked: what the preview plays, and the answer (`undefined` while waiting for it). */
+  let stream = $state<{ key: string; req: PlayRequest; plan: PreviewPlan | null | undefined } | null>(null)
+  /** Given up on (`StreamPreview`'s `onfail`), or stopped because the real player is starting. */
+  let streamOff = $state(false)
+  let grace = new PreviewGrace()
+
+  /**
+   * Asked once Resume knows its episode: before the anchor's season list has
+   * loaded, `resumeTarget` may still move on to the next episode.
+   */
+  const previewRequest = $derived.by((): PlayRequest | null => {
+    if (!detail) return null
+    if (playable.type === 'tv' && !degraded && resumeSeason?.season !== anchor.season) return null
+    return requestFor(resumeEpisode())
+  })
+  const previewKey = $derived(
+    previewRequest === null
+      ? ''
+      : `${previewRequest.type}:${previewRequest.tmdbId}:${previewRequest.season}:${previewRequest.episode}`,
+  )
+
+  $effect(() => {
+    const key = previewKey
+    if (key === '') return
+    const req = untrack(() => previewRequest)!
+    stream = { key, req, plan: undefined }
+    streamOff = false
+    grace = new PreviewGrace()
+    kept = false
+    let current = true
+    void window.wta.preview
+      .plan(req)
+      .then((plan) => {
+        if (current) stream = { key, req, plan }
+      })
+      .catch(() => {})
     return () => {
-      clearTimeout(timer)
-      previewAudio.release(audioId)
+      current = false
+      // Leaving this episode's preview for another: keep a place it earned.
+      void keepPreviewPlace(req)
     }
+  })
+
+  /** The plan has been asked for and answered, for what the hero shows now. */
+  const streamAnswered = $derived(stream !== null && stream.key === previewKey && stream.plan !== undefined)
+  const streamPlan = $derived(
+    stream !== null && stream.key === previewKey && !streamOff ? (stream.plan ?? null) : null,
+  )
+  const showStream = $derived(streamPlan !== null && !previewAudio.suspended)
+  /** The trailer, once it is known the stream will not take its place. */
+  const trailerAllowed = $derived(streamOff || (streamAnswered && stream?.plan === null))
+
+  /** The hero takes the sound for whatever plays in it; see `heroMuted`. */
+  $effect(() => {
+    if (!(showStream || (showHeroTrailer && trailerAllowed))) return
+    previewAudio.claim(audioId)
+    return () => previewAudio.release(audioId)
+  })
+
+  let kept = false
+  /** Write down where the preview got to, once, if it got past the grace period. */
+  async function keepPreviewPlace(req: PlayRequest): Promise<void> {
+    const place = grace.kept()
+    if (place === null || kept) return
+    kept = true
+    try {
+      await window.wta.preview.keep(req, place.seconds, place.duration)
+    } catch {
+      // Not keeping it only means resuming from the place saved before.
+    }
+  }
+
+  async function leavePreview(): Promise<void> {
+    streamOff = true
+    if (stream) await keepPreviewPlace(stream.req)
+  }
+
+  // Closing the detail view keeps an earned place too.
+  $effect(() => () => {
+    if (stream) void keepPreviewPlace(stream.req)
   })
 
   $effect(() => {
@@ -549,7 +645,14 @@
     <header class="hero" style:background-image={backdrop ? `url("${backdrop}")` : undefined}>
       <button class="close" onclick={onclose} aria-label="Close">✕</button>
 
-      {#if showHeroTrailer && detail?.trailerKey && !previewAudio.suspended}
+      {#if showStream && streamPlan}
+        <StreamPreview
+          plan={streamPlan}
+          muted={heroMuted}
+          onstate={(state) => grace.feed(state)}
+          onfail={() => (streamOff = true)}
+        />
+      {:else if trailerAllowed && showHeroTrailer && detail?.trailerKey && !previewAudio.suspended}
         <TrailerEmbed
           videoKey={detail.trailerKey}
           muted={heroMuted}
