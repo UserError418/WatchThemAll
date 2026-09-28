@@ -17,7 +17,7 @@
  * taken from the page, and `nodeIntegration` stays off.
  */
 
-import { ipcMain, type BrowserWindow, type WebContents } from 'electron'
+import { ipcMain, session, type BrowserWindow, type WebContents } from 'electron'
 import { join } from 'node:path'
 import { EV } from '@shared/ipc'
 import { filmRelayScript } from '@shared/filmrelay'
@@ -76,6 +76,14 @@ export function allowStreamPreviews(win: BrowserWindow, dirname: string, shellBa
 }
 
 function protect(guest: WebContents, shellBase: string): void {
+  // Its own session, never the app's: every handler below is per session, and
+  // on the app's session they would replace the app's own.
+  const own = guest.session !== session.defaultSession
+  console.log(`[preview] attached; own session: ${own}`)
+  if (!own) {
+    guest.close()
+    return
+  }
   /*
    * The source this guest shows. Its URL is still empty at attach time
    * (measured in the spike), so it is learned from the shell's navigations,

@@ -31,10 +31,10 @@
 
   /**
    * How long a preview may take to show a film. The plan only offers sources
-   * that started streaming within 4 s in a test; the page load, the jump to
+   * that started streaming within 8 s in a test; the page load, the jump to
    * the saved place and the check that it is playing come on top of that.
    */
-  const GIVE_UP_MS = 20_000
+  const GIVE_UP_MS = 30_000
   /** As often as the player asks its frames for a report. */
   const HEARTBEAT_MS = 2_000
 
@@ -57,6 +57,7 @@
   interface WebviewElement extends HTMLElement {
     send(channel: string, ...args: unknown[]): void
     setAudioMuted(muted: boolean): void
+    loadURL(url: string): Promise<void>
   }
 
   let webview = $state<WebviewElement | null>(null)
@@ -77,6 +78,18 @@
     return () => {
       view.removeEventListener('dom-ready', onReady)
       view.removeEventListener('ipc-message', onMessage)
+      /*
+       * Silence and unload the guest now. Removing the element destroys it
+       * seconds later, not at once (measured: still playing 8 s after the
+       * detail view closed), and a preview with its sound on would play
+       * under the player that Resume just opened.
+       */
+      try {
+        view.setAudioMuted(true)
+        view.loadURL('about:blank')
+      } catch {
+        // Never attached, or already gone: nothing is playing.
+      }
     }
   })
 

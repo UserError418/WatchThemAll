@@ -27,10 +27,10 @@ const scan = (verdicts: ProviderScan['verdicts'], timings: Record<string, number
   timings,
 })
 
-const episode = { imdbId: 'tt0903747', tmdbId: 1396, type: 'tv' as const, season: 2, episode: 3 }
+const episode = { imdbId: 'tt0903747', tmdbId: 1396, type: 'tv' as const, season: 2, episode: 3, providerId: null }
 
 describe('choosePreview', () => {
-  it('takes the fastest source that started within the limit', () => {
+  it('takes the fastest qualifying source when the usual pick does not qualify', () => {
     const choice = choosePreview({
       providers,
       scan: scan({ slow: 'stream', fast: 'stream', faster: 'stream' }, { slow: 9_000, fast: 3_100, faster: 2_400 }),
@@ -40,6 +40,37 @@ describe('choosePreview', () => {
     expect(choice?.provider.id).toBe('faster')
     expect(choice?.streamMs).toBe(2_400)
     expect(choice?.startSeconds).toBe(0)
+  })
+
+  /** The owner, 2026-09-28: preview and Resume show one source, and the usual one when it can. */
+  it('keeps the usual pick when it qualifies, even if another is faster', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ slow: 'stream', faster: 'stream' }, { slow: 7_500, faster: 1_000 }),
+      req: episode,
+      resume: null,
+    })
+    expect(choice?.provider.id).toBe('slow')
+  })
+
+  it('previews a source picked by hand when it qualifies', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ fast: 'stream', faster: 'stream' }, { fast: 3_000, faster: 1_000 }),
+      req: { ...episode, providerId: 'fast' },
+      resume: null,
+    })
+    expect(choice?.provider.id).toBe('fast')
+  })
+
+  it('never overrules a pick by hand: no preview when it does not qualify', () => {
+    const choice = choosePreview({
+      providers,
+      scan: scan({ slow: 'stream', faster: 'stream' }, { slow: 9_000, faster: 1_000 }),
+      req: { ...episode, providerId: 'slow' },
+      resume: null,
+    })
+    expect(choice).toBeNull()
   })
 
   it('counts exactly the limit as fast enough, and a millisecond over as not', () => {
@@ -62,7 +93,7 @@ describe('choosePreview', () => {
   it('breaks a tie by the user’s order', () => {
     const choice = choosePreview({
       providers,
-      scan: scan({ fast: 'stream', faster: 'stream' }, { fast: 2_000, faster: 2_000 }),
+      scan: scan({ slow: 'dead', fast: 'stream', faster: 'stream' }, { fast: 2_000, faster: 2_000 }),
       req: episode,
       resume: null,
     })
@@ -72,6 +103,7 @@ describe('choosePreview', () => {
   it('previews nothing without a test, or with nothing fast enough', () => {
     expect(choosePreview({ providers, scan: null, req: episode, resume: null })).toBeNull()
     expect(choosePreview({ providers, scan: scan({ slow: 'stream' }, { slow: 9_000 }), req: episode, resume: null })).toBeNull()
+    expect(choosePreview({ providers, scan: scan({ slow: 'stream' }, { slow: 8_001 }), req: episode, resume: null })).toBeNull()
     expect(choosePreview({ providers, scan: scan({ fast: 'stream' }, {}), req: episode, resume: null })).toBeNull()
   })
 
@@ -96,7 +128,7 @@ describe('choosePreview', () => {
     const choice = choosePreview({
       providers,
       scan: scan({ fast: 'stream' }, { fast: 2_000 }),
-      req: { imdbId: 'tt0137523', tmdbId: 550, type: 'movie', season: null, episode: null },
+      req: { imdbId: 'tt0137523', tmdbId: 550, type: 'movie', season: null, episode: null, providerId: null },
       resume: null,
     })
     expect(choice?.url).toBe('https://fast.test/movie/tt0137523')

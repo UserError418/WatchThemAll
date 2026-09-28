@@ -300,8 +300,14 @@
    */
   const playable = $derived(detail ?? { ...subject, imdbId: subject.imdbId ?? null })
 
-  /** What Play would ask for this episode (or the film): also what the stream preview plays. */
-  function requestFor(episode: (EpisodeRef & { runtime?: number | null }) | null): PlayRequest {
+  /**
+   * What Play would ask for this episode (or the film): also what the stream
+   * preview plays. `providerId` defaults to the choice made by hand (or none).
+   */
+  function requestFor(
+    episode: (EpisodeRef & { runtime?: number | null }) | null,
+    providerId: string | null = chosenProvider,
+  ): PlayRequest {
     return {
       tmdbId: playable.tmdbId,
       imdbId: playable.imdbId ?? null,
@@ -309,7 +315,7 @@
       title: playable.title,
       season: episode?.season ?? null,
       episode: episode?.episode ?? null,
-      providerId: chosenProvider,
+      providerId,
       /**
        * The episode's own runtime when TMDB has it, the show's typical episode
        * length otherwise.
@@ -323,13 +329,16 @@
     }
   }
 
-  async function play(episode: (EpisodeRef & { runtime?: number | null }) | null): Promise<void> {
+  async function play(
+    episode: (EpisodeRef & { runtime?: number | null }) | null,
+    providerId: string | null = chosenProvider,
+  ): Promise<void> {
     playError = null
     // The real player takes over: the preview stops first, and a place it
     // earned is written down before the player reads where to start.
     await leavePreview()
 
-    const result = await window.wta.play(requestFor(episode))
+    const result = await window.wta.play(requestFor(episode, providerId))
 
     if (!result.ok) {
       playError = result.error ?? 'Could not open a player'
@@ -412,8 +421,13 @@
     return episodeToPlay(resumeAt, [resumeSeason?.episodes ?? [], season?.episodes ?? []])
   }
 
+  /**
+   * Resume, on the preview's source while one is playing (the owner,
+   * 2026-09-28): a warm start of what was just on screen, which the source
+   * list shows as the choice. Otherwise the usual choice.
+   */
   function resume(): void {
-    void play(resumeEpisode())
+    void play(resumeEpisode(), previewSource ?? chosenProvider)
   }
 
   /** What pressing "+ Watched" will actually file, in words. */
@@ -524,7 +538,7 @@
   /* ── The stream preview ──────────────────────────────────────────────────
    *
    * The title itself in the trailer's place (the owner, 2026-09-27), when
-   * this device's tests found a source that starts within 4 s: main or the
+   * this device's tests found a source that starts within 8 s: main or the
    * phone's bridge decide (`previewplan.ts`), this only asks and shows. It
    * plays the episode Resume would start, from the saved place, and needs no
    * watch history. The trailer waits for the answer, so it never flashes up
@@ -546,15 +560,24 @@
     if (playable.type === 'tv' && !degraded && resumeSeason?.season !== anchor.season) return null
     return requestFor(resumeEpisode())
   })
+  /** Includes the source picked by hand, so picking another moves the preview to it. */
   const previewKey = $derived(
     previewRequest === null
       ? ''
-      : `${previewRequest.type}:${previewRequest.tmdbId}:${previewRequest.season}:${previewRequest.episode}`,
+      : `${previewRequest.type}:${previewRequest.tmdbId}:${previewRequest.season}:${previewRequest.episode}:${previewRequest.providerId ?? ''}`,
   )
 
   $effect(() => {
     const key = previewKey
     if (key === '') return
+    /*
+     * The same episode and source coming back after a blip (the detail
+     * briefly reloading, seen when the player closed) is not a new preview:
+     * one that was stopped for the player, or gave up, stays that way.
+     * Measured: without this a preview restarted behind the detail view a
+     * few seconds after the player closed.
+     */
+    if (untrack(() => stream?.key) === key) return
     const req = untrack(() => previewRequest)!
     stream = { key, req, plan: undefined }
     streamOff = false
@@ -580,6 +603,12 @@
     stream !== null && stream.key === previewKey && !streamOff ? (stream.plan ?? null) : null,
   )
   const showStream = $derived(streamPlan !== null && !previewAudio.suspended)
+  /**
+   * The source Resume uses while a preview is on: the preview's own. Only
+   * differs from the usual choice when that was not fast enough; the source
+   * list shows it, so what Resume will play is never a surprise.
+   */
+  const previewSource = $derived(streamPlan?.providerId ?? null)
   /** The trailer, once it is known the stream will not take its place. */
   const trailerAllowed = $derived(streamOff || (streamAnswered && stream?.plan === null))
 
@@ -696,7 +725,7 @@
                 URL at all, which would mark every source dead.
               -->
               <SourcePicker
-                selected={chosenProvider}
+                selected={chosenProvider ?? previewSource}
                 media={{ type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }}
                 episode={subject.type === 'movie'
                   ? null

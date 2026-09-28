@@ -2,11 +2,20 @@
  * Whether a title's detail view plays its stream instead of the trailer, and
  * from where.
  *
- * Agreed with the owner (2026-09-27): any film or series whose sources this
- * device has tested, when at least one of them started streaming within
- * `PREVIEW_MAX_START_MS`. The fastest of those plays, at the place Play or
- * Resume would start (the saved position, or the beginning). Which source
- * Resume itself uses is not touched: that stays with the usual order.
+ * Agreed with the owner (2026-09-27, revised 2026-09-28): any film or series
+ * whose sources this device has tested, when one of them started streaming
+ * within `PREVIEW_MAX_START_MS`. It plays at the place Play or Resume would
+ * start (the saved position, or the beginning).
+ *
+ * The preview and Resume use one source, so pressing Resume carries on with
+ * what was just on screen (the owner's "warm start"). Sharing the preview's
+ * session with the player as well was measured on 2026-09-28 and removed:
+ * cold 4.7 s against warm 5.0 s to a moving film, because the time is the
+ * source's own start-up, not its downloads. Which one: Resume's usual pick when that qualifies, so nothing
+ * changes for a title whose usual source is fast enough; otherwise the
+ * fastest source that qualifies, and Resume follows the preview. A source
+ * picked by hand is never overruled: if it does not qualify, there is no
+ * preview.
  *
  * Only this device's own results count. Shared results from another device
  * carry no timings (`scanshare.ts`), and a phone's start time says nothing
@@ -21,8 +30,8 @@ import type { Provider, ProviderScan } from '@shared/types'
 import { renderTemplate } from './providers'
 import type { ResumeOffer } from './resume'
 
-/** "Faster than 3.5–4 s", settled at 4 s (the owner). */
-export const PREVIEW_MAX_START_MS = 4_000
+/** Raised from 4 s by the owner after trying it (2026-09-28). */
+export const PREVIEW_MAX_START_MS = 8_000
 
 export interface PreviewChoice {
   provider: Provider
@@ -37,18 +46,35 @@ export interface PreviewChoice {
 /**
  * The source to preview from, or null when nothing qualifies.
  *
- * `providers` are the enabled ones in the user's order, which breaks ties
- * between equally fast sources. `scan` is this device's fresh row for the
- * title (`freshScan`), so aged-out and overtaken results are already gone.
+ * `providers` are the enabled ones in Automatic's order (resume source
+ * first), whose first playable entry is Resume's usual pick. `req.providerId`
+ * is a source picked by hand, which is Resume's pick instead. `scan` is this
+ * device's fresh row for the title (`freshScan`), so aged-out and overtaken
+ * results are already gone.
  */
 export function choosePreview(input: {
   providers: readonly Provider[]
   scan: ProviderScan | null
-  req: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>
+  req: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode' | 'providerId'>
   resume: ResumeOffer | null
 }): PreviewChoice | null {
   const { providers, scan, req, resume } = input
   if (scan === null) return null
+
+  const qualifying = (provider: Provider): PreviewChoice | null => {
+    const ms = scan.timings?.[provider.id]
+    if (scan.verdicts[provider.id] !== 'stream') return null
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms > PREVIEW_MAX_START_MS) return null
+    const url = renderTemplate(provider, req, resume)
+    return url === null ? null : { provider, url, startSeconds: resume?.seconds ?? 0, streamMs: ms }
+  }
+
+  const picked = req.providerId ? providers.find((p) => p.id === req.providerId) : undefined
+  const usual = picked ?? providers.find((p) => renderTemplate(p, req, resume) !== null)
+  const usualChoice = usual === undefined ? null : qualifying(usual)
+  if (usualChoice !== null) return usualChoice
+  // Picked by hand and not fast enough (or untested): the pick stands, unpreviewed.
+  if (req.providerId) return null
 
   const fast = providers
     .map((provider, order) => ({ provider, order, ms: scan.timings?.[provider.id] }))
