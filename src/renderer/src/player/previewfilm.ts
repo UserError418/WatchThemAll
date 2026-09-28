@@ -45,6 +45,8 @@ export type PreviewFilmState = PreviewReport
 
 export class PreviewFilm {
   private started = false
+  /** When the film was first seen playing, time moving, wherever it was. */
+  private streamedAt: number | null = null
   private playingAt: number | null = null
   private seeks = 0
   private lastSeekAt = Number.NEGATIVE_INFINITY
@@ -110,8 +112,11 @@ export class PreviewFilm {
     // once with a load of its own (the player's rule, for VidRock).
     if (film.paused) this.playingAt = null
     else {
-      if (this.playingAt !== null && film.seconds > this.playingAt + 0.2 && !this.seeking(film.seconds)) {
-        this.started = true
+      if (this.playingAt !== null && film.seconds > this.playingAt + 0.2) {
+        // Playing, which is what a test calls streaming; shown only once it
+        // is also at the saved place.
+        this.streamedAt ??= now
+        if (!this.seeking(film.seconds)) this.started = true
       }
       this.playingAt = film.seconds
     }
@@ -136,6 +141,7 @@ export class PreviewFilm {
       duration: real ? film.duration : 0,
       playing: real && !film.paused,
       muted: this.muted,
+      streamedMs: this.streamedAt === null ? null : Math.round(this.streamedAt - this.openedAt),
     }
   }
 }

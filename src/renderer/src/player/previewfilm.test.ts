@@ -62,6 +62,25 @@ describe('PreviewFilm', () => {
     expect(preview.step()).toMatchObject({ started: true, seconds: 755.4 })
   })
 
+  it('times the stream from when it first played, before the jump to the saved place', () => {
+    const { link, report } = fakeLink()
+    let now = 0
+    const preview = new PreviewFilm(link, 754, true, () => now)
+    expect(preview.step().streamedMs).toBeNull()
+    now = 2_400
+    report({ seconds: 2 })
+    preview.step()
+    now = 2_900
+    report({ seconds: 3 })
+    // Playing, so streamed; still far from the saved place, so not shown.
+    expect(preview.step()).toMatchObject({ started: false, streamedMs: 2_900 })
+    now = 6_000
+    report({ seconds: 754.5 })
+    preview.step()
+    report({ seconds: 755.4 })
+    expect(preview.step()).toMatchObject({ started: true, streamedMs: 2_900 })
+  })
+
   it('leaves a source that resumed further on by itself where it is', () => {
     const { link, sent, report } = fakeLink()
     const preview = new PreviewFilm(link, 600, true, () => 0)

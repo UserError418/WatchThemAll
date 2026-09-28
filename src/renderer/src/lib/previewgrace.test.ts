@@ -8,6 +8,7 @@ const at = (seconds: number, patch: Partial<PreviewReport> = {}): PreviewReport 
   duration: 2_700,
   playing: true,
   muted: false,
+  streamedMs: 2_000,
   ...patch,
 })
 

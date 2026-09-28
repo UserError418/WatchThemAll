@@ -139,6 +139,7 @@ export const CH = {
   /** The detail view's stream preview: whether and from where, and keeping its place. */
   previewPlan: 'preview:plan',
   previewKeep: 'preview:keep',
+  previewRecord: 'preview:record',
 
   /**
    * Cross-device sync.
@@ -929,6 +930,12 @@ export interface WtaApi {
      * past the grace period: five seconds heard, not just seen.
      */
     keep(req: PlayRequest, seconds: number, duration: number): Promise<void>
+    /**
+     * File what the preview measured as a test result for its source: it
+     * played, this many milliseconds after the preview opened. Once per
+     * preview.
+     */
+    record(req: PlayRequest, providerId: string, streamedMs: number): Promise<void>
   }
   providers: {
     list(): Promise<Provider[]>
@@ -1397,4 +1404,10 @@ export interface PreviewReport {
   duration: number
   playing: boolean
   muted: boolean
+  /**
+   * How long the film took to play, in milliseconds from the preview
+   * opening; null until it has. Filed as a test result for the source
+   * (`preview.record`), the moment it is known.
+   */
+  streamedMs: number | null
 }

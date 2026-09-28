@@ -56,6 +56,9 @@ import { createPointerZoneWatcher } from './pointerzone'
 import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type OfferKind } from './switchoffer'
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
+import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, type PlayMeasurement } from './providerscan'
+import { qualityClass } from '@shared/streamquality'
+import type { ScanReason } from '@shared/types'
 
 /** Where the video sits, in the app window's content coordinates. */
 export interface PlayerBounds {
@@ -217,6 +220,9 @@ export interface VideoPosition {
    * "the stream died mid-episode".
    */
   paused: boolean
+  /** The picture's own size, 0 until the first frame. For the play's quality. */
+  width?: number
+  height?: number
 }
 
 export interface InlinePlayerOptions {
@@ -281,6 +287,12 @@ export interface InlinePlayerOptions {
   candidates: PlayCandidate[]
   bounds: PlayerBounds
   reportOutcome?: OutcomeReporter
+  /**
+   * Told what a load measured, for the test results (`PlayMeasurement`): when
+   * it started streaming and how long that took, then the best picture of
+   * its first minute, or a failure the source's servers declared.
+   */
+  reportResult?: (providerId: string, seen: PlayMeasurement) => void
   /**
    * Everything the skip-intro offer needs, or absent to leave it off.
    *
@@ -407,6 +419,8 @@ const READ_POSITION_SCRIPT = `(() => {
         duration,
         ended: !!video.ended,
         paused: !!video.paused,
+        width: Number(video.videoWidth) || 0,
+        height: Number(video.videoHeight) || 0,
       }
     }
   }
@@ -416,6 +430,8 @@ const READ_POSITION_SCRIPT = `(() => {
         duration: best.duration,
         ended: best.ended,
         paused: best.paused,
+        width: best.width,
+        height: best.height,
       })
     : null
 })()`
@@ -754,6 +770,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   contents.on('media-started-playing', () => {
     const candidate = currentCandidate()
     if (candidate) reportOutcome(candidate.provider.id, 'stream')
+    if (candidate) noteStreamed(candidate.provider.id)
     // It worked. Nothing pending against this provider is valid any more, and
     // any offer to leave it must be withdrawn — an offer still on screen after
     // the video started is worse than never having made one.
@@ -1081,6 +1098,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         watchForStall(found)
         offerSkip(found)
         if (!found) return
+        notePicture(found)
         lastPosition = found
         judgeRuntime(found)
         maybePersist(found)
@@ -1211,6 +1229,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let evidence: LoadEvidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
   /** The first failure the provider's own backend reported this load, for the offer's wording. */
   let backendFailure: string | null = null
+  /** Its status, for the test results. */
+  let backendStatus: number | null = null
   /** When the page last finished a request, of any kind. See `judgeSilence`. */
   let lastActivityAt = Date.now()
   /**
@@ -1241,6 +1261,47 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    */
   const SILENCE_GRACE_MS = 25_000
 
+  /* ── What this load measured, for the test results ──────────────────── */
+
+  /** When the current load began; reset by `beginLoad`. */
+  let loadStartedAt = Date.now()
+  /**
+   * What this load has told the test results: a success, improved as the
+   * picture does, or a failure the source's servers declared. Once per load,
+   * except that a load which plays after a declared failure is a success.
+   */
+  let measured: { providerId: string; at: number; streamed: boolean; ms?: number; quality?: number } | null = null
+  /**
+   * How long into playing the picture still counts toward the play's
+   * quality. Adaptive streams start low and climb; a minute is enough for
+   * them to reach what the connection allows, and the result then stays put.
+   */
+  const PICTURE_WINDOW_MS = 60_000
+
+  const noteStreamed = (providerId: string): void => {
+    if (measured?.streamed) return
+    const at = Date.now()
+    const ms = at - loadStartedAt
+    // Past the silence check, the wait included the user: see `PLAY_TIMING_MAX_MS`.
+    measured = { providerId, at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) }
+    options.reportResult?.(providerId, { at, streamed: true, ...(measured.ms === undefined ? {} : { ms: measured.ms }) })
+  }
+
+  const notePicture = (found: VideoPosition): void => {
+    if (!measured?.streamed || !found.height || found.duration < PLAY_MIN_FILM_SECONDS) return
+    if (Date.now() - measured.at > PICTURE_WINDOW_MS) return
+    const quality = qualityClass({ width: found.width ?? null, height: found.height })
+    if (quality <= (measured.quality ?? 0)) return
+    measured.quality = quality
+    // The same moment again, so this replaces the result rather than adding one.
+    options.reportResult?.(measured.providerId, {
+      at: measured.at,
+      streamed: true,
+      ...(measured.ms === undefined ? {} : { ms: measured.ms }),
+      quality,
+    })
+  }
+
 
   /** The next provider we have not tried, or undefined if there is none. */
   const nextUntried = (): PlayCandidate | undefined => {
@@ -1257,7 +1318,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * one of those was a *sub-frame* failing, which moved the user off videos that
    * were playing without asking, and without the bar ever appearing.
    */
-  const suggest = (reason: string, kind: OfferKind): void => {
+  const suggest = (reason: string, kind: OfferKind, cause?: ScanReason): void => {
     if (!alive() || playing) return
 
     const current = currentCandidate()
@@ -1274,6 +1335,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (!failureRecorded) {
       failureRecorded = true
       reportOutcome(current.provider.id, 'failed')
+    }
+    if (cause !== undefined && measured === null) {
+      measured = { providerId: current.provider.id, at: Date.now(), streamed: false }
+      options.reportResult?.(current.provider.id, { at: measured.at, streamed: false, reason: cause })
     }
 
     if (waitingOut === player.candidateIndex) return
@@ -1321,6 +1386,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
             ? `${name} refused its own video (${evidence.refusedStatus})`
             : (backendFailure ?? `${name} has not started playing`),
           'silence',
+          // Declared by the source's servers, so a result; silence alone is not.
+          evidence.refusedStatus !== null
+            ? { kind: 'refused', status: evidence.refusedStatus }
+            : backendStatus !== null
+              ? { kind: 'error', status: backendStatus }
+              : undefined,
         )
         return
       case 'loading':
@@ -1351,6 +1422,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
     evidence = { playlistOk: false, videoOk: false, refusedStatus: null, videoElement: false }
     backendFailure = null
+    backendStatus = null
+    loadStartedAt = Date.now()
+    measured = null
     lastActivityAt = Date.now()
     idleSinceCheck = false
     // Whatever the previous page left open is aborted by the navigation.
@@ -1455,7 +1529,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     console.error(`[player] ${navigatedUrl} returned ${reason}`)
     // The server answered and said no. That is a verdict, not a delay, so it
     // offers straight away rather than switching or waiting.
-    suggest(reason, 'failure')
+    suggest(reason, 'failure', { kind: 'error', status: httpResponseCode })
   })
 
   /**
@@ -1529,6 +1603,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // Named in the offer if nothing plays; not an offer of its own. See
     // `isProviderFailure` for why an immediate offer was wrong.
     backendFailure ??= `${candidate.provider.name} API returned ${details.statusCode}`
+    backendStatus ??= details.statusCode
   })
 
   /**

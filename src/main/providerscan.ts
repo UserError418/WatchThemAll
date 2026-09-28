@@ -51,7 +51,16 @@
  * and the `lint-imports` contract that guards it.
  */
 
-import type { CastOutcome, DeviceKind, Provider, SourceSortKey, StoreShape, StreamDelivery } from '@shared/types'
+import type {
+  CastOutcome,
+  DeviceKind,
+  Provider,
+  ScanReason,
+  SourceSortKey,
+  StoreShape,
+  StreamDelivery,
+} from '@shared/types'
+import { verdictForReason } from '@shared/scanreason'
 import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
 import { MAX_SCANS, RESULT_TTL_MS, testedAtOf } from '@shared/scanrow'
@@ -168,6 +177,74 @@ export interface ResultsAccess {
   sources(): ResultSources
   device(): ResultDevice
   record(results: readonly SourceResult[]): void
+}
+
+/**
+ * The longest a play's time to stream is believed. Past it, the wait
+ * included the user: a source's poster waiting for a click, or a "keep
+ * waiting". The success still counts, without a time. The desktop player's
+ * silence check fires at the same moment, for the same reason.
+ */
+export const PLAY_TIMING_MAX_MS = 25_000
+
+/**
+ * The shortest video taken for the film rather than an advert, for what a
+ * play measures: below any episode, above any advert seen on these sources.
+ * The preview's `MIN_FILM_SECONDS` is the same rule.
+ */
+export const PLAY_MIN_FILM_SECONDS = 120
+
+/**
+ * What one load of a source showed while the user watched, or while the
+ * detail view previewed it: that it streamed, or that it failed in a way
+ * that cannot be mistaken.
+ *
+ * Re-reported with the same `at` as more is learned (the picture improves in
+ * the first minute), which replaces the result rather than adding one: a
+ * result is identified by its device, time and source.
+ */
+export type PlayMeasurement =
+  | {
+      at: number
+      streamed: true
+      /** From the start of the load to the stream playing. Absent when the wait included the user. */
+      ms?: number
+      /** The best picture seen, as a quality class. */
+      quality?: number
+    }
+  | {
+      at: number
+      streamed: false
+      /**
+       * Only failures the source's own servers declared: an error status for
+       * its page or its backend, or its video refused. A dropped network, a
+       * crash, a page still loading or waiting for a click, say nothing about
+       * the source, so they are not results.
+       */
+      reason: ScanReason
+    }
+
+/** A play's or a preview's measurement as a result: weaker than a test when it failed, see `sourceresults.ts`. */
+export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: PlayMeasurement): SourceResult {
+  if (!seen.streamed) {
+    return measurement(where, { at: seen.at, origin, verdict: verdictForReason(seen.reason), reason: seen.reason })
+  }
+  return measurement(where, {
+    at: seen.at,
+    origin,
+    verdict: 'stream',
+    ...(seen.ms === undefined ? {} : { ms: seen.ms }),
+    ...(seen.quality === undefined ? {} : { quality: seen.quality }),
+  })
+}
+
+/**
+ * A preview that played, as a success for its source: `streamedMs` after it
+ * opened (`PreviewReport.streamedMs`). Null for a time that is not one.
+ */
+export function previewResult(where: MeasuredAt, streamedMs: number, at: number): SourceResult | null {
+  if (typeof where.providerId !== 'string' || !Number.isFinite(streamedMs) || streamedMs < 0) return null
+  return playResult(where, 'preview', { at, streamed: true, ms: Math.round(streamedMs) })
 }
 
 /**

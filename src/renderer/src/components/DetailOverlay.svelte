@@ -619,6 +619,14 @@
     return () => previewAudio.release(audioId)
   })
 
+  /** The preview whose stream was filed as a test result: once per preview, however often it re-mounts. */
+  let recordedKey: string | null = null
+  function recordPreview(providerId: string, streamedMs: number): void {
+    if (stream === null || recordedKey === stream.key) return
+    recordedKey = stream.key
+    void window.wta.preview.record(stream.req, providerId, streamedMs).catch(() => {})
+  }
+
   let kept = false
   /** Write down where the preview got to, once, if it got past the grace period. */
   async function keepPreviewPlace(req: PlayRequest): Promise<void> {
@@ -678,7 +686,10 @@
         <StreamPreview
           plan={streamPlan}
           muted={heroMuted}
-          onstate={(state) => grace.feed(state)}
+          onstate={(state) => {
+            grace.feed(state)
+            if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
+          }}
           onfail={() => (streamOff = true)}
         />
       {:else if trailerAllowed && showHeroTrailer && detail?.trailerKey && !previewAudio.suspended}

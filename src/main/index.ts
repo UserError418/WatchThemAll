@@ -45,6 +45,7 @@ import {
 } from './outcomes'
 import {
   ownRows,
+  playResult,
   resumeFirst,
   scanAwareOrder,
   titleResults,
@@ -566,6 +567,12 @@ function openPlayer(
       // episode reuses this view, and an outcome recorded against the episode
       // it opened on would credit the wrong key.
       recordOutcome(player?.context ?? context, providerId, outcome),
+    // A test result from watching, filed under the episode playing, as above.
+    reportResult: (providerId, seen) => {
+      const playing = player?.context ?? context
+      const where = { device: testResults.device(), titleKey: titleKey(playing), episode: episodeOf(playing), providerId }
+      testResults.record([playResult(where, 'play', seen)])
+    },
     /**
      * Write the position down as it goes, not only when the player closes.
      *

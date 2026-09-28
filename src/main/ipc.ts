@@ -40,6 +40,7 @@ import { outcomesForTitle, titleKey } from './outcomes'
 import {
   castResult,
   everyRow,
+  previewResult,
   scanEpisode,
   titleResults,
   type AutomaticOrder,
@@ -344,6 +345,11 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number) =>
     deps.preview.keep(req, Number(seconds), Number(duration)),
   )
+  ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number) => {
+    const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
+    const result = previewResult(where, Number(streamedMs), Date.now())
+    if (result) deps.results.record([result])
+  })
 
   ipcMain.handle(CH.openExternal, async (_e, url: string): Promise<boolean> => {
     if (typeof url !== 'string' || !isOpenableExternally(url)) return false

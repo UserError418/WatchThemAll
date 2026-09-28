@@ -80,6 +80,10 @@ import type { Outcome } from '@main/outcomes'
 import {
   castResult,
   everyRow,
+  PLAY_MIN_FILM_SECONDS,
+  PLAY_TIMING_MAX_MS,
+  playResult,
+  previewResult,
   resumeFirst,
   scanAwareOrder,
   scanEpisode,
@@ -446,6 +450,8 @@ export async function createBridge(): Promise<WtaApi> {
     episodeOpenedAt: number
     candidateShownAt: number
     candidateReported: boolean
+    /** This source's play has been filed as a test result (`PlayMeasurement`). */
+    candidateMeasured: boolean
     /** When a reading was last written as the position; see `POSITION_WRITE_MS`. */
     writtenAt: number
     /**
@@ -636,6 +642,10 @@ export async function createBridge(): Promise<WtaApi> {
 
       progress.reading = reading
       progress.candidateReported = true
+      if (!progress.candidateMeasured && (reading.duration ?? 0) >= PLAY_MIN_FILM_SECONDS) {
+        progress.candidateMeasured = true
+        recordPlay(session)
+      }
 
       // Written as it goes, not only when the player is left: Android can kill
       // the app at any moment, and until 1.9.8 everything since the last
@@ -898,6 +908,21 @@ export async function createBridge(): Promise<WtaApi> {
    * where the user's own ordering put it. Guessing in either direction is what
    * produced the useless ranking.
    */
+  /**
+   * The source on screen has shown the film: a test result from watching,
+   * timed from when it was shown (`PlayMeasurement`). No quality, since the
+   * relay's readings do not carry the picture, and no failures: nothing the
+   * phone sees while playing is the source's servers declaring one.
+   */
+  const recordPlay = (current: { req: PlayRequest; candidates: PlayCandidate[]; index: number }): void => {
+    const providerId = current.candidates[current.index]?.provider.id
+    if (!progress || providerId === undefined) return
+    const at = Date.now()
+    const ms = at - progress.candidateShownAt
+    const where = { device: testResults.device(), titleKey: titleKey(current.req), episode: episodeOf(current.req), providerId }
+    testResults.record([playResult(where, 'play', { at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) })])
+  }
+
   const settleOutcome = (req: PlayRequest, providerId: string, switching: boolean): void => {
     if (!progress) return
     const shownMs = Date.now() - progress.candidateShownAt
@@ -1287,6 +1312,7 @@ export async function createBridge(): Promise<WtaApi> {
     if (progress) {
       progress.candidateShownAt = Date.now()
       progress.candidateReported = false
+      progress.candidateMeasured = false
     }
     emitPlayerState()
     return true
@@ -1816,6 +1842,7 @@ export async function createBridge(): Promise<WtaApi> {
         episodeOpenedAt: now,
         candidateShownAt: now,
         candidateReported: false,
+        candidateMeasured: false,
         writtenAt: now,
         namedEpisode: null,
       }
@@ -1972,6 +1999,11 @@ export async function createBridge(): Promise<WtaApi> {
           providerName: choice.provider.name,
           startSeconds: choice.startSeconds,
         }
+      },
+      record: async (req: PlayRequest, providerId: string, streamedMs: number): Promise<void> => {
+        const where = { device: testResults.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
+        const result = previewResult(where, streamedMs, Date.now())
+        if (result) testResults.record([result])
       },
       keep: async (req: PlayRequest, seconds: number, duration: number): Promise<void> => {
         if (!Number.isFinite(seconds) || seconds <= 0) return

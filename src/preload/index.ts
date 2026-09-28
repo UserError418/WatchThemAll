@@ -83,6 +83,8 @@ const api: WtaApi = {
     plan: (req: PlayRequest) => ipcRenderer.invoke(CH.previewPlan, req),
     keep: (req: PlayRequest, seconds: number, duration: number) =>
       ipcRenderer.invoke(CH.previewKeep, req, seconds, duration),
+    record: (req: PlayRequest, providerId: string, streamedMs: number) =>
+      ipcRenderer.invoke(CH.previewRecord, req, providerId, streamedMs),
   },
   data: {
     export: () => ipcRenderer.invoke(CH.dataExport),
