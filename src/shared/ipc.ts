@@ -1405,9 +1405,10 @@ export interface PreviewReport {
   playing: boolean
   muted: boolean
   /**
-   * How long the film took to play, in milliseconds from the preview
-   * opening; null until it has. Filed as a test result for the source
-   * (`preview.record`), the moment it is known.
+   * How long the stream took to arrive, in milliseconds from the preview
+   * opening; null until the film has also played, which is the proof a
+   * result needs. Filed as a test result for the source (`preview.record`)
+   * the moment it is known. See `PreviewFilm.streamedMs`.
    */
   streamedMs: number | null
 }

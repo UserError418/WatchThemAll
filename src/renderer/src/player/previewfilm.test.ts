@@ -62,23 +62,24 @@ describe('PreviewFilm', () => {
     expect(preview.step()).toMatchObject({ started: true, seconds: 755.4 })
   })
 
-  it('times the stream from when it first played, before the jump to the saved place', () => {
+  it('times the stream to the film arriving, once it is proven by playing, before the jump to the saved place', () => {
     const { link, report } = fakeLink()
     let now = 0
     const preview = new PreviewFilm(link, 754, true, () => now)
     expect(preview.step().streamedMs).toBeNull()
     now = 2_400
     report({ seconds: 2 })
-    preview.step()
-    now = 2_900
+    // The film is there, not yet proven by playing.
+    expect(preview.step().streamedMs).toBeNull()
+    now = 4_400
     report({ seconds: 3 })
-    // Playing, so streamed; still far from the saved place, so not shown.
-    expect(preview.step()).toMatchObject({ started: false, streamedMs: 2_900 })
+    // Playing, so streamed, timed to its arrival; still far from the saved place, so not shown.
+    expect(preview.step()).toMatchObject({ started: false, streamedMs: 2_400 })
     now = 6_000
     report({ seconds: 754.5 })
     preview.step()
     report({ seconds: 755.4 })
-    expect(preview.step()).toMatchObject({ started: true, streamedMs: 2_900 })
+    expect(preview.step()).toMatchObject({ started: true, streamedMs: 2_400 })
   })
 
   it('leaves a source that resumed further on by itself where it is', () => {

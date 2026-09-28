@@ -45,6 +45,8 @@ export type PreviewFilmState = PreviewReport
 
 export class PreviewFilm {
   private started = false
+  /** When the film first reported itself, with a film's length: its media had arrived. */
+  private filmSeenAt: number | null = null
   /** When the film was first seen playing, time moving, wherever it was. */
   private streamedAt: number | null = null
   private playingAt: number | null = null
@@ -91,6 +93,7 @@ export class PreviewFilm {
       return this.state()
     }
 
+    this.filmSeenAt ??= now
     if (film.muted !== this.muted) this.link.setMuted(this.muted)
 
     const behind = this.startSeconds - film.seconds
@@ -123,6 +126,18 @@ export class PreviewFilm {
     return this.state()
   }
 
+  /**
+   * How long the stream took, once it is proven by playing: to the moment
+   * the film first reported itself, which is when a test would have seen its
+   * media arrive. Timed to the playing itself, it would carry the two
+   * reports that proof takes (a heartbeat apart) and read slower than a test
+   * of the same source.
+   */
+  private streamedMs(): number | null {
+    if (this.streamedAt === null || this.filmSeenAt === null) return null
+    return Math.round(this.filmSeenAt - this.openedAt)
+  }
+
   /** Still on the way to the saved place: showing the film now would show the wrong minute. */
   private seeking(seconds: number): boolean {
     return (
@@ -141,7 +156,7 @@ export class PreviewFilm {
       duration: real ? film.duration : 0,
       playing: real && !film.paused,
       muted: this.muted,
-      streamedMs: this.streamedAt === null ? null : Math.round(this.streamedAt - this.openedAt),
+      streamedMs: this.streamedMs(),
     }
   }
 }
