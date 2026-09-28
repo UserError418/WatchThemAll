@@ -19,7 +19,7 @@
   import { airDate, countdown, episodeCode, hasAired, runtime, year } from '../lib/format'
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
-  import StreamPreview from './StreamPreview.svelte'
+  import StreamPreview, { STREAM_FADE_MS } from './StreamPreview.svelte'
   import { PreviewGrace } from '../lib/previewgrace'
   import type { PlayRequest, PreviewPlan } from '@shared/ipc'
   import { untrack } from 'svelte'
@@ -541,8 +541,16 @@
    * this device's tests found a source that starts within 8 s: main or the
    * phone's bridge decide (`previewplan.ts`), this only asks and shows. It
    * plays the episode Resume would start, from the saved place, and needs no
-   * watch history. The trailer waits for the answer, so it never flashes up
-   * only to be replaced, and comes back if the stream does not show.
+   * watch history.
+   *
+   * The trailer plays meanwhile (the owner, 2026-09-28: "the user would
+   * always see at least some video"), and the stream crossfades in over it
+   * once it is really playing. Until then the stream is silent, so the two
+   * never play out loud together. Should the stream give up, the trailer
+   * simply carries on. The backdrop is left only while neither has started,
+   * or when both failed. This used to hold the trailer back until the plan
+   * was known, so it never flashed up only to be replaced; the owner prefers
+   * the video.
    */
 
   /**
@@ -553,8 +561,11 @@
    * silently, until 2.0.3.
    */
   let stream = $state.raw<{ key: string; req: PlayRequest; plan: PreviewPlan | null | undefined } | null>(null)
-  /** Given up on (`StreamPreview`'s `onfail`), or stopped because the real player is starting. */
-  let streamOff = $state(false)
+  /**
+   * Why the preview is not playing: it gave up (`StreamPreview`'s `onfail`),
+   * or the real player took over (`leavePreview`). Null while it may play.
+   */
+  let streamStop = $state<'failed' | 'player' | null>(null)
   let grace = new PreviewGrace()
 
   /**
@@ -573,54 +584,97 @@
       : `${previewRequest.type}:${previewRequest.tmdbId}:${previewRequest.season}:${previewRequest.episode}:${previewRequest.providerId ?? ''}`,
   )
 
-  $effect(() => {
-    const key = previewKey
-    if (key === '') return
-    /*
-     * The same episode and source coming back after a blip (the detail
-     * briefly reloading, seen when the player closed) is not a new preview:
-     * one that was stopped for the player, or gave up, stays that way.
-     * Measured: without this a preview restarted behind the detail view a
-     * few seconds after the player closed.
-     */
-    if (untrack(() => stream?.key) === key) return
-    const req = untrack(() => previewRequest)!
+  /** Counts the questions asked, so only the latest answer is taken. */
+  let planAsked = 0
+
+  /**
+   * Ask how this episode previews, from the place it was left, and start
+   * over: the one way a preview begins. Main (or the bridge) reads the saved
+   * place at the moment of asking, so asking again after the player picks up
+   * where the player stopped.
+   */
+  function startPreview(key: string, req: PlayRequest): void {
+    const asked = ++planAsked
     stream = { key, req, plan: undefined }
-    streamOff = false
+    streamStop = null
     grace = new PreviewGrace()
     kept = false
-    let current = true
+    recordedKey = null
     void window.wta.preview
       .plan(req)
       .then((plan) => {
-        if (current) stream = { key, req, plan }
+        if (asked === planAsked) stream = { key, req, plan }
       })
       .catch(() => {})
-    return () => {
-      current = false
-      // Leaving this episode's preview for another: keep a place it earned.
-      void keepPreviewPlace(req)
-    }
+  }
+
+  $effect(() => {
+    const key = previewKey
+    if (key === '') return
+    // The same episode and source coming back after a blip (the detail
+    // briefly reloading) is the preview already asked for, not a new one.
+    // Coming back from the player is handled below.
+    if (untrack(() => stream?.key) === key) return
+    const req = untrack(() => previewRequest)!
+    startPreview(key, req)
+    // Leaving this episode's preview for another: keep a place it earned.
+    return () => void keepPreviewPlace(req)
   })
 
-  /** The plan has been asked for and answered, for what the hero shows now. */
-  const streamAnswered = $derived(stream !== null && stream.key === previewKey && stream.plan !== undefined)
+  /*
+   * Back from the player, the preview comes back too (the owner, 2026-09-28:
+   * it was the trailer, always), asked for again so it starts where the
+   * player stopped. Not one that gave up: that source did not play here, and
+   * the trailer is already showing instead.
+   */
+  let wasSuspended = false
+  $effect(() => {
+    const suspended = previewAudio.suspended
+    const returned = wasSuspended && !suspended
+    wasSuspended = suspended
+    if (!returned) return
+    untrack(() => {
+      if (stream === null || stream.key !== previewKey || previewRequest === null || streamStop === 'failed') return
+      startPreview(stream.key, previewRequest)
+    })
+  })
+
   const streamPlan = $derived(
-    stream !== null && stream.key === previewKey && !streamOff ? (stream.plan ?? null) : null,
+    stream !== null && stream.key === previewKey && streamStop === null ? (stream.plan ?? null) : null,
   )
   const showStream = $derived(streamPlan !== null && !previewAudio.suspended)
+  /** The mounted stream is really playing (`PreviewReport.started`); it is on screen from here. */
+  let streamStarted = $state(false)
+  $effect(() => {
+    // A stream mounted again (after the player, say) starts over, unseen.
+    if (!showStream) streamStarted = false
+  })
+  const streamOnScreen = $derived(showStream && streamStarted)
+  /**
+   * The trailer has been covered for longer than the stream's fade-in
+   * (`StreamPreview`'s 600 ms), so taking it away now shows nothing change.
+   */
+  let trailerCovered = $state(false)
+  $effect(() => {
+    if (!streamOnScreen) {
+      trailerCovered = false
+      return
+    }
+    const timer = setTimeout(() => (trailerCovered = true), STREAM_FADE_MS)
+    return () => clearTimeout(timer)
+  })
+  const showTrailer = $derived(
+    showHeroTrailer && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
+  )
   /**
    * The source Resume uses while a preview is on: the preview's own. Only
    * differs from the usual choice when that was not fast enough; the source
    * list shows it, so what Resume will play is never a surprise.
    */
   const previewSource = $derived(streamPlan?.providerId ?? null)
-  /** The trailer, once it is known the stream will not take its place. */
-  const trailerAllowed = $derived(streamOff || (streamAnswered && stream?.plan === null))
-
   /** The hero takes the sound for whatever plays in it; see `heroMuted`. */
   $effect(() => {
-    if (!(showStream || (showHeroTrailer && trailerAllowed))) return
+    if (!(showStream || showTrailer)) return
     previewAudio.claim(audioId)
     return () => previewAudio.release(audioId)
   })
@@ -647,7 +701,7 @@
   }
 
   async function leavePreview(): Promise<void> {
-    streamOff = true
+    streamStop = 'player'
     if (stream) await keepPreviewPlace(stream.req)
   }
 
@@ -688,21 +742,24 @@
     <header class="hero" style:background-image={backdrop ? `url("${backdrop}")` : undefined}>
       <button class="close" onclick={onclose} aria-label="Close">✕</button>
 
+      <!-- The trailer first: the stream is drawn over it, and fades in there. -->
+      {#if showTrailer && detail?.trailerKey}
+        <TrailerEmbed
+          videoKey={detail.trailerKey}
+          muted={heroMuted || streamOnScreen}
+          title="{subject.title} trailer"
+        />
+      {/if}
       {#if showStream && streamPlan}
         <StreamPreview
           plan={streamPlan}
-          muted={heroMuted}
+          muted={heroMuted || !streamStarted}
           onstate={(state) => {
+            if (state.started) streamStarted = true
             grace.feed(state)
             if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
           }}
-          onfail={() => (streamOff = true)}
-        />
-      {:else if trailerAllowed && showHeroTrailer && detail?.trailerKey && !previewAudio.suspended}
-        <TrailerEmbed
-          videoKey={detail.trailerKey}
-          muted={heroMuted}
-          title="{subject.title} trailer"
+          onfail={() => (streamStop = 'failed')}
         />
       {/if}
 

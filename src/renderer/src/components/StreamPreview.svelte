@@ -1,3 +1,8 @@
+<script module lang="ts">
+  /** How long the film takes to fade in over whatever the hero showed before it. */
+  export const STREAM_FADE_MS = 600
+</script>
+
 <script lang="ts">
   /**
    * The title itself, playing in the detail view's hero where the trailer
@@ -6,8 +11,8 @@
    * Nothing of a player is ever shown: no controls of ours, none of the
    * source's. The element stays invisible until the film is really playing
    * (`PreviewReport.started`), and a preview that does not get there within
-   * `GIVE_UP_MS` hands the hero back to the trailer (`onfail`). So the only
-   * things this can put on screen are the backdrop it replaces, and the film.
+   * `GIVE_UP_MS` gives up (`onfail`), leaving the trailer that plays beneath
+   * it meanwhile. So the only thing this can put on screen is the film.
    *
    * The platform decides the element (`PreviewPlan.surface`):
    * - `webview` (desktop): the player shell in preview mode, which drives the
@@ -158,7 +163,7 @@
   clipped, so a 16:9 film covers the hero without bars. No overscan: unlike
   YouTube there is no foreign chrome to crop, because none is ever drawn.
 -->
-<div class="stream-frame" class:shown={started} aria-hidden="true">
+<div class="stream-frame" class:shown={started} style:--fade="{STREAM_FADE_MS}ms" aria-hidden="true">
   {#if plan.surface === 'webview'}
     <webview bind:this={webview} class="stream" src={plan.src} tabindex="-1"></webview>
   {:else}
@@ -182,7 +187,7 @@
     container-type: size;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 600ms ease-out;
+    transition: opacity var(--fade) ease-out;
   }
 
   .stream-frame.shown {
