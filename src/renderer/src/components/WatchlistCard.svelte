@@ -73,7 +73,6 @@
 
   const poster = $derived(posterUrl(entry.posterPath, 'w342'))
   const isSeries = $derived(entry.type === 'tv')
-  const tracked = $derived(library.isTracked(entry.tmdbId))
 
   /**
    * The season this card is about.
@@ -198,12 +197,12 @@
     hide()
   }
 
-  /** Touch: the first tap reveals the controls, a second opens the title. */
+  /**
+   * Touch opens the title at once. The quick actions are for a pointer only
+   * (the owner, 2026-09-28: gone from the phone, where the first tap used to
+   * reveal them and only a second one opened anything).
+   */
   function onArtClick(): void {
-    if (!canHover() && !open) {
-      reveal()
-      return
-    }
     onselect(media)
   }
 
@@ -232,12 +231,6 @@
     // Season-scoped, per 1.5.7 — marking a nine-season show from a card must
     // not claim all nine.
     library.addToWatched(media, 'user', isSeries ? target.season : null)
-  }
-
-  function toggleTracked(event: MouseEvent): void {
-    stop(event)
-    if (tracked) library.removeTracker(entry.tmdbId)
-    else library.addTracker(media)
   }
 
   function remove(event: MouseEvent): void {
@@ -314,31 +307,33 @@
         </div>
       {/if}
 
+      <!--
+        Three actions, not four (the owner, 2026-09-28): the release bell
+        went, and tracking lives on the detail view's "Track releases". Icons
+        are SVG rather than ✓ ✕ 🔔: an emoji takes the platform's colour font,
+        and a glyph a build's fonts lack draws as a box.
+      -->
       <div class="buttons">
         <button class="go" onclick={resume}>
-          ▶ {isSeries ? episodeCode(target.season, target.episode) : 'Resume'}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" /></svg>
+          <span>{isSeries ? episodeCode(target.season, target.episode) : 'Resume'}</span>
         </button>
         <button
           class="icon"
           onclick={markSeasonWatched}
           title={isSeries ? `Mark season ${target.season} watched` : 'Mark watched'}
-          aria-label={isSeries ? `Mark season ${target.season} watched` : 'Mark watched'}>✓</button
+          aria-label={isSeries ? `Mark season ${target.season} watched` : 'Mark watched'}
         >
-        {#if isSeries}
-          <button
-            class="icon"
-            class:on={tracked}
-            onclick={toggleTracked}
-            title={tracked ? 'Stop tracking releases' : 'Track releases'}
-            aria-label={tracked ? 'Stop tracking releases' : 'Track releases'}>🔔</button
-          >
-        {/if}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" class="stroke" /></svg>
+        </button>
         <button
           class="icon danger"
           onclick={remove}
           title="Remove from watchlist"
-          aria-label="Remove {entry.title} from watchlist">✕</button
+          aria-label="Remove {entry.title} from watchlist"
         >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" class="stroke" /></svg>
+        </button>
       </div>
     </div>
   {/if}
@@ -533,51 +528,98 @@
     margin-top: -1.5px;
   }
 
+  /*
+    One row of 40px targets, up from 26px circles and a pill of small text
+    (the owner, 2026-09-28: "make the buttons bigger"). Frosted glass for the
+    two secondary actions, so they read over any poster without competing
+    with the one amber action.
+  */
   .buttons {
     display: flex;
-    gap: var(--space-1);
+    gap: var(--space-2);
     align-items: center;
   }
 
   .go {
     flex: 1;
     min-width: 0;
-    padding: var(--space-1) var(--space-2);
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 var(--space-3);
     border-radius: var(--radius-full);
     background: var(--accent);
     color: var(--text-on-accent);
-    font-size: var(--text-xs);
-    font-weight: 600;
-    white-space: nowrap;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      filter var(--dur-fast) var(--ease-out);
+  }
+
+  .go span {
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .go svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    fill: currentColor;
+  }
+
+  .go:hover {
+    filter: brightness(1.08);
+  }
+
+  .go:active,
+  .icon:active {
+    transform: scale(0.95);
   }
 
   .icon {
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 40px;
+    height: 40px;
     flex: none;
     border-radius: var(--radius-full);
-    background: rgb(255 255 255 / 16%);
-    backdrop-filter: blur(4px);
+    border: 1px solid rgb(255 255 255 / 18%);
+    background: rgb(20 20 26 / 55%);
+    backdrop-filter: blur(10px);
     color: #fff;
-    font-size: var(--text-xs);
-    transition: background var(--dur-fast) var(--ease-out);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+
+  .icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .icon svg .stroke {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .icon:hover {
-    background: rgb(255 255 255 / 32%);
-  }
-
-  .icon.on {
-    background: var(--accent);
-    color: var(--text-on-accent);
+    background: rgb(255 255 255 / 22%);
+    border-color: rgb(255 255 255 / 30%);
   }
 
   .icon.danger:hover {
     background: var(--danger);
+    border-color: transparent;
   }
 
   .caption {

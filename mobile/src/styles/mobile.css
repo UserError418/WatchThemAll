@@ -530,18 +530,10 @@ body {
 }
 
 /*
-  An opened card's buttons, on two lines. At 118px the desktop's single row
-  left the Resume button about twenty pixels beside the three round icons, so
-  it now takes the first line to itself and the icons sit under it.
+  No quick actions on a card here: a tap opens the title (WatchlistCard's
+  `onArtClick`, the owner 2026-09-28), so the rules that fitted them into
+  118px went with them.
 */
-:root .watchlist-card .buttons {
-  flex-wrap: wrap;
-  row-gap: var(--space-1);
-}
-
-:root .watchlist-card .buttons .go {
-  flex: 1 0 100%;
-}
 
 /* ── Episode rows ──────────────────────────────────────────────────────────
  *
