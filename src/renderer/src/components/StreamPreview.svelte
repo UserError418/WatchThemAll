@@ -182,6 +182,7 @@
       typeof v.seconds === 'number' &&
       typeof v.duration === 'number' &&
       typeof v.playing === 'boolean' &&
+      typeof v.waiting === 'boolean' &&
       typeof v.muted === 'boolean' &&
       (v.streamedMs === null || typeof v.streamedMs === 'number')
     )

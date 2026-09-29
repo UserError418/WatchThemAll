@@ -2304,7 +2304,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     contents.setAudioMuted(mutedFromOutside)
     sendConfig()
     if (carry.last()?.paused) player.setPaused(true)
-    console.log(`[carry] player shown at ${lastPosition ? Math.round(lastPosition.seconds) : '?'} s`)
+    console.log(`[carry] player shown at ${lastPosition ? Math.round(lastPosition.seconds) : '?'} s (${carry.reason})`)
     options.onReleased?.()
   }
 

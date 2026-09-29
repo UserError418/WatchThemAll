@@ -169,6 +169,7 @@ export class PreviewFilm {
       seconds: real ? film.seconds : 0,
       duration: real ? film.duration : 0,
       playing: real && !film.paused,
+      waiting: real && film.waiting,
       muted: this.muted,
       streamedMs: this.streamedMs(),
     }

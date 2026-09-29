@@ -695,6 +695,7 @@ function isCarryReport(value: unknown): value is CarryReport {
     typeof v.seconds === 'number' &&
     Number.isFinite(v.seconds) &&
     typeof v.paused === 'boolean' &&
-    typeof v.muted === 'boolean'
+    typeof v.muted === 'boolean' &&
+    typeof v.stalled === 'boolean'
   )
 }

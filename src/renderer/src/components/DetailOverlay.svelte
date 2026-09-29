@@ -639,8 +639,10 @@
   /*
    * Back from the player, the preview comes back too (the owner, 2026-09-28:
    * it was the trailer, always), asked for again so it starts where the
-   * player stopped. Not one that gave up: that source did not play here, and
-   * the trailer is already showing instead.
+   * player stopped. One that gave up before is tried again as well: the
+   * player has just played from a source, which is better evidence than a
+   * preview's one bad minute. Until 2.0.6 a single give-up kept the preview
+   * off for as long as the detail view stayed open.
    */
   let wasSuspended = false
   $effect(() => {
@@ -649,7 +651,7 @@
     wasSuspended = suspended
     if (!returned) return
     untrack(() => {
-      if (stream === null || stream.key !== previewKey || previewRequest === null || streamStop === 'failed') return
+      if (stream === null || stream.key !== previewKey || previewRequest === null) return
       startPreview(stream.key, previewRequest)
     })
   })
@@ -704,7 +706,12 @@
   function sendCarry(): void {
     if (!carrying.active || lastReport === null) return
     void window.wta.preview
-      .carry({ seconds: lastReport.seconds, paused: carryPaused, muted: carryMuted })
+      .carry({
+        seconds: lastReport.seconds,
+        paused: carryPaused,
+        muted: carryMuted,
+        stalled: !carryPaused && (lastReport.waiting || !lastReport.playing),
+      })
       .catch(() => {})
   }
 

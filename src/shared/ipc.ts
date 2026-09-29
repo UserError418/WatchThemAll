@@ -894,6 +894,8 @@ export interface CarryReport {
   seconds: number
   paused: boolean
   muted: boolean
+  /** Not moving without the viewer's say: buffering. Its second is not projected on. */
+  stalled: boolean
 }
 
 /** The keys a preview standing in for the player obeys. Any other key shows the player. */
@@ -1445,6 +1447,8 @@ export interface PreviewReport {
   seconds: number
   duration: number
   playing: boolean
+  /** Buffering: playing, but its time is not moving. */
+  waiting: boolean
   muted: boolean
   /**
    * How long the stream took to arrive, in milliseconds from the preview

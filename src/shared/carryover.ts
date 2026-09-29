@@ -29,6 +29,14 @@ export interface CarriedPlace {
   paused: boolean
   /** The preview's sound was off: the player starts muted too. */
   muted: boolean
+  /**
+   * The preview was buffering: its picture is standing still at `seconds`,
+   * so the player is aimed there, not at where it would be by now. On the
+   * phone the preview and the held player share one connection, and a
+   * preview frozen for seconds while the player loaded was measured
+   * (2026-09-29); aimed ahead, the player then came in past what was seen.
+   */
+  stalled?: boolean
   /** When this was heard, epoch ms. */
   at: number
 }
@@ -42,7 +50,14 @@ export interface HeldFilm {
   waiting?: boolean
 }
 
-export type CarryMove = { kind: 'wait' } | { kind: 'seek'; to: number } | { kind: 'release' }
+/**
+ * Why the player was shown, for the log: at the preview's place, playing when
+ * the preview never said where it was, after the seeks ran out, after the
+ * give-up time, or because something asked (a key, a tap, the preview gone).
+ */
+export type CarryReason = 'at-place' | 'playing' | 'seeks-spent' | 'timed-out' | 'asked'
+
+export type CarryMove = { kind: 'wait' } | { kind: 'seek'; to: number } | { kind: 'release'; why: CarryReason }
 
 /** Near enough to swap: a second repeated or skipped, as agreed. */
 export const CARRY_TOLERANCE_S = 1
@@ -58,9 +73,13 @@ export const CARRY_MAX_SEEKS = 3
 /**
  * The longest the preview stands in. A source slower than this would keep
  * the viewer on a picture without controls; the player is shown instead,
- * loading as it would have without the preview.
+ * loading as it would have without the preview. 30 s rather than the first
+ * 15 s: at 15 s a slow source was shown still loading, which is the preview
+ * "stopping before the new stream had loaded" (the owner, 2026-09-29). A
+ * tap shows the player at any time, and at 30 s its own reveal (25 s) has
+ * already said what the source needs.
  */
-export const CARRY_GIVE_UP_MS = 15_000
+export const CARRY_GIVE_UP_MS = 30_000
 /** Shorter than any episode and longer than any advert (`PLAY_MIN_FILM_SECONDS`). */
 const MIN_FILM_SECONDS = 120
 
@@ -70,7 +89,7 @@ export class CarryOver {
   private previous: { seconds: number; at: number } | null = null
   private seeks = 0
   private lastSeekAt = Number.NEGATIVE_INFINITY
-  private released = false
+  private released: CarryReason | null = null
 
   constructor(private readonly openedAt: number) {}
 
@@ -87,7 +106,8 @@ export class CarryOver {
   /** Where the preview is now, projected from its last report. */
   target(now: number): number | null {
     if (this.place === null) return null
-    return this.place.paused ? this.place.seconds : this.place.seconds + (now - this.place.at) / 1000
+    if (this.place.paused || this.place.stalled === true) return this.place.seconds
+    return this.place.seconds + (now - this.place.at) / 1000
   }
 
   /**
@@ -96,8 +116,8 @@ export class CarryOver {
    * so.
    */
   step(film: HeldFilm | null, now: number): CarryMove {
-    if (this.released) return { kind: 'release' }
-    if (now - this.openedAt >= CARRY_GIVE_UP_MS) return this.release()
+    if (this.released !== null) return { kind: 'release', why: this.released }
+    if (now - this.openedAt >= CARRY_GIVE_UP_MS) return this.release('timed-out')
     // Not the film yet (nothing, an advert, loaded and not playing, or buffering).
     if (film === null || film.duration < MIN_FILM_SECONDS || !film.playing || film.waiting) {
       this.previous = null
@@ -114,23 +134,29 @@ export class CarryOver {
     const moving = before !== null && film.seconds - before.seconds > 0.2 && film.seconds - before.seconds < (now - before.at) / 1000 + 2
     const target = this.target(now)
     // No word from the preview: the film playing is all there is to wait for.
-    if (target === null) return moving ? this.release() : { kind: 'wait' }
-    if (Math.abs(film.seconds - target) <= CARRY_TOLERANCE_S) return moving ? this.release() : { kind: 'wait' }
+    if (target === null) return moving ? this.release('playing') : { kind: 'wait' }
+    if (Math.abs(film.seconds - target) <= CARRY_TOLERANCE_S) return moving ? this.release('at-place') : { kind: 'wait' }
     if (now - this.lastSeekAt < CARRY_SEEK_SETTLE_MS) return { kind: 'wait' }
-    if (this.seeks >= CARRY_MAX_SEEKS) return this.release()
+    if (this.seeks >= CARRY_MAX_SEEKS) return this.release('seeks-spent')
     this.seeks += 1
     this.lastSeekAt = now
     this.previous = null
-    return { kind: 'seek', to: target + (this.place?.paused ? 0 : CARRY_SEEK_LEAD_S) }
+    const standing = this.place?.paused === true || this.place?.stalled === true
+    return { kind: 'seek', to: target + (standing ? 0 : CARRY_SEEK_LEAD_S) }
   }
 
   /** The player is being shown now, whatever the film says: a key, a tap, the preview gone. */
-  release(): CarryMove {
-    this.released = true
-    return { kind: 'release' }
+  release(why: CarryReason = 'asked'): CarryMove {
+    this.released ??= why
+    return { kind: 'release', why: this.released }
   }
 
   get done(): boolean {
+    return this.released !== null
+  }
+
+  /** Why it was released, once it has been. */
+  get reason(): CarryReason | null {
     return this.released
   }
 }

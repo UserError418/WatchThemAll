@@ -773,7 +773,7 @@ export async function createBridge(): Promise<WtaApi> {
     applyHidden()
     announceOverlayConfig()
     if (carry.last()?.paused) surface.setPaused(true)
-    console.log(`[carry] player shown at ${heldFilm ? Math.round(heldFilm.seconds) : '?'} s`)
+    console.log(`[carry] player shown at ${heldFilm ? Math.round(heldFilm.seconds) : '?'} s (${carry.reason})`)
     carryReleased.emit(null)
   }
 
