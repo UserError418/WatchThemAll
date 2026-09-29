@@ -207,7 +207,7 @@ export const EV = {
    * both corners without making the picture between them unclickable.
    */
   playerSkipOffer: 'evt:player-skip-offer',
-  chromeSkipTo: 'chrome:skip-to',
+  chromeSkip: 'chrome:skip',
   chromeSkipSize: 'chrome:skip-size',
 
   menuAction: 'evt:menu-action',
@@ -824,16 +824,16 @@ export interface PlayRequest {
 }
 
 /**
- * An intro the player is offering to skip past.
+ * A skip button the player is offering: past the intro or the recap, or on to
+ * the next episode over the credits. See `main/skipwatch.ts`.
  *
- * Only what the button needs. The reasoning about *whether* to offer — which
+ * Only what the button needs to say. The reasoning about *whether* to offer — which
  * database said so, and whether the answer survived being checked against the
  * stream — stays in the main process, because it is the part that can be
  * wrong and the part worth testing.
  */
 export interface SkipOffer {
-  /** Where pressing the button lands, in seconds. */
-  targetSeconds: number
+  kind: 'intro' | 'recap' | 'next'
 }
 
 /** The surface `window.wta` exposes in the renderer. */
@@ -1280,11 +1280,11 @@ export interface WtaChromeApi {
    * next offer cannot point back at it.
    */
   acceptSuggestion(): Promise<boolean>
-  /** Jump to this position, in seconds. Used only by the skip-intro button. */
-  skipTo(seconds: number): void
+  /** The skip button was pressed; the player does what the offer on screen says. */
+  skip(): void
   /** Size the skip view to exactly the button, so it covers nothing else. */
   setSkipSize(width: number, height: number): void
-  /** The standing offer to skip an intro, or null. */
+  /** The skip button on offer, or null. */
   onSkipOffer(cb: (offer: SkipOffer | null) => void): () => void
   onContext(cb: (context: PlayerContext) => void): () => void
   /** The standing offer to change source, or null when there is none. */

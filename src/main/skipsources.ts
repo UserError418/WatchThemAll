@@ -14,7 +14,7 @@
  * believing the services were down. Every request here names the app.
  */
 
-import type { SkipSegment } from './skiptimes'
+import type { SkipKind, SkipSegment } from './skiptimes'
 
 /** Identifies this app to services that refuse anonymous agents. */
 const USER_AGENT = 'WatchThemAll (+https://github.com/UserError418/WatchThemAll)'
@@ -110,20 +110,21 @@ export async function fromIntroDb(
   ref: EpisodeRef,
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
-): Promise<SkipSegment | null> {
-  if (!ref.imdbId || ref.season === null || ref.episode === null) return null
+): Promise<SkipSegment[]> {
+  if (!ref.imdbId || ref.season === null || ref.episode === null) return []
 
   const url =
     `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(ref.imdbId)}` +
     `&season=${ref.season}&episode=${ref.episode}`
   const body = getRecord(await getJson(url, fetchImpl, signal))
-  const intro = getRecord(body?.intro)
-  if (!intro) return null
-
-  const start = seconds(intro.start_sec) ?? fromMs(intro.start_ms)
-  const end = seconds(intro.end_sec) ?? fromMs(intro.end_ms)
-  if (start === null || end === null) return null
-  return { startSeconds: start, endSeconds: end, source: 'introdb' }
+  return KINDS.flatMap((kind) => {
+    const part = getRecord(body?.[kind])
+    if (!part) return []
+    const start = seconds(part.start_sec) ?? fromMs(part.start_ms)
+    const end = seconds(part.end_sec) ?? fromMs(part.end_ms)
+    if (start === null || end === null) return []
+    return [{ kind, startSeconds: start, endSeconds: end, source: 'introdb' as const }]
+  })
 }
 
 /**
@@ -138,8 +139,8 @@ export async function fromSkipDb(
   ref: EpisodeRef,
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
-): Promise<SkipSegment | null> {
-  if (!ref.imdbId) return null
+): Promise<SkipSegment[]> {
+  if (!ref.imdbId) return []
 
   const params = new URLSearchParams({ imdb_id: ref.imdbId })
   if (ref.season !== null) params.set('season', String(ref.season))
@@ -155,14 +156,15 @@ export async function fromSkipDb(
   const body = getRecord(
     await getJson(`https://api.skipdb.tv/api/segments?${params}`, fetchImpl, signal),
   )
-  const intro = getRecord(getRecord(body?.segments)?.intro)
-  if (!intro) return null
-  if (intro.match === 'out-of-range') return null
-
-  const start = fromMs(intro.start_ms)
-  const end = fromMs(intro.end_ms)
-  if (start === null || end === null) return null
-  return { startSeconds: start, endSeconds: end, source: 'skipdb' }
+  const segments = getRecord(body?.segments)
+  return KINDS.flatMap((kind) => {
+    const part = getRecord(segments?.[kind])
+    if (!part || part.match === 'out-of-range') return []
+    const start = fromMs(part.start_ms)
+    const end = fromMs(part.end_ms)
+    if (start === null || end === null) return []
+    return [{ kind, startSeconds: start, endSeconds: end, source: 'skipdb' as const }]
+  })
 }
 
 /**
@@ -174,7 +176,8 @@ export async function fromSkipDb(
  * measured at 18 of 18 mainstream series, every episode probed.
  *
  * `episodeLength` is how it disambiguates between releases. Zero is the
- * documented "I do not know" and returns the best available answer.
+ * documented "I do not know" and returns the best available answer. Its
+ * opening is `op`, its ending `ed`; the first of each is taken.
  */
 export async function fromAniSkip(
   malId: number,
@@ -182,26 +185,34 @@ export async function fromAniSkip(
   streamSeconds: number | null,
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
-): Promise<SkipSegment | null> {
+): Promise<SkipSegment[]> {
   const length = streamSeconds !== null && streamSeconds > 0 ? Math.round(streamSeconds) : 0
   const url =
     `https://api.aniskip.com/v2/skip-times/${malId}/${episode}` +
-    `?types=op&episodeLength=${length}`
+    `?types=op&types=ed&types=recap&episodeLength=${length}`
 
   const body = getRecord(await getJson(url, fetchImpl, signal))
-  if (!body || body.found !== true || !Array.isArray(body.results)) return null
+  if (!body || body.found !== true || !Array.isArray(body.results)) return []
 
+  const found: SkipSegment[] = []
   for (const raw of body.results) {
     const result = getRecord(raw)
-    if (result?.skipType !== 'op') continue
-    const interval = getRecord(result.interval)
+    const kind = ANISKIP_KINDS[String(result?.skipType)]
+    if (kind === undefined || found.some((s) => s.kind === kind)) continue
+    const interval = getRecord(result?.interval)
     const start = seconds(interval?.startTime)
     const end = seconds(interval?.endTime)
     if (start === null || end === null) continue
-    return { startSeconds: start, endSeconds: end, source: 'aniskip' }
+    found.push({ kind, startSeconds: start, endSeconds: end, source: 'aniskip' })
   }
-  return null
+  return found
 }
+
+/** What IntroDB and SkipDB call each kind: the same words as ours. */
+const KINDS: readonly SkipKind[] = ['intro', 'recap', 'outro']
+
+/** AniSkip's names for them. */
+const ANISKIP_KINDS: Record<string, SkipKind | undefined> = { op: 'intro', ed: 'outro', recap: 'recap' }
 
 /** Narrow an unknown JSON value to something with readable properties. */
 function getRecord(value: unknown): Record<string, unknown> | null {

@@ -39,11 +39,10 @@
  * the same sizing on the desktop; here it only carries the bar's state to
  * our own controls (`overlayhub.ts`).
  *
- * `onPointerTop` reports a pointer that does not exist. `onSkipOffer` reports
- * an intro timestamp nothing can vet, because vetting one means reading
- * `duration` off a `<video>` in a cross-origin document. Both return a
+ * `onPointerTop` reports a pointer that does not exist, and returns a
  * subscription that never fires rather than throwing, so the component's
- * effects tear down cleanly.
+ * effects tear down cleanly. (`onSkipOffer` was the same until 2.0.6: vetting
+ * a timestamp needs the film's length, which the film relay now reports.)
  */
 
 import type { Season } from '@shared/types'
@@ -67,6 +66,9 @@ export interface ChromeDeps {
   /** The same, read once — see `onContext` for why a subscription is not enough. */
   currentState(): PlayerState | null
   subscribeSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
+  /** The skip button on offer, and its press (`main/skipwatch.ts`). */
+  subscribeSkip(cb: (offer: SkipOffer | null) => void): () => void
+  skip(): void
   /** The chrome's Back: shrink the player into the corner (see `setMini`). */
   minimize(): void
   subscribeMini(cb: (mini: boolean) => void): () => void
@@ -123,8 +125,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     /** Nor one to accept. */
     acceptSuggestion: async () => false,
 
-    /** No skip offer can be raised, so nothing can ask to be skipped to. */
-    skipTo: () => {},
+    skip: () => deps.skip(),
 
     /**
      * `PlayerState` and `PlayerContext` carry the same nine fields, for the
@@ -151,7 +152,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
 
     onSuggestion: (cb) => deps.subscribeSuggestion(cb),
     onMini: (cb) => deps.subscribeMini(cb),
-    onSkipOffer: never<SkipOffer | null>,
+    onSkipOffer: (cb) => deps.subscribeSkip(cb),
     onPointerTop: never<boolean>,
     // v2's own controls (the phone port): taps on the picture, our controls
     // having the film, the Sources and Episodes buttons, and the bar's state

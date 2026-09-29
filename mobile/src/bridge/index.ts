@@ -44,6 +44,7 @@ import type {
   PreviewPlan,
   PlayerState,
   PlayerSuggestion,
+  SkipOffer,
   RowRequest,
   ForYouPlanRequest,
   ForYouRowRequest,
@@ -100,7 +101,9 @@ import { castabilities } from '@shared/castability'
 import { choosePreview } from '@main/previewplan'
 import { checkAll, sweepDueIn } from '@main/releases'
 import { UpNextController, isEpisodeEnd, type UpNextPlace } from '@main/upnext'
-import { nextAiredEpisode } from '@shared/episodesteps'
+import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
+import { findSegments } from '@main/skiplookup'
+import { SkipWatch } from '@main/skipwatch'
 import { isOpenableExternally } from '@main/externalurl'
 import { readingEpisode, type PlayerReading } from '@main/playermessage'
 import {
@@ -224,6 +227,7 @@ export async function createBridge(): Promise<WtaApi> {
   const carryAction = new Signal<CarryAction>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
+  const playerSkip = new Signal<SkipOffer | null>()
   /** The phone's side of main's `playerMini` / `playerPaused`; see `setMini`. */
   const playerMini = new Signal<boolean>()
   const playerPaused = new Signal<boolean>()
@@ -585,12 +589,55 @@ export async function createBridge(): Promise<WtaApi> {
       },
     },
   }
+  /**
+   * The skip buttons, as on the desktop (`main/skipwatch.ts`), fed the relay's
+   * readings. No AniSkip here: its id mapping is a 5.8 MB file the phone does
+   * not keep. Not while the television has the film.
+   */
+  const skipWatch = new SkipWatch({
+    enabled: () => store.read().settings.skipIntro && !onTv,
+    expectedMinutes: () => session?.req.runtimeMinutes ?? null,
+    lookup: async (streamSeconds) => {
+      if (!session) return []
+      const req = session.req
+      return findSegments(
+        { tmdbId: req.tmdbId, imdbId: req.imdbId, season: req.season ?? null, episode: req.episode ?? null, streamSeconds },
+        { animeId: async () => null },
+      )
+    },
+    hasNext: async () => {
+      const place = session ? placeOf(session.req) : null
+      return place !== null && (await nextEpisodeAfter(place)) !== null
+    },
+    announce: (offer) => playerSkip.emit(offer),
+    log: (line) => console.log(line),
+  })
+
+  const pressSkip = (): void => {
+    const action = skipWatch.press()
+    // The relay moves only the element of this length (`relaySeek`).
+    const duration = progress?.reading?.duration
+    if (action?.kind === 'seek' && duration) surface.seek(action.seconds, duration)
+    if (action?.kind !== 'next' || !session) return
+    const place = placeOf(session.req)
+    if (place === null) return
+    void nextEpisodeAfter(place).then((next) => {
+      // Only if the viewer is still where the button was pressed.
+      const now = session ? placeOf(session.req) : null
+      if (next === null || now?.season !== place.season || now.episode !== place.episode) return
+      console.log(`[skip] next episode: S${next.season}E${next.episode}`)
+      void playerGoTo(next.season, next.episode)
+    })
+  }
+
   const overlayHost = createOverlayHost(playerApi)
 
   const surface = createPlayerSurface({
     onFrameLoad: (frame) => {
       surfaceFrame = frame
       overlayHost.load(frame)
+      // Another episode or another source's cut: nothing known carries over.
+      skipWatch.reset()
     },
     onMediaState: (playing) => {
       videoPlaying = playing
@@ -687,6 +734,8 @@ export async function createBridge(): Promise<WtaApi> {
         progress.writtenAt = Date.now()
         rememberPosition(session.req)
       }
+
+      skipWatch.reading(onTv ? null : reading)
 
       // The end of the episode here, as opposed to on the television, which
       // `castBridge.onProgress` watches.
@@ -1265,6 +1314,7 @@ export async function createBridge(): Promise<WtaApi> {
       settleProgress(session.req)
     }
     upNext.reset()
+    skipWatch.reset()
     setMini(false)
     videoPlaying = false
     phoneFullscreen.setActive(false)
@@ -1353,13 +1403,16 @@ export async function createBridge(): Promise<WtaApi> {
     console.warn('[upnext] the next episode could not be sent to the television')
   }
 
+  /** The aired episode after `place`, or null; for auto-next and the credits' "Next episode". */
+  const nextEpisodeAfter = async (place: UpNextPlace): Promise<NextEpisode | null> => {
+    const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
+    if (detail === null) return null
+    return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
+  }
+
   const upNext = new UpNextController({
     enabled: () => store.read().settings.autoNext,
-    resolve: async (place) => {
-      const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
-      if (detail === null) return null
-      return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
-    },
+    resolve: nextEpisodeAfter,
     advance: (next, toTv) => {
       void playerGoTo(next.season, next.episode).then(() => {
         if (toTv) void beamNextToTv()
@@ -1794,6 +1847,8 @@ export async function createBridge(): Promise<WtaApi> {
     subscribeState: (cb) => playerState.subscribe(cb),
     currentState: () => currentPlayerState,
     subscribeSuggestion: (cb) => playerSuggestion.subscribe(cb),
+    subscribeSkip: (cb) => playerSkip.subscribe(cb),
+    skip: pressSkip,
     minimize: () => setMini(true),
     subscribeMini: (cb) => playerMini.subscribe(cb),
     goTo: playerGoTo,

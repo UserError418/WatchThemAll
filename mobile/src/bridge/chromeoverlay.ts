@@ -21,11 +21,18 @@
  * destroyed when it ends, so "no context" is not a state it can be in. Keeping
  * that true here is cheaper than teaching the component a state it has never
  * needed, so this mounts and unmounts with the player too.
+ *
+ * ## The skip button
+ *
+ * The desktop's `SkipOffer`, in a host of its own, with the same lifecycle:
+ * over our own controls (350), under the bar and its panels (400), so an open
+ * episode list covers it.
  */
 
 import { mount, unmount } from 'svelte'
 
 import PlayerChrome from '@/PlayerChrome.svelte'
+import SkipOffer from '@/SkipOffer.svelte'
 
 /**
  * Above the surface's 299 and above `PlayerFrame`'s own 300.
@@ -35,6 +42,9 @@ import PlayerChrome from '@/PlayerChrome.svelte'
  * it is the thing behind the picture instead.
  */
 const CHROME_Z = 400
+
+/** Over our own controls, under the bar; see the header. */
+const SKIP_Z = 360
 
 export interface ChromeOverlay {
   /** Put the chrome on screen. Safe to call when it already is. */
@@ -53,6 +63,8 @@ export interface ChromeOverlay {
 export function createChromeOverlay(): ChromeOverlay {
   let host: HTMLDivElement | null = null
   let component: Record<string, unknown> | null = null
+  let skipHost: HTMLDivElement | null = null
+  let skip: Record<string, unknown> | null = null
   let hidden = false
 
   return {
@@ -78,6 +90,14 @@ export function createChromeOverlay(): ChromeOverlay {
 
       document.body.appendChild(host)
       component = mount(PlayerChrome, { target: host, props: { touch: true } })
+
+      // Takes no taps but the button's own, like the chrome's host.
+      skipHost = document.createElement('div')
+      skipHost.id = 'wta-player-skip'
+      skipHost.style.cssText = `position: fixed; inset: 0; z-index: ${SKIP_Z}; pointer-events: none`
+      if (hidden) skipHost.style.display = 'none'
+      document.body.appendChild(skipHost)
+      skip = mount(SkipOffer, { target: skipHost, props: { touch: true } })
     },
 
     close() {
@@ -85,12 +105,17 @@ export function createChromeOverlay(): ChromeOverlay {
       component = null
       host?.remove()
       host = null
+      if (skip) void unmount(skip)
+      skip = null
+      skipHost?.remove()
+      skipHost = null
       hidden = false
     },
 
     setHidden(next) {
       hidden = next
       if (host) host.style.display = next ? 'none' : ''
+      if (skipHost) skipHost.style.display = next ? 'none' : ''
     },
   }
 }

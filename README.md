@@ -52,8 +52,9 @@ ones you point it at and keeps the part that matters: your library.
   the sources known to play on it.
 - **Automatic failover.** If a source stalls, the app moves to the next one on
   a five-second countdown you can cancel.
-- **Skip intros** using community-maintained timestamps, shown only when the
-  stream's length matches the episode it claims to be. One switch disables the
+- **Skip intros and recaps, and jump to the next episode over the credits**,
+  using community-maintained timestamps, shown only when the stream's length
+  matches the episode it claims to be. One switch disables the
   feature and its lookups; see the [privacy policy](docs/PRIVACY.md).
 - **One library on every device.** Sync pairs devices with a short code, the
   way you sign a TV into YouTube. There is no account and no server of ours

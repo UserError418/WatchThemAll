@@ -230,7 +230,7 @@
             checked={library.settings.skipIntro}
             onchange={(e) => library.setSkipIntro(e.currentTarget.checked)}
           />
-          Offer to skip intros
+          Skip buttons for intros, recaps and credits
         </label>
 
         <!--
@@ -243,7 +243,8 @@
         -->
         <p class="privacy">
           Asks two community databases — <strong>IntroDB</strong> and <strong>SkipDB</strong>, plus
-          <strong>AniSkip</strong> for anime — where the intro is, by IMDB id and episode number. They
+          <strong>AniSkip</strong> for anime on the desktop — where the intro, the recap and the credits
+          are, by IMDB id and episode number. They
           learn what you are watching. Nothing else is sent, and turning this off stops it at once.
         </p>
       </section>

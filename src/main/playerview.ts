@@ -47,9 +47,9 @@ import { blockAdverts, installFilmRelay, keepProviderInPlace, refusePopupsAndDow
 import { clickPlayInFrames, pressPlay as pressPlayIn } from './pressplay'
 import { beginStallWatch, frozenSeconds, observeStall, type StallWatch } from './playbackstall'
 import { checkRuntime } from './runtimecheck'
-import { findIntro } from './skiplookup'
+import { findSegments } from './skiplookup'
 import { skipButtonBounds } from './skipplacement'
-import { isWithinOffer, skipTarget, type SkipSegment } from './skiptimes'
+import { SkipWatch } from './skipwatch'
 import type { PlayCandidate } from './providers'
 import { shouldSeek } from './resume'
 import { createPointerZoneWatcher } from './pointerzone'
@@ -316,21 +316,21 @@ export interface InlinePlayerOptions {
   /** The held player is showing now. */
   onReleased?: () => void
   /**
-   * Everything the skip-intro offer needs, or absent to leave it off.
+   * Everything the skip buttons need (`skipwatch.ts`), or absent to leave them off.
    *
-   * Grouped rather than spread across four optional fields because they are
-   * useless apart: without the data directory there is nowhere to cache the
-   * anime id mapping, and without `enabled` the lookup must not happen at all
-   * — it is the switch that decides whether two third parties are told what
-   * is playing.
+   * Grouped because they are useless apart, and because `enabled` is the
+   * switch that decides whether two third parties are told what is playing:
+   * without it the lookup must not happen at all.
    */
   skipIntro?: {
-    /** Read on every episode, so turning it off takes effect immediately. */
+    /** Read on every reading, so turning it off takes effect immediately. */
     enabled: () => boolean
-    /** Where the anime id mapping is cached. Never inside the app bundle. */
-    dataDir: string
-    /** Gate on the 5.8 MB anime id download; see `IntroDeps.isAnimated`. */
-    isAnimated: (tmdbId: number) => Promise<boolean>
+    /** The series' MyAnimeList id, or null; see `SegmentDeps.animeId`. */
+    animeId: (tmdbId: number, season: number | null) => Promise<number | null>
+    /** Whether an aired episode follows this one, for "Next episode" over the credits. */
+    hasNext: (context: PlayRequest) => Promise<boolean>
+    /** "Next episode" was pressed. */
+    playNext: () => void
   }
   /**
    * The chrome's Back button was pressed.
@@ -1041,87 +1041,40 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     suggest(`${name} stopped part-way through`, 'stall')
   }
 
-  /* ── Skip intro ───────────────────────────────────────────────────────── */
+  /* ── Skip buttons ─────────────────────────────────────────────────────── */
 
   /**
-   * Where this episode's intro is, once somebody has told us.
-   *
-   * `undefined` means the databases have not been asked yet, `null` means
-   * they were and there is nothing worth offering. The distinction is what
-   * stops the lookup running again every four seconds for an episode that
-   * simply has no data — which would be most of them.
+   * Skip intro, skip recap, and next episode over the credits: `skipwatch.ts`
+   * decides, from every reading; this view only draws the button and seeks.
    */
-  let intro: SkipSegment | null | undefined = undefined
-  let skipOffered = false
-
-  /** Tell the skip view what to draw, and only when it changes. */
-  const announceSkip = (offer: { targetSeconds: number } | null): void => {
-    if (skipView === null || skipView.webContents.isDestroyed()) return
-    if (offer === null && !skipOffered) return
-    skipOffered = offer !== null
-    skipView.webContents.send(EV.playerSkipOffer, offer)
-  }
-
-  /**
-   * Ask the intro databases, once, as soon as the stream has a duration.
-   *
-   * Deferred to the first real reading rather than done when the episode
-   * loads, for two reasons that point the same way. The duration is what
-   * every check in `vetSegment` rests on — without it there is nothing to
-   * check an answer against — and waiting means a title somebody opened and
-   * abandoned is never looked up at all, so two third parties learn about
-   * strictly less than the user actually watched.
-   */
-  const lookUpIntro = (streamSeconds: number): void => {
-    const config = options.skipIntro
-    if (intro !== undefined || config === undefined || !config.enabled()) return
-
-    // Claimed before the await, so a second poll four seconds later does not
-    // start the same lookup again while the first is still in flight.
-    intro = null
-
-    const context = player.context
-    void findIntro(
-      {
-        tmdbId: context.tmdbId,
-        imdbId: context.imdbId,
-        season: context.season,
-        episode: context.episode,
-        streamSeconds,
-        expectedMinutes: context.runtimeMinutes,
-      },
-      {
-        dataDir: config.dataDir,
-        isAnimated: config.isAnimated,
-        onJudged: (segment, ok, reason) =>
-          console.log(`[skip] ${segment.source} ${ok ? 'accepted' : 'rejected'}: ${reason}`),
-      },
-    )
-      .then((found) => {
-        // The user may have stepped to another episode while this was in the
-        // air; `beginLoad` resets the state, and an answer about the previous
-        // episode must not land on top of it.
-        if (!alive() || intro !== null || player.context !== context) return
-        intro = found
-      })
-      .catch(() => {
-        // Already null. No data and a failed lookup are the same to the user.
-      })
-  }
+  const skipWatch = new SkipWatch({
+    enabled: () => options.skipIntro?.enabled() ?? false,
+    expectedMinutes: () => player.context.runtimeMinutes,
+    lookup: (streamSeconds) => {
+      const context = player.context
+      return findSegments(
+        {
+          tmdbId: context.tmdbId,
+          imdbId: context.imdbId,
+          season: context.season,
+          episode: context.episode,
+          streamSeconds,
+        },
+        { animeId: options.skipIntro?.animeId ?? (async () => null) },
+      )
+    },
+    hasNext: async () => options.skipIntro?.hasNext(player.context) ?? false,
+    announce: (offer) => {
+      if (skipView === null || skipView.webContents.isDestroyed()) return
+      skipView.webContents.send(EV.playerSkipOffer, offer)
+    },
+    log: (line) => console.log(line),
+  })
 
   /** Raise or withdraw the button for one position reading. */
   const offerSkip = (found: VideoPosition | null): void => {
     if (!alive()) return
-    if (found === null) {
-      announceSkip(null)
-      return
-    }
-    lookUpIntro(found.duration)
-    if (!intro) {
-      announceSkip(null)
-      return
-    }
-    announceSkip(isWithinOffer(intro, found.seconds) ? { targetSeconds: skipTarget(intro) } : null)
+    skipWatch.reading(found && { seconds: found.seconds, duration: found.duration })
   }
 
   const positionTimer = setInterval(() => {
@@ -1472,12 +1425,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
     stallWatch = beginStallWatch(Date.now())
     /**
-     * A different episode has a different intro, and often none at all. Reset
-     * to "not asked" rather than to null, or stepping to the next episode
-     * would inherit the previous one's answer — or its absence.
+     * A different episode has a different intro, and often none at all, and a
+     * different source has a different cut: nothing known carries over.
      */
-    intro = undefined
-    announceSkip(null)
+    skipWatch.reset()
 
     /**
      * Forget the last reading, because it was about the page being left.
@@ -1954,7 +1905,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     }
     if (skipView !== null) {
       ipcMain.removeListener(EV.chromeSkipSize, onSkipSize)
-      ipcMain.removeListener(EV.chromeSkipTo, onSkipTo)
+      ipcMain.removeListener(EV.chromeSkip, onSkip)
       if (!win.isDestroyed()) win.contentView.removeChildView(skipView)
       // Detaching is not closing; see the note on the overlay above.
       skipView.webContents.close()
@@ -2029,7 +1980,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   /**
-   * The skip-intro button, in a view of its own.
+   * The skip button (intro, recap, next episode), in a view of its own.
    *
    * Added after the chrome so it paints above it, though in practice they
    * never overlap — one is pinned to the top edge and the other to the
@@ -2132,12 +2083,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     skipSize = size
     placeSkip()
   }
-  const onSkipTo = (event: Electron.IpcMainEvent, seconds: number): void => {
+  const onSkip = (event: Electron.IpcMainEvent): void => {
     if (skipView === null || event.sender !== skipView.webContents) return
-    if (!Number.isFinite(seconds) || seconds < 0) return
-    seekTo(seconds)
-    // Withdrawn immediately rather than at the next poll four seconds later.
-    announceSkip(null)
+    // Withdrawn at once by `press`, rather than at the next poll.
+    const action = skipWatch.press()
+    if (action?.kind === 'seek') seekTo(action.seconds)
+    else if (action?.kind === 'next') options.skipIntro?.playNext()
   }
   /**
    * Fullscreen is the window's. The player already fills the window, so a
@@ -2264,7 +2215,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
   if (skipView !== null) {
     ipcMain.on(EV.chromeSkipSize, onSkipSize)
-    ipcMain.on(EV.chromeSkipTo, onSkipTo)
+    ipcMain.on(EV.chromeSkip, onSkip)
   }
   /* ── Held: the preview stands in until the film is where it is ────────── */
 

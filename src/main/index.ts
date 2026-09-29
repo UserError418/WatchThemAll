@@ -17,7 +17,8 @@ import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
 import { UpNextController, isEpisodeEnd, type UpNextPlace } from './upnext'
-import { nextAiredEpisode } from '@shared/episodesteps'
+import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
+import { malIdFor } from './animeids'
 import { buildMenu, createTray, type MenuDeps } from './menu'
 import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
@@ -441,13 +442,16 @@ async function beamNextToTv(): Promise<void> {
   console.warn('[upnext] the next episode could not be sent to the television')
 }
 
+/** The aired episode after `place`, or null; for auto-next and the credits' "Next episode". */
+async function nextEpisodeAfter(place: UpNextPlace): Promise<NextEpisode | null> {
+  const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
+  if (detail === null) return null
+  return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
+}
+
 const upNext = new UpNextController({
   enabled: () => store.read().settings.autoNext,
-  resolve: async (place) => {
-    const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
-    if (detail === null) return null
-    return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
-  },
+  resolve: nextEpisodeAfter,
   advance: (next, toTv) => {
     console.log(`[upnext] playing S${next.season}E${next.episode}${toTv ? ' on the television' : ''}`)
     navigatePlayer(next.season, next.episode)
@@ -533,17 +537,33 @@ function openPlayer(
       }
     },
     /*
-      The skip-intro offer, and the switch that governs it.
+      The skip buttons, and the switch that governs them.
 
-      `enabled` is read per episode rather than captured, so turning the
+      `enabled` is read per reading rather than captured, so turning the
       setting off stops the lookups immediately instead of at the next
       restart — it decides whether two third parties are told what is
-      playing, and a privacy switch that lags is not one.
+      playing, and a privacy switch that lags is not one. Not while the
+      television has the film: the button would skip the picture here.
     */
     skipIntro: {
-      enabled: () => store.read().settings.skipIntro,
-      dataDir: store.dir,
-      isAnimated: isAnimatedTitle,
+      enabled: () => store.read().settings.skipIntro && !onTv,
+      animeId: async (tmdbId, season) =>
+        (await isAnimatedTitle(tmdbId)) ? malIdFor(store.dir, tmdbId, season) : null,
+      hasNext: async (context) => {
+        const place = placeOf(context)
+        return place !== null && (await nextEpisodeAfter(place)) !== null
+      },
+      playNext: () => {
+        const place = player ? placeOf(player.context) : null
+        if (place === null) return
+        void nextEpisodeAfter(place).then((next) => {
+          // Only if the viewer is still where the button was pressed.
+          const now = player ? placeOf(player.context) : null
+          if (next === null || now?.season !== place.season || now.episode !== place.episode) return
+          console.log(`[skip] next episode: S${next.season}E${next.episode}`)
+          navigatePlayer(next.season, next.episode)
+        })
+      },
     },
     /*
       Never let the countdown switch away from a source "Test all sources"

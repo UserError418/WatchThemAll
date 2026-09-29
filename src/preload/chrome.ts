@@ -192,14 +192,13 @@ const api: WtaChromeApi = {
   },
 
   /**
-   * Jump past the intro.
+   * The skip button was pressed.
    *
-   * Seconds rather than "skip the intro", so the main process stays the only
-   * thing that knows where the intro is — this view is told where to land and
-   * nothing about how that was decided.
+   * No seconds and no episode: the main process is the only thing that knows
+   * what the button stands for, and acts on the offer it is showing.
    */
-  skipTo: (seconds: number): void => {
-    ipcRenderer.send(EV.chromeSkipTo, seconds)
+  skip: (): void => {
+    ipcRenderer.send(EV.chromeSkip)
   },
 
   /**

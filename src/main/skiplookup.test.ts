@@ -1,25 +1,18 @@
 /**
  * The sequencing, which is where the cost and the privacy live.
  *
- * Two things this has to pin down and nothing else can: that a wrong answer
- * from the preferred database falls through to the other one rather than
- * losing the slot, and that a live-action show never triggers the 5.8 MB
- * anime id download.
+ * What this pins down: both general databases are asked at once and every
+ * kind they answer is kept, unvetted (vetting is `skipwatch.ts`'s, on every
+ * reading); AniSkip is asked only for anime, and only for what the others
+ * lacked.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
-import { resetForTests } from './animeids'
-import { findIntro } from './skiplookup'
+import { findSegments } from './skiplookup'
 import { forgetAnswersForTests, type FetchLike } from './skipsources'
 
-afterEach(() => {
-  resetForTests()
-  forgetAnswersForTests()
-})
+afterEach(() => forgetAnswersForTests())
 
 const REQUEST = {
   tmdbId: 1399,
@@ -27,7 +20,6 @@ const REQUEST = {
   season: 1,
   episode: 1,
   streamSeconds: 3720,
-  expectedMinutes: 62,
 }
 
 /** A `fetch` that routes by host, and records every URL it was asked for. */
@@ -43,150 +35,99 @@ function router(routes: Record<string, unknown>): { fetchImpl: FetchLike; urls: 
   return { fetchImpl, urls }
 }
 
-const introdbBody = (start: number, end: number) => ({
-  intro: { start_sec: start, end_sec: end },
-})
-const skipdbBody = (start: number, end: number) => ({
-  segments: { intro: { start_ms: start * 1000, end_ms: end * 1000, match: 'agnostic' } },
-})
+const notAnime = async (): Promise<number | null> => null
 
-const neverAnime = async (): Promise<boolean> => false
-
-describe('choosing an answer', () => {
-  it('prefers IntroDB when both answer', async () => {
+describe('findSegments', () => {
+  it('keeps every kind from both databases, unvetted', async () => {
     const { fetchImpl } = router({
-      'introdb.app': introdbBody(437, 531),
-      'skipdb.tv': skipdbBody(448, 461),
+      'introdb.app': { intro: { start_sec: 437, end_sec: 531 }, recap: null, outro: { start_sec: 3431, end_sec: 3500 } },
+      // An answer no stream could fit: kept here, refused later by the vetting.
+      'skipdb.tv': { segments: { intro: { start_ms: 9_000_000, end_ms: 9_100_000, match: 'agnostic' } } },
     })
-    const found = await findIntro(REQUEST, {
-      dataDir: '/nonexistent',
-      isAnimated: neverAnime,
-      fetchImpl,
-    })
-    expect(found).toEqual({ startSeconds: 437, endSeconds: 531, source: 'introdb' })
-  })
-
-  it('falls through to SkipDB when IntroDB has nothing', async () => {
-    // Breaking Bad, genuinely: IntroDB has only an outro, SkipDB has the intro.
-    const { fetchImpl } = router({
-      'introdb.app': { intro: null, outro: { start_sec: 3431, end_sec: 3500 } },
-      'skipdb.tv': skipdbBody(229.5, 246.5),
-    })
-    const found = await findIntro(REQUEST, {
-      dataDir: '/nonexistent',
-      isAnimated: neverAnime,
-      fetchImpl,
-    })
-    expect(found?.source).toBe('skipdb')
-  })
-
-  it('falls through when IntroDB answers but the answer does not survive vetting', async () => {
-    // The case a post-hoc picker gets wrong: the preferred source answers,
-    // its answer is nonsense for this stream, and the usable one is dropped
-    // on the floor because the slot was already taken.
-    const { fetchImpl } = router({
-      'introdb.app': introdbBody(9000, 9100),
-      'skipdb.tv': skipdbBody(229.5, 246.5),
-    })
-    const found = await findIntro(REQUEST, {
-      dataDir: '/nonexistent',
-      isAnimated: neverAnime,
-      fetchImpl,
-    })
-    expect(found?.source).toBe('skipdb')
-  })
-
-  it('reports what it rejected and why', async () => {
-    const judged: string[] = []
-    const { fetchImpl } = router({
-      'introdb.app': introdbBody(9000, 9100),
-      'skipdb.tv': skipdbBody(229.5, 246.5),
-    })
-    await findIntro(REQUEST, {
-      dataDir: '/nonexistent',
-      isAnimated: neverAnime,
-      fetchImpl,
-      onJudged: (segment, ok, reason) => judged.push(`${segment.source} ${ok} ${reason}`),
-    })
-    expect(judged.some((j) => j.startsWith('introdb false'))).toBe(true)
-    expect(judged.some((j) => j.startsWith('skipdb true'))).toBe(true)
+    const found = await findSegments(REQUEST, { animeId: notAnime, fetchImpl })
+    expect(found).toEqual([
+      { kind: 'intro', startSeconds: 437, endSeconds: 531, source: 'introdb' },
+      { kind: 'outro', startSeconds: 3431, endSeconds: 3500, source: 'introdb' },
+      { kind: 'intro', startSeconds: 9000, endSeconds: 9100, source: 'skipdb' },
+    ])
   })
 
   it('asks both databases at once rather than in turn', async () => {
     const { fetchImpl, urls } = router({
-      'introdb.app': introdbBody(437, 531),
-      'skipdb.tv': skipdbBody(448, 461),
+      'introdb.app': { intro: { start_sec: 437, end_sec: 531 }, outro: { start_sec: 3431, end_sec: 3500 } },
+      'skipdb.tv': { segments: { intro: null } },
     })
-    await findIntro(REQUEST, { dataDir: '/nonexistent', isAnimated: neverAnime, fetchImpl })
-    // IntroDB answered and was accepted, and SkipDB was still asked: the
-    // button has to arrive during the intro, so the round trips overlap.
+    await findSegments(REQUEST, { animeId: notAnime, fetchImpl })
+    expect(urls.filter((u) => u.includes('introdb.app'))).toHaveLength(1)
     expect(urls.filter((u) => u.includes('skipdb.tv'))).toHaveLength(1)
   })
 
   it('has nothing when neither database does', async () => {
-    const { fetchImpl } = router({
-      'introdb.app': { intro: null },
-      'skipdb.tv': { segments: { intro: null } },
-    })
-    expect(
-      await findIntro(REQUEST, { dataDir: '/nonexistent', isAnimated: neverAnime, fetchImpl }),
-    ).toBeNull()
+    const { fetchImpl } = router({ 'introdb.app': { intro: null }, 'skipdb.tv': { segments: { intro: null } } })
+    expect(await findSegments(REQUEST, { animeId: notAnime, fetchImpl })).toEqual([])
   })
 })
 
 describe('the anime branch', () => {
-  const empty = {
-    'introdb.app': { intro: null },
-    'skipdb.tv': { segments: { intro: null } },
-  }
+  const empty = { 'introdb.app': { intro: null }, 'skipdb.tv': { segments: { intro: null } } }
 
-  it('is never reached for a live-action show, so the mapping is never downloaded', async () => {
+  it('is not asked for a series that is not anime', async () => {
     const { fetchImpl, urls } = router(empty)
-    await findIntro(REQUEST, { dataDir: '/nonexistent', isAnimated: neverAnime, fetchImpl })
-    expect(urls.some((u) => u.includes('anime-lists'))).toBe(false)
+    await findSegments(REQUEST, { animeId: notAnime, fetchImpl })
     expect(urls.some((u) => u.includes('aniskip'))).toBe(false)
   })
 
-  it('resolves a MAL id and asks AniSkip for anime the others miss', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'wta-skip-'))
+  it('asks AniSkip for anime the others miss, opening and ending', async () => {
     const { fetchImpl, urls } = router({
       ...empty,
-      'anime-lists': [{ mal_id: 16498, themoviedb_id: { tv: 1429 }, season: { tmdb: 1 } }],
       'aniskip.com': {
         found: true,
-        results: [{ interval: { startTime: 128.406, endTime: 218.406 }, skipType: 'op' }],
+        results: [
+          { interval: { startTime: 1338, endTime: 1428 }, skipType: 'ed' },
+          { interval: { startTime: 128.406, endTime: 218.406 }, skipType: 'op' },
+        ],
       },
     })
-
-    const found = await findIntro(
-      { ...REQUEST, tmdbId: 1429, streamSeconds: 1440, expectedMinutes: 24 },
-      { dataDir: dir, isAnimated: async () => true, fetchImpl },
+    const found = await findSegments(
+      { ...REQUEST, tmdbId: 1429, streamSeconds: 1440 },
+      { animeId: async () => 16498, fetchImpl },
     )
-    expect(found).toEqual({ startSeconds: 128.406, endSeconds: 218.406, source: 'aniskip' })
+    expect(found).toEqual([
+      { kind: 'outro', startSeconds: 1338, endSeconds: 1428, source: 'aniskip' },
+      { kind: 'intro', startSeconds: 128.406, endSeconds: 218.406, source: 'aniskip' },
+    ])
     expect(urls.some((u) => u.includes('/skip-times/16498/1'))).toBe(true)
   })
 
-  it('stops at the mapping when the series is animated but not in it', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'wta-skip-'))
-    const { fetchImpl, urls } = router({
-      ...empty,
-      'anime-lists': [{ mal_id: 16498, themoviedb_id: { tv: 1429 }, season: { tmdb: 1 } }],
+  it('does not ask for the anime id when the others had both the intro and the credits', async () => {
+    const { fetchImpl } = router({
+      'introdb.app': { intro: { start_sec: 90, end_sec: 180 }, outro: { start_sec: 1300, end_sec: 1400 } },
+      'skipdb.tv': { segments: { intro: null } },
     })
-    // A Western cartoon: passes the animated gate, absent from the mapping.
-    const found = await findIntro(
-      { ...REQUEST, tmdbId: 1433 },
-      { dataDir: dir, isAnimated: async () => true, fetchImpl },
-    )
-    expect(found).toBeNull()
-    expect(urls.some((u) => u.includes('aniskip'))).toBe(false)
+    let asked = false
+    await findSegments(REQUEST, {
+      animeId: async () => {
+        asked = true
+        return 16498
+      },
+      fetchImpl,
+    })
+    expect(asked).toBe(false)
   })
 
   it('does not run for a film, which has no episode to ask about', async () => {
-    const { fetchImpl, urls } = router(empty)
-    await findIntro(
+    const { fetchImpl } = router(empty)
+    let asked = false
+    await findSegments(
       { ...REQUEST, season: null, episode: null },
-      { dataDir: '/nonexistent', isAnimated: async () => true, fetchImpl },
+      {
+        animeId: async () => {
+          asked = true
+          return 1
+        },
+        fetchImpl,
+      },
     )
-    expect(urls.some((u) => u.includes('anime-lists'))).toBe(false)
+    expect(asked).toBe(false)
   })
 })

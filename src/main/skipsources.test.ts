@@ -4,8 +4,8 @@
  * Every payload here was copied from a real response — the shapes are
  * awkward in ways nobody would invent, and the awkward parts are exactly what
  * breaks: IntroDB reports seconds *and* milliseconds, SkipDB nests under
- * `segments` and hides its refusals in a `match` field, AniSkip returns an
- * array that can contain an ending when an opening was asked for.
+ * `segments` and hides its refusals in a `match` field, AniSkip returns its
+ * opening and ending in whatever order it likes.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -41,11 +41,9 @@ describe('IntroDB', () => {
 
   it('reads the real Game of Thrones answer', async () => {
     const { fetchImpl } = stub(gameOfThrones)
-    expect(await fromIntroDb(REF, fetchImpl)).toEqual({
-      startSeconds: 437,
-      endSeconds: 531,
-      source: 'introdb',
-    })
+    expect(await fromIntroDb(REF, fetchImpl)).toEqual([
+      { kind: 'intro', startSeconds: 437, endSeconds: 531, source: 'introdb' },
+    ])
   })
 
   it('names the app, because the default agent is rejected with a 403', async () => {
@@ -56,26 +54,29 @@ describe('IntroDB', () => {
     expect(headers[0]?.get('user-agent')).toContain('WatchThemAll')
   })
 
-  it('returns nothing for an episode it has only an outro for', async () => {
+  it('reads the credits, and the recap, as well as the intro', async () => {
     // Breaking Bad S01E01 on IntroDB, genuinely: outro but no intro.
     const { fetchImpl } = stub({
       intro: null,
-      recap: null,
+      recap: { start_ms: 0, end_ms: 42000 },
       outro: { start_sec: 3431, end_sec: 3500 },
     })
-    expect(await fromIntroDb(REF, fetchImpl)).toBeNull()
+    expect(await fromIntroDb(REF, fetchImpl)).toEqual([
+      { kind: 'recap', startSeconds: 0, endSeconds: 42, source: 'introdb' },
+      { kind: 'outro', startSeconds: 3431, endSeconds: 3500, source: 'introdb' },
+    ])
   })
 
   it('does not ask at all without an IMDB id or an episode', async () => {
     const { fetchImpl, urls } = stub(gameOfThrones)
-    expect(await fromIntroDb({ ...REF, imdbId: null }, fetchImpl)).toBeNull()
-    expect(await fromIntroDb({ ...REF, episode: null }, fetchImpl)).toBeNull()
+    expect(await fromIntroDb({ ...REF, imdbId: null }, fetchImpl)).toEqual([])
+    expect(await fromIntroDb({ ...REF, episode: null }, fetchImpl)).toEqual([])
     expect(urls).toHaveLength(0)
   })
 
   it('treats an error status as no data rather than throwing', async () => {
     const { fetchImpl } = stub({ error: 'nope' }, false)
-    expect(await fromIntroDb(REF, fetchImpl)).toBeNull()
+    expect(await fromIntroDb(REF, fetchImpl)).toEqual([])
   })
 
   it('survives a service that answers with something that is not JSON', async () => {
@@ -87,7 +88,7 @@ describe('IntroDB', () => {
           throw new Error('not json')
         },
       }) as unknown as Response) as FetchLike
-    expect(await fromIntroDb(REF, fetchImpl)).toBeNull()
+    expect(await fromIntroDb(REF, fetchImpl)).toEqual([])
   })
 })
 
@@ -102,11 +103,10 @@ describe('SkipDB', () => {
 
   it('reads the real Breaking Bad answer, in milliseconds', async () => {
     const { fetchImpl } = stub(breakingBad)
-    expect(await fromSkipDb(REF, fetchImpl)).toEqual({
-      startSeconds: 229.5,
-      endSeconds: 246.5,
-      source: 'skipdb',
-    })
+    expect(await fromSkipDb(REF, fetchImpl)).toEqual([
+      { kind: 'intro', startSeconds: 229.5, endSeconds: 246.5, source: 'skipdb' },
+      { kind: 'outro', startSeconds: 3434, endSeconds: 3500, source: 'skipdb' },
+    ])
   })
 
   it('sends the stream duration so it can shift for a different cut', async () => {
@@ -127,9 +127,14 @@ describe('SkipDB', () => {
     // `out-of-range` rather than guessing, and taking the numbers anyway
     // would throw away the one safeguard it offers.
     const { fetchImpl } = stub({
-      segments: { intro: { start_ms: 229500, end_ms: 246500, match: 'out-of-range' } },
+      segments: {
+        intro: { start_ms: 229500, end_ms: 246500, match: 'out-of-range' },
+        outro: { start_ms: 3434000, end_ms: 3500000, match: 'agnostic' },
+      },
     })
-    expect(await fromSkipDb(REF, fetchImpl)).toBeNull()
+    expect(await fromSkipDb(REF, fetchImpl)).toEqual([
+      { kind: 'outro', startSeconds: 3434, endSeconds: 3500, source: 'skipdb' },
+    ])
   })
 
   it('asks about a film with no season or episode', async () => {
@@ -152,13 +157,13 @@ describe('AniSkip', () => {
     ],
   }
 
-  it('takes the opening even when an ending comes first in the array', async () => {
-    const { fetchImpl } = stub(attackOnTitan)
-    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toEqual({
-      startSeconds: 128.406,
-      endSeconds: 218.406,
-      source: 'aniskip',
-    })
+  it('takes the opening and the ending, in whatever order they come', async () => {
+    const { fetchImpl, urls } = stub(attackOnTitan)
+    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toEqual([
+      { kind: 'outro', startSeconds: 1342.795, endSeconds: 1430.616, source: 'aniskip' },
+      { kind: 'intro', startSeconds: 128.406, endSeconds: 218.406, source: 'aniskip' },
+    ])
+    expect(urls[0]).toContain('types=op&types=ed&types=recap')
   })
 
   it('passes the episode length it was given', async () => {
@@ -176,15 +181,21 @@ describe('AniSkip', () => {
 
   it('honours found:false rather than reading an empty array', async () => {
     const { fetchImpl } = stub({ found: false, results: [], statusCode: 404 })
-    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toBeNull()
+    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toEqual([])
   })
 
-  it('returns nothing when the only result is an ending', async () => {
+  it('takes the first of each kind only', async () => {
     const { fetchImpl } = stub({
       found: true,
-      results: [{ interval: { startTime: 1342, endTime: 1430 }, skipType: 'ed' }],
+      results: [
+        { interval: { startTime: 100, endTime: 190 }, skipType: 'op' },
+        { interval: { startTime: 110, endTime: 200 }, skipType: 'op' },
+        { interval: { startTime: 1, endTime: 2 }, skipType: 'mixed-op' },
+      ],
     })
-    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toBeNull()
+    expect(await fromAniSkip(16498, 1, 1440, fetchImpl)).toEqual([
+      { kind: 'intro', startSeconds: 100, endSeconds: 190, source: 'aniskip' },
+    ])
   })
 })
 
@@ -193,9 +204,9 @@ describe('all three', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ETIMEDOUT')
     }) as unknown as FetchLike
-    expect(await fromIntroDb(REF, fetchImpl)).toBeNull()
-    expect(await fromSkipDb(REF, fetchImpl)).toBeNull()
-    expect(await fromAniSkip(1, 1, null, fetchImpl)).toBeNull()
+    expect(await fromIntroDb(REF, fetchImpl)).toEqual([])
+    expect(await fromSkipDb(REF, fetchImpl)).toEqual([])
+    expect(await fromAniSkip(1, 1, null, fetchImpl)).toEqual([])
   })
 })
 

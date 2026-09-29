@@ -1,5 +1,6 @@
 /**
- * Where the intro is, and whether we believe it enough to offer a skip.
+ * Where the intro, the recap and the credits are, and whether we believe it
+ * enough to offer a button.
  *
  * Three public databases carry crowdsourced intro timestamps, and none of them
  * is TMDB or IMDB — neither of those has the data in any form. Measured over
@@ -30,6 +31,14 @@
  * offered, and the vetting is deliberately strict: the cost of refusing a good
  * segment is one unpressed button, and the cost of accepting a bad one is
  * throwing somebody into the middle of their episode.
+ *
+ * ## The credits (2.0.6)
+ *
+ * The same databases mark the outro too, and the owner asked for a "next
+ * episode" button over it (2026-09-29). Its checks are looser at the far end
+ * and stricter at the near one: a longer cut moves where the credits end, and
+ * that costs nothing when the button leaves the episode anyway; a credits
+ * segment in the first half of the stream is not the credits.
  */
 
 import { checkRuntime } from './runtimecheck'
@@ -37,7 +46,11 @@ import { checkRuntime } from './runtimecheck'
 /** Which database an answer came from. Carried so a bad one can be traced. */
 export type SkipSource = 'introdb' | 'skipdb' | 'aniskip'
 
+/** What a segment covers. `recap` is "previously on". */
+export type SkipKind = 'intro' | 'recap' | 'outro'
+
 export interface SkipSegment {
+  kind: SkipKind
   startSeconds: number
   endSeconds: number
   source: SkipSource
@@ -48,6 +61,21 @@ const MIN_INTRO_SECONDS = 5
 
 /** Nothing longer is either. Both general databases cap their own at five minutes. */
 const MAX_INTRO_SECONDS = 300
+
+/** Credits run longer than intros; a series' rarely past ten minutes, even with a preview. */
+const MAX_OUTRO_SECONDS = 600
+
+/** Credits in the first half of the stream are not the credits. */
+const EARLIEST_OUTRO_FRACTION = 0.5
+
+/**
+ * How far past the stream's end the credits may be marked to end.
+ *
+ * The reference cut is often a little longer at the end (a studio card, a
+ * preview), and since the button leaves the episode, where the credits end
+ * does not matter; a minute past is a different cut and says the start is off too.
+ */
+const OUTRO_OVERRUN_SECONDS = 60
 
 /**
  * An intro in the last third of an episode is a mislabelled outro.
@@ -85,6 +113,12 @@ export function chooseSegment(candidates: readonly (SkipSegment | null)[]): Skip
   return null
 }
 
+/** `chooseSegment` for each kind on its own: the recap may come from one database and the intro from another. */
+export function chooseEachKind(vetted: readonly SkipSegment[]): SkipSegment[] {
+  const kinds: SkipKind[] = ['recap', 'intro', 'outro']
+  return kinds.flatMap((kind) => chooseSegment(vetted.filter((s) => s.kind === kind)) ?? [])
+}
+
 export interface VetInput {
   segment: SkipSegment
   /** Duration the embed's own `<video>` reports, in seconds. */
@@ -109,7 +143,7 @@ export interface Vet {
  * an intro in the back half of the runtime is a mislabelled outro.
  */
 export function vetSegment(input: VetInput): Vet {
-  const { segment, streamSeconds, expectedMinutes } = input
+  const { segment, streamSeconds } = input
   const { startSeconds, endSeconds } = segment
 
   if (!Number.isFinite(streamSeconds) || streamSeconds <= 0) {
@@ -122,12 +156,15 @@ export function vetSegment(input: VetInput): Vet {
     return { ok: false, reason: `${startSeconds}s-${endSeconds}s is not an interval` }
   }
 
+  if (segment.kind === 'outro') return vetOutro(input)
+
+  const what = segment.kind === 'recap' ? 'a recap' : 'an intro'
   const length = endSeconds - startSeconds
   if (length < MIN_INTRO_SECONDS) {
-    return { ok: false, reason: `${length.toFixed(0)}s is too short to be an intro` }
+    return { ok: false, reason: `${length.toFixed(0)}s is too short to be ${what}` }
   }
   if (length > MAX_INTRO_SECONDS) {
-    return { ok: false, reason: `${length.toFixed(0)}s is too long to be an intro` }
+    return { ok: false, reason: `${length.toFixed(0)}s is too long to be ${what}` }
   }
 
   if (endSeconds > streamSeconds) {
@@ -139,24 +176,50 @@ export function vetSegment(input: VetInput): Vet {
     }
   }
   if (startSeconds > streamSeconds * LATEST_START_FRACTION) {
-    return { ok: false, reason: `an intro would not start ${startSeconds.toFixed(0)}s into this` }
+    return { ok: false, reason: `${what} would not start ${startSeconds.toFixed(0)}s into this` }
   }
 
-  /**
-   * The strongest check, and the reason it is worth carrying TMDB's runtime
-   * into the player at all: if the stream is not the right *length*, it is not
-   * the right programme, and no timestamp about the right programme applies.
-   * `unknown` is a pass — most of the time TMDB does have a runtime, and when
-   * it does not, the checks above are what is left.
-   */
+  return vetRuntime(input)
+}
+
+/** The credits: see the header. The shared checks of `vetSegment` have run. */
+function vetOutro(input: VetInput): Vet {
+  const { segment, streamSeconds } = input
+  const { startSeconds, endSeconds } = segment
+  const length = endSeconds - startSeconds
+  if (length < MIN_INTRO_SECONDS) {
+    return { ok: false, reason: `${length.toFixed(0)}s is too short to be the credits` }
+  }
+  if (length > MAX_OUTRO_SECONDS) {
+    return { ok: false, reason: `${length.toFixed(0)}s is too long to be the credits` }
+  }
+  if (startSeconds < streamSeconds * EARLIEST_OUTRO_FRACTION) {
+    return { ok: false, reason: `the credits would not start ${startSeconds.toFixed(0)}s into this` }
+  }
+  if (startSeconds >= streamSeconds || endSeconds > streamSeconds + OUTRO_OVERRUN_SECONDS) {
+    return {
+      ok: false,
+      reason: `credits at ${startSeconds.toFixed(0)}s-${endSeconds.toFixed(0)}s do not fit a ${streamSeconds.toFixed(0)}s stream`,
+    }
+  }
+  return vetRuntime(input)
+}
+
+/**
+ * The strongest check, and the reason it is worth carrying TMDB's runtime
+ * into the player at all: if the stream is not the right *length*, it is not
+ * the right programme, and no timestamp about the right programme applies.
+ * `unknown` is a pass — most of the time TMDB does have a runtime, and when
+ * it does not, the other checks are what is left.
+ */
+function vetRuntime({ segment, streamSeconds, expectedMinutes }: VetInput): Vet {
   const runtime = checkRuntime({ deliveredSeconds: streamSeconds, expectedMinutes })
   if (runtime.verdict === 'implausible') {
     return { ok: false, reason: `the stream is the wrong length: ${runtime.reason}` }
   }
-
   return {
     ok: true,
-    reason: `${startSeconds.toFixed(0)}s-${endSeconds.toFixed(0)}s via ${segment.source}`,
+    reason: `${segment.kind} ${segment.startSeconds.toFixed(0)}s-${segment.endSeconds.toFixed(0)}s via ${segment.source}`,
   }
 }
 

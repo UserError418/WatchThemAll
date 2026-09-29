@@ -63,9 +63,9 @@ certified by TMDB. See
 [TMDB's privacy policy](https://www.themoviedb.org/privacy-policy).
 
 **Intro-skip databases (optional, on by default).** When you start an episode,
-the application asks up to three community databases where that episode's intro
-is: [IntroDB](https://introdb.app/), [SkipDB](https://skipdb.tv/), and
-[AniSkip](https://api.aniskip.com/) for anime. Each request contains the IMDB id
+the application asks up to three community databases where that episode's intro,
+recap and credits are: [IntroDB](https://introdb.app/), [SkipDB](https://skipdb.tv/),
+and [AniSkip](https://api.aniskip.com/) for anime (desktop only). Each request contains the IMDB id
 of the series and the season and episode number, so those services learn what you
 are watching. Nothing else is sent: no account, no device identifier, no viewing
 history, and no record of whether you pressed the button.

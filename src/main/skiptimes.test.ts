@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   SOURCE_ORDER,
+  chooseEachKind,
   chooseSegment,
   isWithinOffer,
   skipTarget,
@@ -24,7 +25,8 @@ const seg = (
   startSeconds: number,
   endSeconds: number,
   source: SkipSegment['source'] = 'introdb',
-): SkipSegment => ({ startSeconds, endSeconds, source })
+  kind: SkipSegment['kind'] = 'intro',
+): SkipSegment => ({ kind, startSeconds, endSeconds, source })
 
 describe('choosing between databases', () => {
   it('prefers IntroDB, which measured both broader and more accurate', () => {
@@ -137,6 +139,45 @@ describe('segments that are not', () => {
       expectedMinutes: 24,
     })
     expect(vet.ok).toBe(false)
+  })
+})
+
+describe('the credits', () => {
+  // Breaking Bad S01E02 on IntroDB, genuinely: 2843-2901s, in a 2880 s stream.
+  const outro = (start: number, end: number) => seg(start, end, 'introdb', 'outro')
+  const vet = (segment: SkipSegment, streamSeconds = 2880) =>
+    vetSegment({ segment, streamSeconds, expectedMinutes: 48 })
+
+  it('accepts credits marked to end a little past this cut', () => {
+    expect(vet(outro(2843, 2901)).ok).toBe(true)
+  })
+
+  it('refuses credits a minute past the end: a different cut, so the start is off too', () => {
+    expect(vet(outro(2900, 2950)).ok).toBe(false)
+  })
+
+  it('refuses credits in the first half of the stream', () => {
+    expect(vet(outro(1200, 1300)).ok).toBe(false)
+  })
+
+  it('refuses a five-second "credits" and a quarter hour of them', () => {
+    expect(vet(outro(2870, 2873)).ok).toBe(false)
+    expect(vet(outro(1900, 2800)).ok).toBe(false)
+  })
+
+  it('keeps an intro rule for a recap: early, and five seconds to five minutes', () => {
+    expect(vet(seg(0, 42, 'introdb', 'recap')).ok).toBe(true)
+    expect(vet(seg(2500, 2560, 'introdb', 'recap')).ok).toBe(false)
+  })
+
+  it('chooses each kind on its own, by the databases\' order', () => {
+    const chosen = chooseEachKind([
+      seg(440, 530, 'skipdb'),
+      outro(2843, 2901),
+      seg(437, 531, 'introdb'),
+      seg(0, 42, 'skipdb', 'recap'),
+    ])
+    expect(chosen.map((c) => `${c.kind}:${c.source}`)).toEqual(['recap:skipdb', 'intro:introdb', 'outro:introdb'])
   })
 })
 
