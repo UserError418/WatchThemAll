@@ -365,4 +365,33 @@ describe('three sources under test at every moment', () => {
     for (const probe of probes) probe.release()
     await done
   })
+  /** The automatic test beside the viewer's film (`autotest.ts`). */
+  it('runs gently when asked: fewer at once, and nothing started while held', async () => {
+    vi.useFakeTimers()
+    try {
+      const probes = Object.fromEntries(['a', 'b'].map((id) => [id, held('stream')]))
+      for (const [id, probe] of Object.entries(probes)) script.set(id, [probe.answer])
+      let holding = true
+      const service = createScanService({
+        providers: () => ['a', 'b'].map(provider),
+        frameUrl: (url) => url,
+        onProgress: () => {},
+      })
+      const done = service.run('movie:tt1', subject, { concurrency: 1, hold: () => holding })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(started()).toEqual({})
+
+      holding = false
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(started()).toEqual({ a: 1 })
+
+      probes.a!.release()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(started()).toEqual({ a: 1, b: 1 })
+      probes.b!.release()
+      expect((await done).verdicts).toEqual({ a: 'stream', b: 'stream' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

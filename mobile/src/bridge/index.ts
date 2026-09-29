@@ -84,6 +84,7 @@ import {
   everyRow,
   PLAY_MIN_FILM_SECONDS,
   PLAY_TIMING_MAX_MS,
+  kindTested,
   playResult,
   previewResult,
   resumeFirst,
@@ -127,7 +128,9 @@ import { createOverlayHub } from './overlayhub'
 import { createOverlayHost } from './overlayhost'
 import { createPhoneFullscreen } from './phonefullscreen'
 import { loadSubtitles, subtitleLanguages, type SubtitleQuery } from '@main/subtitlesearch'
-import { createScanRunner } from './scan'
+import { createScanRunner, type RunOptions as ScanRunOptions } from './scan'
+import { AUTO_TEST_TICK_MS, AutoTester } from '@main/autotest'
+import { resumeAnchor } from '@shared/watchlistrank'
 import { preferencesCatalogStore } from './catalogstore'
 import { createChromeApi } from './chrome'
 import { createChromeOverlay } from './chromeoverlay'
@@ -481,6 +484,8 @@ export async function createBridge(): Promise<WtaApi> {
 
   /** Putting the video back where it was left, for the source now loading; see `resumeUrl`. */
   let resumeSeek: ResumeSeek | null = null
+  /** The film is playing and its time is not moving; see `onReading`. The gentle automatic test waits it out. */
+  let filmBuffering = false
 
   /*
     v2's own controls on the phone (2026-09-27): `PlayerOverlay` over the
@@ -641,6 +646,7 @@ export async function createBridge(): Promise<WtaApi> {
     },
     onMediaState: (playing) => {
       videoPlaying = playing
+      if (playing) autoTester.tick()
       playerPaused.emit(!playing)
       // A pause is a stop the other device may pick up from: write the exact
       // place and send it now, rather than at the next five-second sample.
@@ -720,6 +726,8 @@ export async function createBridge(): Promise<WtaApi> {
       }
       if (names !== null) progress.namedEpisode = names
 
+      // Playing, and the time did not move since the last report: buffering.
+      filmBuffering = reading.playing === true && progress.reading !== null && reading.seconds <= progress.reading.seconds
       progress.reading = reading
       progress.candidateReported = true
       if (!progress.candidateMeasured && (reading.duration ?? 0) >= PLAY_MIN_FILM_SECONDS) {
@@ -1813,6 +1821,7 @@ export async function createBridge(): Promise<WtaApi> {
   const runProviderScan = async (
     media: TitleRef,
     episode?: { season: number; episode: number } | null,
+    runOptions?: ScanRunOptions,
   ): Promise<ProviderScan> => {
     const key = titleKey(media)
     // Only what has come out, as on the desktop — see `aired.ts` and the
@@ -1822,17 +1831,53 @@ export async function createBridge(): Promise<WtaApi> {
     // Never probe a TV title without an episode — see `scanEpisode`.
     const wanted = scanEpisode(media.type, episode)
     const target = wanted && facts ? airedEpisode(wanted, facts.lastEpisode) : wanted
-    const result = await scanRunner.run(key, {
-      imdbId: media.imdbId,
-      tmdbId: media.tmdbId,
-      type: media.type,
-      season: target?.season ?? null,
-      episode: target?.episode ?? null,
-    })
+    const result = await scanRunner.run(
+      key,
+      {
+        imdbId: media.imdbId,
+        tmdbId: media.tmdbId,
+        type: media.type,
+        season: target?.season ?? null,
+        episode: target?.episode ?? null,
+      },
+      runOptions,
+    )
     // Filed under the episode it tested: see `scanEpisode` and `airedEpisode`.
     testResults.record(resultsFromScan(result, testResults.device(), target))
     return result
   }
+
+  /**
+   * Every source of a title, tested by itself (`main/autotest.ts`): ten
+   * minutes after it is added, while nothing plays; or while it is watched
+   * for the first time, one source at a time beside the film, which is not
+   * paused for it, and none started while the film buffers. The episode is
+   * the one playing, or where the viewer is (`resumeAnchor`), or S1E1.
+   */
+  const autoTester = new AutoTester({
+    watchlist: () => store.read().watchlist,
+    tested: (key) => kindTested(testResults.sources(), 'phone', key, enabledProviders().map((p) => p.id)),
+    playing: () => (session && !onTv && (carry === null || carry.done) ? { tmdbId: session.req.tmdbId } : null),
+    busy: () => scanRunner.busy(),
+    log: (line) => console.log(line),
+    run: async (entry, mode) => {
+      const watching = mode === 'watching' && session?.req.tmdbId === entry.tmdbId ? session.req : null
+      const episode =
+        watching && watching.season != null && watching.episode != null
+          ? { season: watching.season, episode: watching.episode }
+          : entry.type === 'tv'
+            ? resumeAnchor(entry)
+            : null
+      await runProviderScan(
+        { tmdbId: entry.tmdbId, imdbId: entry.imdbId, type: entry.type },
+        episode,
+        mode === 'watching'
+          ? { concurrency: 1, keepPlaying: true, hold: () => filmBuffering }
+          : { hold: () => session !== null },
+      )
+    },
+  })
+  setInterval(() => autoTester.tick(), AUTO_TEST_TICK_MS)
 
   /**
    * The player chrome's own API, installed the moment the bridge exists.

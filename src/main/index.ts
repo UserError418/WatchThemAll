@@ -47,6 +47,7 @@ import {
   titleKey,
 } from './outcomes'
 import {
+  kindTested,
   ownRows,
   playResult,
   resumeFirst,
@@ -58,7 +59,8 @@ import {
 import { ResultStore } from '@shared/store/results'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { createScanService } from './scanservice'
-import { createWatchlistTester } from './watchlisttester'
+import { createWatchlistTester, episodeToTest } from './watchlisttester'
+import { AUTO_TEST_TICK_MS, AutoTester } from './autotest'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
 import {
   readCache,
@@ -72,7 +74,7 @@ import { oauthClient } from '@shared/sync/credentials'
 import { throttle } from '@shared/sync/throttle'
 import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
-import { localMidnight } from '@shared/aired'
+import { airedEpisode, localMidnight, notOutYet } from '@shared/aired'
 import { batchChanges } from '@shared/store/changebatch'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -310,6 +312,61 @@ const watchlistTester = createWatchlistTester({
   startDelayMs: 2 * 60_000,
 })
 
+/**
+ * Whether the film playing is buffering: playing, and its time did not move
+ * between the last two readings (2.5 s apart). The gentle automatic test
+ * starts nothing while it is.
+ */
+let lastFilmReading: { seconds: number; paused: boolean } | null = null
+let filmBuffering = false
+function noteFilmReading(position: VideoPosition): void {
+  filmBuffering = lastFilmReading !== null && !position.paused && position.seconds <= lastFilmReading.seconds
+  lastFilmReading = { seconds: position.seconds, paused: position.paused }
+}
+
+/**
+ * Every source of a title, tested by itself: ten minutes after it is added to
+ * the watchlist, or while it is watched for the first time (`autotest.ts`).
+ * Filed like a test by hand.
+ */
+const autoTester = new AutoTester({
+  watchlist: () => store.read().watchlist,
+  tested: (key) => kindTested(testResults.sources(), 'desktop', key, enabledProviders().map((p) => p.id)),
+  playing: () => (player && !player.held() && !onTv ? { tmdbId: player.context.tmdbId } : null),
+  busy: () => scan.busy(),
+  log: (line) => console.log(line),
+  run: async (entry, mode) => {
+    const facts = await tmdb.detail(entry.tmdbId, entry.type).catch(() => null)
+    // Offline, or TMDB is down: every source would read red for days.
+    if (facts === null || notOutYet(facts.releaseDate, Date.now())) return
+    const watching = mode === 'watching' && player?.context.tmdbId === entry.tmdbId ? player.context : null
+    const wanted =
+      watching && watching.season !== null && watching.episode !== null
+        ? { season: watching.season, episode: watching.episode }
+        : episodeToTest(entry, facts.lastEpisode)
+    const target = wanted && airedEpisode(wanted, facts.lastEpisode)
+    const key = titleKey(entry)
+    const result = await scan.run(
+      key,
+      {
+        imdbId: facts.imdbId ?? entry.imdbId ?? '',
+        tmdbId: entry.tmdbId,
+        type: entry.type,
+        season: target?.season,
+        episode: target?.episode,
+        label: key,
+        runtimeMinutes: null,
+      },
+      // Beside the viewer's film: two at a time, and none started while it
+      // buffers. Otherwise the ordinary pool, held while anything plays.
+      mode === 'watching'
+        ? { concurrency: 2, hold: () => filmBuffering }
+        : { hold: () => player !== null },
+    )
+    testResults.record(resultsFromScan(result, testResults.device(), target))
+  },
+})
+
 /*
  * A title added to the watchlist should be tested soon, not at the tester's
  * next idle check ten minutes away. Keyed on the watchlist's ids rather than
@@ -330,6 +387,7 @@ store.subscribe(() => {
   if (ids === watchlistIds) return
   watchlistIds = ids
   watchlistTester.poke()
+  autoTester.tick()
 })
 
 /**
@@ -529,6 +587,7 @@ function openPlayer(
     onPlayingChange: (playing) => {
       videoPlaying = playing
       if (playing) notePlayerPlaylist()
+      if (playing) autoTester.tick()
       send(EV.playerPaused, !playing)
       // A pause is a stop the other device may pick up from: write the exact
       // place and send it now, rather than at the next five-second sample.
@@ -615,6 +674,7 @@ function openPlayer(
       rememberPosition(player?.context ?? context, position)
     },
     onPositionRead: (position) => {
+      noteFilmReading(position)
       if (onTv) return
       const current = player?.context ?? context
       const place = placeOf(current)
@@ -1346,6 +1406,8 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
 
     // After the IPC is up, so its first status reaches a window that can ask.
     watchlistTester.start()
+    // Additions come of age while the app runs; playback and list changes poke it too.
+    setInterval(() => autoTester.tick(), AUTO_TEST_TICK_MS)
 
     // Export/import from the menu are routed back through the renderer so they
     // reach the same IPC handler the in-app buttons use. The original had two

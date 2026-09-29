@@ -161,6 +161,22 @@ export function ownRows(sources: ResultSources, here: DeviceKind, now: number = 
   )
 }
 
+/**
+ * Whether this kind of device has tested every one of `providerIds` on the
+ * title: by hand, by the background tester or by `autotest.ts`, any episode.
+ * Plays and previews do not count; they measure the one source that was
+ * used. Every source, so a scan cancelled part-way (the phone cancels one
+ * when the app leaves the screen) is not taken for a finished one.
+ */
+export function kindTested(sources: ResultSources, here: DeviceKind, key: string, providerIds: readonly string[]): boolean {
+  const tested = new Set(
+    everyResult(sources, here)
+      .filter((result) => result.titleKey === key && result.deviceKind === here && result.origin === 'test')
+      .map((result) => result.providerId),
+  )
+  return providerIds.every((id) => tested.has(id))
+}
+
 /** Every device's title-wide rows: a source's castability record across titles. */
 export function everyRow(sources: ResultSources, here: DeviceKind, now: number = Date.now()): ProviderScan[] {
   return deviceRows(everyResult(sources, here), now)

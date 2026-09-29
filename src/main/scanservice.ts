@@ -118,6 +118,21 @@ export interface ScanServiceOptions {
   concurrency?: number
 }
 
+/**
+ * How one run may use the machine. The automatic tests (`autotest.ts`) run
+ * gently beside the viewer's own film: fewer at once, and none started while
+ * that film is buffering.
+ */
+export interface RunOptions {
+  /** How many at once, instead of the service's. */
+  concurrency?: number
+  /** True while no new test may start; checked every second. */
+  hold?: () => boolean
+}
+
+/** How often a held run looks again. */
+const HOLD_POLL_MS = 1_000
+
 export interface ScanService {
   /**
    * Measure every enabled provider against one title.
@@ -126,7 +141,7 @@ export interface ScanService {
    * is still worth keeping, because the providers it did reach were genuinely
    * measured.
    */
-  run(titleKey: string, subject: ProbeSubject): Promise<ProviderScan>
+  run(titleKey: string, subject: ProbeSubject, options?: RunOptions): Promise<ProviderScan>
   /**
    * Measure one provider alone, for the background tester.
    *
@@ -237,7 +252,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       running = false
     },
 
-    async run(titleKey, subject) {
+    async run(titleKey, subject, runOptions = {}) {
       // A second scan supersedes the first rather than racing it: two scans
       // would compete for the bandwidth each is trying to measure.
       token += 1
@@ -335,11 +350,15 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       /** The probes in progress, so the loop can wait for whichever ends first. */
       const tasks = new Set<Promise<void>>()
 
+      const limit = Math.max(1, runOptions.concurrency ?? concurrency)
+      const held = (): boolean => runOptions.hold?.() ?? false
+      const wait = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, HOLD_POLL_MS))
+
       publish(false)
       while (queue.length > 0 || tasks.size > 0) {
         // Keep the pool full. Once the run is cancelled nothing new starts, but
         // what is already running is let finish: a probe cannot be interrupted.
-        while (token === mine && tasks.size < concurrency) {
+        while (token === mine && tasks.size < limit && !held()) {
           const job = queue.shift()
           if (!job) break
           inFlight.set(job.provider.id, job)
@@ -348,8 +367,9 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           publish(false)
         }
         if (token !== mine) queue.length = 0
-        if (tasks.size === 0) break
-        await Promise.race(tasks)
+        if (tasks.size === 0 && queue.length === 0) break
+        // Held with nothing running: look again in a second.
+        await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }

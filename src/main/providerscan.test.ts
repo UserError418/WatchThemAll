@@ -15,6 +15,7 @@ import {
   RETEST_AFTER_MS,
   castResult,
   isRetestDue,
+  kindTested,
   ownRows,
   providerRank,
   resumeFirst,
@@ -375,6 +376,17 @@ describe('titleResults', () => {
       sharedScans: parts.sharedScans ?? [],
       streamOutcomes: parts.streamOutcomes ?? [],
     },
+  })
+
+  /** For `autotest.ts`: a scan cancelled part-way is not a finished one, and the other kind's tests are not this one's. */
+  it('calls a title tested by this kind only once every source has a test from it', () => {
+    const partial = [tested('a', 'stream', now - day)]
+    expect(kindTested(sources({ history: partial }), 'desktop', 'tv:tt1', ['a', 'b'])).toBe(false)
+    const whole = [...partial, tested('b', 'dead', now - day, 3)]
+    expect(kindTested(sources({ history: whole }), 'desktop', 'tv:tt1', ['a', 'b'])).toBe(true)
+    expect(kindTested(sources({ history: whole }), 'phone', 'tv:tt1', ['a', 'b'])).toBe(false)
+    const played = [{ ...tested('a', 'stream', now - day), origin: 'play' as const }]
+    expect(kindTested(sources({ history: played }), 'desktop', 'tv:tt1', ['a'])).toBe(false)
   })
 
   it('reads the history for the episode asked about', () => {

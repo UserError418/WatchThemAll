@@ -154,10 +154,28 @@ export interface ScanRunnerOptions {
   onProgress: (progress: ProviderScanProgress) => void
 }
 
+/**
+ * How one run may use the phone. The automatic test of a title being watched
+ * for the first time (`main/autotest.ts`) runs beside the film, as the owner
+ * chose (2026-09-29): one source at a time, none started while the film is
+ * buffering, and the film is not paused for it.
+ */
+export interface RunOptions {
+  concurrency?: number
+  /** True while no new test may start; checked every second. */
+  hold?: () => boolean
+  /** Leave what is playing alone instead of pausing it for the scan. */
+  keepPlaying?: boolean
+}
+
+/** How often a held run looks again. */
+const HOLD_POLL_MS = 1_000
+
 export interface ScanRunner {
   run(
     titleKey: string,
     request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+    options?: RunOptions,
   ): Promise<ProviderScan>
   cancel(): void
   busy(): boolean
@@ -196,11 +214,11 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       running = false
     },
 
-    run(titleKey, request) {
+    run(titleKey, request, runOptions = {}) {
       token += 1
       const mine = token
       const previous = lastRun
-      const current = previous.then(() => scan(titleKey, request, mine))
+      const current = previous.then(() => scan(titleKey, request, mine, runOptions))
       lastRun = current.catch(() => {})
       return current
     },
@@ -210,6 +228,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     titleKey: string,
     request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
     mine: number,
+    runOptions: RunOptions,
   ): Promise<ProviderScan> {
     // Superseded while it waited: nothing measured, nothing to record.
     if (token !== mine) return { titleKey, at: Date.now(), verdicts: {} }
@@ -278,8 +297,13 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       return probeOne(url, budgetMs, cancelled)
     }
 
-    options.suspendPlayback()
+    const keepPlaying = runOptions.keepPlaying === true
+    if (!keepPlaying) options.suspendPlayback()
     publish(false)
+    /** Until the film being watched beside a gentle run stops buffering. */
+    const unheld = async (): Promise<void> => {
+      while (!cancelled() && (runOptions.hold?.() ?? false)) await sleep(HOLD_POLL_MS)
+    }
 
     try {
       /**
@@ -290,6 +314,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       let next = 0
       const worker = async (): Promise<void> => {
         while (!cancelled()) {
+          await unheld()
+          if (cancelled()) return
           const provider = providers[next]
           next += 1
           if (!provider) return
@@ -302,13 +328,16 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           end(provider)
         }
       }
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker))
+      const workers = Math.max(1, Math.min(runOptions.concurrency ?? CONCURRENCY, total))
+      await Promise.all(Array.from({ length: workers }, worker))
 
       // Every red again, alone, with the longer budget. See the header.
       for (const provider of providers) {
         if (cancelled()) break
         if (verdicts[provider.id] !== 'dead' || reasons[provider.id]?.kind === 'unsupported') continue
 
+        await unheld()
+        if (cancelled()) break
         begin(provider, true)
         const second = await measure(provider, SOLO_PROBE_MS)
         if (cancelled()) break
@@ -321,7 +350,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       // Each probe closes its own session; this is for one a crash or a
       // cancellation left behind, since every session is a decoding WebView.
       await closeAllProbes().catch(() => 0)
-      options.resumePlayback()
+      if (!keepPlaying) options.resumePlayback()
       if (token === mine) running = false
     }
 
