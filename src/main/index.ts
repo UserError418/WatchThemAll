@@ -473,6 +473,7 @@ function openPlayer(
   title: string,
   context: PlayRequest,
   candidates: PlayCandidate[] = [],
+  options: { held?: boolean } = {},
 ): void {
   const win = getMainWindow()
   if (!win) return
@@ -509,6 +510,15 @@ function openPlayer(
       window has to be told and has to make room.
     */
     onBack: () => setPlayerMini(true),
+    /*
+      Resume carried over from the detail view's preview (the owner,
+      2026-09-28): held out of sight until its film is where the preview is.
+      See `shared/carryover.ts`. The page owns the preview, so it hears the
+      keys meant for it and when to let it go.
+    */
+    held: options.held === true,
+    onHeldAction: (action) => send(EV.carryAction, action),
+    onReleased: () => send(EV.carryReleased, null),
     ownControls: () => store.read().settings.ownControls,
     subtitleLanguage: () => store.read().settings.subtitleLanguage,
     // The mini player hears about a failing source too, since the chrome
@@ -1228,7 +1238,12 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       allProviders,
       automaticOrder: automaticOrderFor,
       results: testResults,
-      preview: { plan: previewPlanFor, keep: keepPreviewPosition },
+      preview: {
+        plan: previewPlanFor,
+        keep: keepPreviewPosition,
+        carry: (report) => player?.carryTo(report),
+        carryEnd: () => player?.carryEnd(),
+      },
       scan,
     })
 

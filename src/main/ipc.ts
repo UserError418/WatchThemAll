@@ -19,6 +19,7 @@ import type {
   DiscoverRequest,
   GenreRowRequest,
   PlayRequest,
+  CarryReport,
   PreviewPlan,
   RowRequest,
   ForYouPlanRequest,
@@ -86,6 +87,8 @@ export interface IpcDeps {
     context: PlayRequest,
     /** Alternatives, best first, so the window can switch source without a round trip. */
     candidates: PlayCandidate[],
+    /** Open held, while the detail view's preview stands in; see `shared/carryover.ts`. */
+    options?: { held?: boolean },
   ) => void
   /** Runs a release sweep and returns how many trackers turned up something. */
   checkReleases: () => Promise<{ checked: number; found: number }>
@@ -120,6 +123,10 @@ export interface IpcDeps {
   preview: {
     plan: (req: PlayRequest) => PreviewPlan | null
     keep: (req: PlayRequest, seconds: number, duration: number) => void
+    /** Where the preview standing in for the held player is; see `InlinePlayer.carryTo`. */
+    carry: (report: CarryReport) => void
+    /** The preview stopped standing in; see `InlinePlayer.carryEnd`. */
+    carryEnd: () => void
   }
   /** Move the inline player's video to the rectangle the renderer reserved. */
   setPlayerBounds: (bounds: PlayerBounds) => void
@@ -345,6 +352,10 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number) =>
     deps.preview.keep(req, Number(seconds), Number(duration)),
   )
+  ipcMain.handle(CH.previewCarry, (_e, report: unknown) => {
+    if (isCarryReport(report)) deps.preview.carry(report)
+  })
+  ipcMain.handle(CH.previewCarryEnd, () => deps.preview.carryEnd())
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const result = previewResult(where, Number(streamedMs), Date.now())
@@ -443,7 +454,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
 
   ipcMain.handle(CH.releasesCheck, () => deps.checkReleases())
 
-  ipcMain.handle(CH.playOpen, async (_e, req: PlayRequest) => {
+  ipcMain.handle(CH.playOpen, async (_e, req: PlayRequest, options?: { carry?: boolean }) => {
     /**
      * Only providers the user has enabled, in the order they arranged them.
      *
@@ -472,7 +483,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     await deps.freshenPositions()
     const selection = buildPlayUrl(enabled, req, resumeOfferFor(store.read().resumePoints, req))
     if (selection) {
-      openPlayer(selection.url, req.title, req, selection.candidates)
+      openPlayer(selection.url, req.title, req, selection.candidates, { held: options?.carry === true })
       return {
         ok: true,
         url: selection.url,
@@ -674,4 +685,16 @@ function assertEveryChannelHandled(): void {
         'Every channel in CH must be handled in registerIpc().',
     )
   }
+}
+
+/** A renderer's word is checked by shape before it moves the player. */
+function isCarryReport(value: unknown): value is CarryReport {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.seconds === 'number' &&
+    Number.isFinite(v.seconds) &&
+    typeof v.paused === 'boolean' &&
+    typeof v.muted === 'boolean'
+  )
 }

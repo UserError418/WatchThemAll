@@ -46,6 +46,10 @@ export function runPreviewShell(startSeconds: number): () => void {
     film.setMuted(muted)
     act()
   })
+  const stopPaused = preview.onPaused((paused) => {
+    film.setPaused(paused)
+    act()
+  })
   link.watch()
   const heartbeat = setInterval(() => {
     link.watch()
@@ -55,6 +59,7 @@ export function runPreviewShell(startSeconds: number): () => void {
   return () => {
     clearInterval(heartbeat)
     stopMuted()
+    stopPaused()
     window.removeEventListener('message', onMessage)
   }
 }

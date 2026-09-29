@@ -140,6 +140,9 @@ export const CH = {
   previewPlan: 'preview:plan',
   previewKeep: 'preview:keep',
   previewRecord: 'preview:record',
+  /** Resume carried over from the preview: where it is, and that it is over. See `shared/carryover.ts`. */
+  previewCarry: 'preview:carry',
+  previewCarryEnd: 'preview:carry-end',
 
   /**
    * Cross-device sync.
@@ -225,6 +228,10 @@ export const EV = {
    * nothing to click.
    */
   playbackActive: 'evt:playback-active',
+  /** The held player is showing: the preview that stood in for it can go. */
+  carryReleased: 'evt:carry-released',
+  /** A key for the player while the preview stands in for it; the preview obeys. */
+  carryAction: 'evt:carry-action',
   /**
    * Where the player is, so the app's chrome can label it.
    *
@@ -879,6 +886,18 @@ export interface PreviewPlan {
  */
 export const PREVIEW_STATE = 'wta:preview-state'
 export const PREVIEW_MUTED = 'wta:preview-muted'
+/** The page pauses or resumes the preview's film: Resume carried over, and Space pressed. */
+export const PREVIEW_PAUSED = 'wta:preview-paused'
+
+/** Where a preview standing in for the player is; see `shared/carryover.ts`. */
+export interface CarryReport {
+  seconds: number
+  paused: boolean
+  muted: boolean
+}
+
+/** The keys a preview standing in for the player obeys. Any other key shows the player. */
+export type CarryAction = 'togglePlay' | 'mute'
 
 export interface WtaApi {
   store: {
@@ -936,6 +955,10 @@ export interface WtaApi {
      * preview.
      */
     record(req: PlayRequest, providerId: string, streamedMs: number): Promise<void>
+    /** While standing in for the player: where the preview is now. */
+    carry(report: CarryReport): Promise<void>
+    /** The preview stopped standing in (gone, or tapped): show the player now. */
+    carryEnd(): Promise<void>
   }
   providers: {
     list(): Promise<Provider[]>
@@ -971,7 +994,15 @@ export interface WtaApi {
     /** Run a release sweep now. Resolves once every tracker has been checked. */
     checkNow(): Promise<{ checked: number; found: number }>
   }
-  play(req: PlayRequest): Promise<{
+  /**
+   * Start playing. `carry`: the detail view's preview is on screen and stands
+   * in while the player loads held (hidden and silent), then hands over at
+   * its second; see `shared/carryover.ts`.
+   */
+  play(
+    req: PlayRequest,
+    options?: { carry?: boolean },
+  ): Promise<{
     ok: boolean
     url?: string
     /** Which provider actually served it — may differ from the one requested. */
@@ -1146,6 +1177,10 @@ export interface WtaApi {
      */
     storeChanged(cb: (keys: Array<keyof StoreShape> | null) => void): () => void
     playbackActive(cb: (active: boolean) => void): () => void
+    /** The held player is showing; see `play`'s `carry`. */
+    carryReleased(cb: () => void): () => void
+    /** A player key pressed while the preview stands in for it. */
+    carryAction(cb: (action: CarryAction) => void): () => void
     playerState(cb: (state: PlayerState | null) => void): () => void
     /** True while the player is shrunk into the corner. */
     playerMini(cb: (mini: boolean) => void): () => void
@@ -1348,6 +1383,12 @@ export interface PlayerOverlayConfig {
   mini: boolean
   /** `Settings.subtitleLanguage`: the language to start with, or null for none. */
   subtitleLanguage: string | null
+  /**
+   * Held while the detail view's preview stands in for this player (Resume
+   * carried over, `shared/carryover.ts`): the film plays silent until this is
+   * null again, then takes `muted` from the preview. Null otherwise.
+   */
+  held: { muted: boolean } | null
 }
 
 /**
@@ -1393,6 +1434,7 @@ export interface WtaPlayerApi {
   preview?: {
     report(state: PreviewReport): void
     onMuted(cb: (muted: boolean) => void): () => void
+    onPaused(cb: (paused: boolean) => void): () => void
   }
 }
 

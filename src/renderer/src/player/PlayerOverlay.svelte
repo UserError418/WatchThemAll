@@ -51,7 +51,13 @@
     Our controls are assumed on until main says otherwise, so the cover is up
     from this component's first frame rather than from the config's arrival.
   */
-  let config = $state<PlayerOverlayConfig>({ ownControls: true, fullscreen: false, mini: false, subtitleLanguage: null })
+  let config = $state<PlayerOverlayConfig>({
+    ownControls: true,
+    fullscreen: false,
+    mini: false,
+    subtitleLanguage: null,
+    held: null,
+  })
   let bar = $state<BarState>({ visible: true, away: false })
   let view = $state<FilmView>(link.view())
 
@@ -184,6 +190,27 @@
       window.removeEventListener('message', onMessage)
       clearInterval(heartbeat)
     }
+  })
+
+  /*
+   * Held: the detail view's preview is standing in for this player while it
+   * loads out of sight (Resume carried over, `shared/carryover.ts`). The film
+   * stays silent however often the source unmutes it, and takes the preview's
+   * sound when the hold ends. Whether our controls are on or not: this is
+   * about two soundtracks at once, not about controls.
+   */
+  let heldMuted: boolean | null = null
+  $effect(() => {
+    const held = config.held
+    if (held !== null) {
+      heldMuted = held.muted
+      if (film !== null && !film.muted) link.setMuted(true)
+      return
+    }
+    if (heldMuted === null) return
+    const muted = heldMuted
+    heldMuted = null
+    link.setMuted(muted)
   })
 
   // The source's interface is hidden while ours is in charge, and through a

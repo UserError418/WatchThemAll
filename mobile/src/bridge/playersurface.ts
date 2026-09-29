@@ -297,6 +297,13 @@ export interface PlayerSurface {
   /** Bring back what `blank` took away, at `url` if given; see `reload`. */
   restore(url?: string): void
   setBounds(bounds: SurfaceBounds): void
+  /**
+   * Out of sight while still playing: the detail view's preview stands in
+   * (Resume carried over, `shared/carryover.ts`). Opacity rather than
+   * visibility, which the frame's own `visibility: visible` would override;
+   * and still laid out, so the source does not stop the film as off screen.
+   */
+  setConcealed(concealed: boolean): void
   /** Tear it down. Safe to call when nothing is showing. */
   close(): void
   /** The URL currently loaded, or null. */
@@ -308,6 +315,12 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
   let frame: HTMLIFrameElement | null = null
   let current: string | null = null
   let stopFollowingFullscreen: (() => void) | null = null
+  let concealed = false
+  const applyConcealed = (): void => {
+    if (!host) return
+    host.style.opacity = concealed ? '0' : ''
+    host.style.pointerEvents = concealed ? 'none' : ''
+  }
   let stopListening: (() => void) | null = null
 
   const wakeLock = createWakeLock()
@@ -336,6 +349,7 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
 
     host.appendChild(frame)
     document.body.appendChild(host)
+    applyConcealed()
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
@@ -409,6 +423,11 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       frame.src = current
     },
 
+    setConcealed(next) {
+      concealed = next
+      applyConcealed()
+    },
+
     setBounds({ x, y, width, height }) {
       if (!host) return
       host.style.inset = 'auto'
@@ -423,6 +442,7 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       host?.remove()
       host = null
       frame = null
+      concealed = false
       current = null
       wakeLock.release()
       stopFollowingFullscreen?.()

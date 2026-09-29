@@ -57,6 +57,8 @@ import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
 import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, type PlayMeasurement } from './providerscan'
+import { CarryOver } from '@shared/carryover'
+import type { CarryAction, CarryReport } from '@shared/ipc'
 import { qualityClass } from '@shared/streamquality'
 import type { ScanReason } from '@shared/types'
 
@@ -71,6 +73,13 @@ export interface PlayerBounds {
 export interface InlinePlayer {
   /** Mutable: rewritten when the player navigates to another episode. */
   context: PlayRequest
+  /**
+   * Where the detail view's preview is, while it stands in for this held
+   * player (`InlinePlayerOptions.held`). Ignored once the player shows.
+   */
+  carryTo: (report: CarryReport) => void
+  /** The preview stopped standing in: show the player now, wherever its film is. */
+  carryEnd: () => void
   /** Every provider that can serve this title, best first. */
   candidates: PlayCandidate[]
   /** Index into `candidates` of the provider currently loaded. */
@@ -294,6 +303,17 @@ export interface InlinePlayerOptions {
    */
   reportResult?: (providerId: string, seen: PlayMeasurement) => void
   /**
+   * Open held: out of sight and silent, while the detail view's preview
+   * stands in for the player (Resume carried over, `shared/carryover.ts`).
+   * Shown when its film plays at the preview's second, or on any key other
+   * than play/pause and mute, which go to the preview (`onHeldAction`).
+   */
+  held?: boolean
+  /** A play/pause or mute key while held: for the preview, which is what is on screen. */
+  onHeldAction?: (action: CarryAction) => void
+  /** The held player is showing now. */
+  onReleased?: () => void
+  /**
    * Everything the skip-intro offer needs, or absent to leave it off.
    *
    * Grouped rather than spread across four optional fields because they are
@@ -500,8 +520,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let closed = false
   /** Shrunk into the app's corner; see `setMini`. */
   let mini = false
+  /** Held while the detail view's preview stands in; see "Held" below. Null for an ordinary start. */
+  const carry = options.held ? new CarryOver(Date.now()) : null
 
   const player: InlinePlayer = {
+    carryTo: () => {},
+    carryEnd: () => {},
     session: contents.session,
     context,
     candidates,
@@ -733,6 +757,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       fullscreen: !win.isDestroyed() && win.isFullScreen(),
       mini,
       subtitleLanguage: options.subtitleLanguage?.() ?? null,
+      held: carry !== null && !carry.done ? { muted: carry.last()?.muted ?? false } : null,
     })
   }
   // However fullscreen was entered or left: F, Escape, the window manager, the menu.
@@ -1864,7 +1889,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   player.setMuted = (muted: boolean): void => {
     if (!alive()) return
-    contents.setAudioMuted(muted)
+    mutedFromOutside = muted
+    // Held, the sound stays off until the player shows; see `release`.
+    if (carry === null || carry.done) contents.setAudioMuted(muted)
   }
 
   player.destroy = (): void => {
@@ -2131,6 +2158,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   player.action = (action: PlayerAction): void => {
     if (!alive()) return
+    if (carry !== null && !carry.done) {
+      // What is on screen is the preview: these two are for it. Anything else
+      // wants the player, so it shows, and the key then does what it does.
+      if (action === 'togglePlay' || action === 'mute') {
+        options.onHeldAction?.(action)
+        return
+      }
+      releaseHeld()
+    }
     const nav = episodesOpen ? EPISODE_KEYS[action] : sourcesOpen ? SOURCE_KEYS[action] : undefined
     if (nav !== undefined && overlay !== null && !overlay.webContents.isDestroyed()) {
       overlay.webContents.send(EV.chromeEpisodeNav, nav)
@@ -2213,6 +2249,61 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     ipcMain.on(EV.chromeSkipSize, onSkipSize)
     ipcMain.on(EV.chromeSkipTo, onSkipTo)
   }
+  /* ── Held: the preview stands in until the film is where it is ────────── */
+
+  /** What `player.setMuted` (casting) asked for, applied once the player shows. */
+  let mutedFromOutside = false
+  let heldTimer: ReturnType<typeof setInterval> | null = null
+  /** How often a held player's film is read: often, since the viewer is waiting on it. */
+  const HELD_POLL_MS = 400
+
+  /**
+   * Show the held player: the views, the sound (unless casting muted it), and
+   * the preview's own sound and pause. Once; a second call does nothing.
+   */
+  function releaseHeld(): void {
+    if (carry === null || !heldTimer) return
+    clearInterval(heldTimer)
+    heldTimer = null
+    carry.release()
+    if (!alive() || win.isDestroyed()) return
+    view.setVisible(true)
+    overlay?.setVisible(true)
+    skipView?.setVisible(true)
+    contents.setAudioMuted(mutedFromOutside)
+    sendConfig()
+    if (carry.last()?.paused) player.setPaused(true)
+    console.log(`[carry] player shown at ${lastPosition ? Math.round(lastPosition.seconds) : '?'} s`)
+    options.onReleased?.()
+  }
+
+  if (carry !== null) {
+    view.setVisible(false)
+    overlay?.setVisible(false)
+    skipView?.setVisible(false)
+    contents.setAudioMuted(true)
+    // The carry does the seeking, to where the preview is by then.
+    seekDone = true
+    heldTimer = setInterval(() => {
+      void readPosition().then((found) => {
+        if (carry.done) return
+        if (found) lastPosition = found
+        const film = found && { seconds: found.seconds, duration: found.duration, playing: !found.paused }
+        const move = carry.step(film, Date.now())
+        if (move.kind === 'seek') seekTo(move.to)
+        if (move.kind === 'release') releaseHeld()
+      })
+    }, HELD_POLL_MS)
+  }
+
+  player.carryTo = (report: CarryReport): void => {
+    if (carry === null || carry.done) return
+    const mutedBefore = carry.last()?.muted
+    carry.update({ ...report, at: Date.now() })
+    if (report.muted !== mutedBefore) sendConfig()
+  }
+  player.carryEnd = releaseHeld
+
   player.setBounds(bounds)
   beginLoad()
   void contents.loadURL(framed(url))

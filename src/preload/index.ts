@@ -13,6 +13,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EV } from '@shared/ipc'
 import type {
+  CarryReport,
   DiscoverRequest,
   GenreRowRequest,
   MalDecisions,
@@ -61,7 +62,7 @@ const api: WtaApi = {
   releases: {
     checkNow: () => ipcRenderer.invoke(CH.releasesCheck),
   },
-  play: (req: PlayRequest) => ipcRenderer.invoke(CH.playOpen, req),
+  play: (req: PlayRequest, options?: { carry?: boolean }) => ipcRenderer.invoke(CH.playOpen, req, options ?? {}),
   player: {
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke(CH.playSetBounds, bounds),
@@ -85,6 +86,8 @@ const api: WtaApi = {
       ipcRenderer.invoke(CH.previewKeep, req, seconds, duration),
     record: (req: PlayRequest, providerId: string, streamedMs: number) =>
       ipcRenderer.invoke(CH.previewRecord, req, providerId, streamedMs),
+    carry: (report: CarryReport) => ipcRenderer.invoke(CH.previewCarry, report),
+    carryEnd: () => ipcRenderer.invoke(CH.previewCarryEnd),
   },
   data: {
     export: () => ipcRenderer.invoke(CH.dataExport),
@@ -119,6 +122,8 @@ const api: WtaApi = {
     playbackSettled: (cb) => subscribe(EV.playbackSettled, cb),
     storeChanged: (cb) => subscribe(EV.storeChanged, cb),
     playbackActive: (cb) => subscribe(EV.playbackActive, cb),
+    carryReleased: (cb) => subscribe(EV.carryReleased, () => cb()),
+    carryAction: (cb) => subscribe(EV.carryAction, cb),
     playerState: (cb) => subscribe(EV.playerState, cb),
     playerMini: (cb) => subscribe(EV.playerMini, cb),
     playerPaused: (cb) => subscribe(EV.playerPaused, cb),

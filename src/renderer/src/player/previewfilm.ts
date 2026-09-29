@@ -53,6 +53,8 @@ export class PreviewFilm {
   private seeks = 0
   private lastSeekAt = Number.NEGATIVE_INFINITY
   private presses = 0
+  /** Paused by the viewer (Space, while the preview stands in for the player); it stays so. */
+  private wantPaused = false
   private readonly openedAt: number
 
   constructor(
@@ -70,6 +72,15 @@ export class PreviewFilm {
   setMuted(muted: boolean): void {
     this.muted = muted
     this.link.setMuted(muted)
+  }
+
+  /**
+   * Pause or play at the viewer's word. Only while the preview stands in for
+   * the player (`shared/carryover.ts`); a preview is otherwise always playing.
+   */
+  setPaused(paused: boolean): void {
+    this.wantPaused = paused
+    this.link.setPaused(paused)
   }
 
   /**
@@ -108,7 +119,10 @@ export class PreviewFilm {
       this.link.seekTo(this.startSeconds)
     }
 
-    if (film.paused && !film.ended && this.link.wanted() === null) this.link.setPaused(false)
+    // Kept as the viewer wants it, once the link has stopped holding the last word.
+    if (this.link.wanted() === null && !film.ended && film.paused !== this.wantPaused) {
+      this.link.setPaused(this.wantPaused)
+    }
 
     // Started means two reports in a row, playing, the second further on:
     // a bare 'play' is not enough, because a source can abort that play at

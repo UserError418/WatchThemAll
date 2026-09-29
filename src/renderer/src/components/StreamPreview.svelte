@@ -21,18 +21,27 @@
    *   `PreviewFilm` the desktop's shell runs.
    */
   import { untrack } from 'svelte'
-  import { PREVIEW_MUTED, PREVIEW_STATE, type PreviewPlan, type PreviewReport } from '@shared/ipc'
+  import { PREVIEW_MUTED, PREVIEW_PAUSED, PREVIEW_STATE, type PreviewPlan, type PreviewReport } from '@shared/ipc'
   import { FilmLink } from '../player/filmlink'
   import { PreviewFilm } from '../player/previewfilm'
 
   interface Props {
     plan: PreviewPlan
     muted: boolean
+    /**
+     * Standing in for the player while it loads held (Resume carried over,
+     * `shared/carryover.ts`): the film fills the window, and a tap on it asks
+     * for the player (`ontap`).
+     */
+    carried?: boolean
+    /** Paused at the viewer's word; only while carried. */
+    paused?: boolean
     onstate: (state: PreviewReport) => void
     onfail: () => void
+    ontap?: () => void
   }
 
-  const { plan, muted, onstate, onfail }: Props = $props()
+  const { plan, muted, carried = false, paused = false, onstate, onfail, ontap }: Props = $props()
 
   /**
    * How long a preview may take to show a film. The plan only offers sources
@@ -107,6 +116,11 @@
     view.setAudioMuted(muted)
     view.send(PREVIEW_MUTED, muted)
   })
+  $effect(() => {
+    const view = webview
+    if (view === null || !webviewReady) return
+    view.send(PREVIEW_PAUSED, paused)
+  })
 
   /* ── Phone: an iframe of the provider, driven from here ──────────────── */
 
@@ -142,6 +156,9 @@
   $effect(() => {
     film?.setMuted(muted)
   })
+  $effect(() => {
+    film?.setPaused(paused)
+  })
 
   function isReport(value: unknown): value is PreviewReport {
     if (typeof value !== 'object' || value === null) return false
@@ -163,7 +180,14 @@
   clipped, so a 16:9 film covers the hero without bars. No overscan: unlike
   YouTube there is no foreign chrome to crop, because none is ever drawn.
 -->
-<div class="stream-frame" class:shown={started} style:--fade="{STREAM_FADE_MS}ms" aria-hidden="true">
+<div
+  class="stream-frame"
+  class:shown={started}
+  class:carried
+  style:--fade="{STREAM_FADE_MS}ms"
+  aria-hidden="true"
+  onclick={() => carried && ontap?.()}
+>
   {#if plan.surface === 'webview'}
     <webview bind:this={webview} class="stream" src={plan.src} tabindex="-1"></webview>
   {:else}
@@ -192,6 +216,28 @@
 
   .stream-frame.shown {
     opacity: 1;
+  }
+
+  /*
+    Standing in for the player: the whole window, above the rest of the
+    detail view, as the player itself would be. The film is letterboxed by
+    the source's own page, as in the player, rather than cropped to cover.
+    A tap anywhere on it asks for the player.
+  */
+  .stream-frame.carried {
+    position: fixed;
+    z-index: 1000;
+    background: #000;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .stream-frame.carried .stream {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform: none;
   }
 
   .stream {

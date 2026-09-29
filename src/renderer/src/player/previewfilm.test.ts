@@ -114,3 +114,28 @@ describe('PreviewFilm', () => {
     expect(sent).toContain('paused:false')
   })
 })
+
+describe('PreviewFilm, standing in for the player', () => {
+  it('stays paused once the viewer pauses it, and plays again when asked', () => {
+    const { link, sent, report } = fakeLink()
+    const preview = new PreviewFilm(link, 0, false, () => 0)
+    report({ seconds: 10, paused: false })
+    preview.step()
+    preview.setPaused(true)
+    expect(sent.at(-1)).toBe('paused:true')
+    // The source reports it paused: nothing more is asked of it.
+    report({ paused: true })
+    sent.length = 0
+    preview.step()
+    expect(sent).not.toContain('paused:false')
+    // The source resumes by itself: it is paused again.
+    report({ paused: false })
+    preview.step()
+    expect(sent).toContain('paused:true')
+    preview.setPaused(false)
+    report({ paused: true })
+    sent.length = 0
+    preview.step()
+    expect(sent).toContain('paused:false')
+  })
+})

@@ -23,6 +23,7 @@
    * reports that, so it costs no new plumbing.
    */
   import { actionForEvent } from '@shared/playerkeys'
+  import { carrying } from '../lib/carry.svelte'
 
   let slot = $state<HTMLDivElement | null>(null)
 
@@ -81,7 +82,8 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="player">
+<!-- See-through while the detail view's preview stands in for the held player (`lib/carry.svelte.ts`). -->
+<div class="player" class:carrying={carrying.active}>
   <!--
     `role="group"` because the bar now carries mouse handlers, and an element
     that reacts to the pointer has to say what it is. Not `toolbar`, which
@@ -122,5 +124,10 @@
     /* Nothing renders here; the native view covers it exactly. Black so the
        moment before the view is positioned is not a bright flash. */
     background: #000;
+  }
+
+  .player.carrying,
+  .player.carrying .slot {
+    background: transparent;
   }
 </style>

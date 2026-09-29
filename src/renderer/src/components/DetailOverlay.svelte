@@ -20,8 +20,9 @@
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import StreamPreview, { STREAM_FADE_MS } from './StreamPreview.svelte'
+  import { carrying } from '../lib/carry.svelte'
   import { PreviewGrace } from '../lib/previewgrace'
-  import type { PlayRequest, PreviewPlan } from '@shared/ipc'
+  import type { PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
   import { untrack } from 'svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
   import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
@@ -332,15 +333,25 @@
   async function play(
     episode: (EpisodeRef & { runtime?: number | null }) | null,
     providerId: string | null = chosenProvider,
+    carry = false,
   ): Promise<void> {
     playError = null
-    // The real player takes over: the preview stops first, and a place it
-    // earned is written down before the player reads where to start.
-    await leavePreview()
+    if (carry && stream !== null && lastReport !== null) {
+      // The preview stands in while the player loads held behind it (see
+      // `carry` below). Where it is now is where the player's URL starts,
+      // heard or not: Resume was pressed on what is on screen.
+      startCarry()
+      await window.wta.preview.keep(stream.req, lastReport.seconds, lastReport.duration).catch(() => {})
+    } else {
+      // The real player takes over: the preview stops first, and a place it
+      // earned is written down before the player reads where to start.
+      await leavePreview()
+    }
 
-    const result = await window.wta.play(requestFor(episode, providerId))
+    const result = await window.wta.play(requestFor(episode, providerId), { carry: carrying.active })
 
     if (!result.ok) {
+      if (carrying.active) endCarry()
       playError = result.error ?? 'Could not open a player'
       return
     }
@@ -427,7 +438,7 @@
    * list shows as the choice. Otherwise the usual choice.
    */
   function resume(): void {
-    void play(resumeEpisode(), previewSource ?? chosenProvider)
+    void play(resumeEpisode(), previewSource ?? chosenProvider, streamOnScreen)
   }
 
   /** What pressing "+ Watched" will actually file, in words. */
@@ -474,7 +485,9 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onclose()
+    // While the preview stands in for the player, Escape is the player's
+    // (PlayerFrame sends it to main, which shows the player and shrinks it).
+    if (event.key === 'Escape' && !carrying.active) onclose()
   }
   /**
    * The one episode in this season that gets a live countdown, and the clock
@@ -642,7 +655,56 @@
   const streamPlan = $derived(
     stream !== null && stream.key === previewKey && streamStop === null ? (stream.plan ?? null) : null,
   )
-  const showStream = $derived(streamPlan !== null && !previewAudio.suspended)
+  /*
+   * Resume carried over (the owner, 2026-09-28; `shared/carryover.ts`). With
+   * the preview on screen, Resume does not stop it: it fills the window and
+   * plays on, with sound, while the player loads held behind it. Main shows
+   * the player once its film is at the preview's second, or on a key that
+   * wants the player, and says so (`carryReleased`); a tap on the preview
+   * asks for the same. Until then Space and M are the preview's.
+   */
+  let carryPaused = $state(false)
+  let carryMuted = $state(false)
+  /** The preview's last report: where Resume's player starts, and where the carry aims. */
+  let lastReport: PreviewReport | null = null
+
+  function startCarry(): void {
+    carrying.active = true
+    carryPaused = false
+    carryMuted = false
+  }
+
+  /** The player is showing: the preview goes, as it would have on Resume. */
+  function endCarry(): void {
+    if (!carrying.active) return
+    carrying.active = false
+    streamStop = 'player'
+  }
+
+  function sendCarry(): void {
+    if (!carrying.active || lastReport === null) return
+    void window.wta.preview
+      .carry({ seconds: lastReport.seconds, paused: carryPaused, muted: carryMuted })
+      .catch(() => {})
+  }
+
+  $effect(() => window.wta.on.carryReleased(() => endCarry()))
+  $effect(() =>
+    window.wta.on.carryAction((action) => {
+      if (!carrying.active) return
+      if (action === 'togglePlay') carryPaused = !carryPaused
+      else carryMuted = !carryMuted
+      sendCarry()
+    }),
+  )
+  // Closing the detail view takes the preview with it: the player shows at once.
+  $effect(() => () => {
+    if (!carrying.active) return
+    carrying.active = false
+    void window.wta.preview.carryEnd().catch(() => {})
+  })
+
+  const showStream = $derived(streamPlan !== null && (!previewAudio.suspended || carrying.active))
   /** The mounted stream is really playing (`PreviewReport.started`); it is on screen from here. */
   let streamStarted = $state(false)
   $effect(() => {
@@ -753,13 +815,18 @@
       {#if showStream && streamPlan}
         <StreamPreview
           plan={streamPlan}
-          muted={heroMuted || !streamStarted}
+          muted={carrying.active ? carryMuted : heroMuted || !streamStarted}
+          paused={carrying.active && carryPaused}
+          carried={carrying.active}
           onstate={(state) => {
             if (state.started) streamStarted = true
+            lastReport = state
             grace.feed(state)
             if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
+            sendCarry()
           }}
           onfail={() => (streamStop = 'failed')}
+          ontap={() => void window.wta.preview.carryEnd().catch(() => {})}
         />
       {/if}
 

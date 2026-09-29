@@ -32,6 +32,8 @@ import type {
   StoreShape,
 } from '@shared/types'
 import type {
+  CarryAction,
+  CarryReport,
   DiscoverRequest,
   GenreRowRequest,
   MalDecisions,
@@ -92,6 +94,7 @@ import {
   type ResultsAccess,
 } from '@main/providerscan'
 import { ResultStore } from '@shared/store/results'
+import { CarryOver, type HeldFilm } from '@shared/carryover'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { choosePreview } from '@main/previewplan'
@@ -213,6 +216,10 @@ export async function createBridge(): Promise<WtaApi> {
     watched: boolean
   }>()
   const playbackActive = new Signal<boolean>()
+  /** Resume carried over: the held player is showing; see `carry` below. */
+  const carryReleased = new Signal<null>()
+  /** Keys for the preview standing in. The phone has none; the API is shared. */
+  const carryAction = new Signal<CarryAction>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
   const playerUpNext = new Signal<UpNextOffer | null>()
@@ -476,6 +483,18 @@ export async function createBridge(): Promise<WtaApi> {
     through main. Declared before the surface, which mounts the overlay on
     every load; the closures below read the rest of the bridge when they run.
   */
+  /**
+   * Resume carried over from the detail view's preview (the owner,
+   * 2026-09-28; `shared/carryover.ts`): the player loads held, out of sight
+   * and silent, while the preview plays on in its place, and shows once its
+   * film is at the preview's second. Declared up here because the overlay's
+   * config reads it; the rest is beside `setMini`.
+   */
+  let carry: CarryOver | null = null
+  /** The held player's film, as the relay last reported it. */
+  let heldFilm: HeldFilm | null = null
+  let carryTimer: ReturnType<typeof setInterval> | null = null
+
   const overlayHub = createOverlayHub()
   const overlayConfig = new Signal<PlayerOverlayConfig>()
   const currentOverlayConfig = (): PlayerOverlayConfig => ({
@@ -483,6 +502,7 @@ export async function createBridge(): Promise<WtaApi> {
     fullscreen: phoneFullscreen.current(),
     mini,
     subtitleLanguage: store.read().settings.subtitleLanguage,
+    held: carry !== null && !carry.done ? { muted: carry.last()?.muted ?? false } : null,
   })
   const announceOverlayConfig = (): void => overlayConfig.emit(currentOverlayConfig())
   const phoneFullscreen = createPhoneFullscreen(() => announceOverlayConfig())
@@ -579,6 +599,11 @@ export async function createBridge(): Promise<WtaApi> {
      * television has the picture while casting, and resumes on its own.
      */
     onFilmTime: (time) => {
+      if (carry !== null && !carry.done) {
+        heldFilm = { seconds: time.seconds, duration: time.duration, playing: time.playing }
+        stepCarry()
+        return
+      }
       if (!session || onTv || resumeSeek === null) return
       const to = resumeSeek.next(time, Date.now())
       if (to !== null) surface.seek(to, time.duration)
@@ -672,13 +697,57 @@ export async function createBridge(): Promise<WtaApi> {
    */
   let mini = false
 
+  /** The chrome and the overlay stand down in the corner, and while the player is held. */
+  const applyHidden = (): void => {
+    const held = carry !== null && !carry.done
+    chrome.setHidden(mini || held)
+    overlayHost.setHidden(mini || held)
+  }
+
+  const endCarryTimer = (): void => {
+    if (carryTimer) clearInterval(carryTimer)
+    carryTimer = null
+  }
+
+  /** Open held: the surface out of sight, our controls down, the film silent (`held` in its config). */
+  const holdForCarry = (): void => {
+    carry = new CarryOver(Date.now())
+    heldFilm = null
+    surface.setConcealed(true)
+    applyHidden()
+    announceOverlayConfig()
+    endCarryTimer()
+    // On a clock as well as on the film's reports: a film that never reports
+    // must still run out the give-up time.
+    carryTimer = setInterval(() => stepCarry(), 500)
+  }
+
+  const stepCarry = (): void => {
+    if (carry === null || carry.done) return
+    const move = carry.step(heldFilm, Date.now())
+    if (move.kind === 'seek') surface.seek(move.to, heldFilm?.duration ?? 0)
+    if (move.kind === 'release') releaseCarry()
+  }
+
+  /** Show the held player, with the preview's sound and pause; the page then lets the preview go. */
+  const releaseCarry = (): void => {
+    if (carry === null || carryTimer === null) return
+    endCarryTimer()
+    carry.release()
+    surface.setConcealed(false)
+    applyHidden()
+    announceOverlayConfig()
+    if (carry.last()?.paused) surface.setPaused(true)
+    console.log(`[carry] player shown at ${heldFilm ? Math.round(heldFilm.seconds) : '?'} s`)
+    carryReleased.emit(null)
+  }
+
   const setMini = (next: boolean): void => {
     if (mini === next || (next && session === null)) return
     mini = next
     // Hidden, not closed: the chrome's state is what the full player comes
     // back to. Its countdown to switch source stands down meanwhile.
-    chrome.setHidden(next)
-    overlayHost.setHidden(next)
+    applyHidden()
     phoneFullscreen.setActive(!next && session !== null && !onTv)
     announceOverlayConfig()
     playerMini.emit(next)
@@ -1102,6 +1171,8 @@ export async function createBridge(): Promise<WtaApi> {
    * view.
    */
   const closePlayer = (): void => {
+    endCarryTimer()
+    carry = null
     if (session) {
       leaveCandidate(false)
       settleProgress(session.req)
@@ -1795,7 +1866,7 @@ export async function createBridge(): Promise<WtaApi> {
      * that chrome leaves. Only the surface differs — a `WebContentsView` there,
      * an iframe here.
      */
-    play: async (req: PlayRequest) => {
+    play: async (req: PlayRequest, options?: { carry?: boolean }) => {
       const enabled = orderedForRequest(req)
       if (enabled.length === 0) {
         return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }
@@ -1845,7 +1916,10 @@ export async function createBridge(): Promise<WtaApi> {
         writtenAt: now,
         namedEpisode: null,
       }
+      if (options?.carry) holdForCarry()
       showCandidate(0)
+      // The carry does the seeking, to where the preview is by then.
+      if (carry !== null) resumeSeek = null
       chrome.open()
       phoneFullscreen.setActive(!onTv)
       playbackActive.emit(true)
@@ -2004,6 +2078,13 @@ export async function createBridge(): Promise<WtaApi> {
         const result = previewResult(where, streamedMs, Date.now())
         if (result) testResults.record([result])
       },
+      carry: async (report: CarryReport): Promise<void> => {
+        if (carry === null || carry.done) return
+        const mutedBefore = carry.last()?.muted
+        carry.update({ ...report, at: Date.now() })
+        if (report.muted !== mutedBefore) announceOverlayConfig()
+      },
+      carryEnd: async (): Promise<void> => releaseCarry(),
       keep: async (req: PlayRequest, seconds: number, duration: number): Promise<void> => {
         if (!Number.isFinite(seconds) || seconds <= 0) return
         writePosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false })
@@ -2095,6 +2176,8 @@ export async function createBridge(): Promise<WtaApi> {
       playbackSettled: (cb) => playbackSettled.subscribe(cb),
       storeChanged: (cb) => storeChanged.subscribe(cb),
       playbackActive: (cb) => playbackActive.subscribe(cb),
+      carryReleased: (cb) => carryReleased.subscribe(() => cb()),
+      carryAction: (cb) => carryAction.subscribe(cb),
       playerState: (cb) => playerState.subscribe(cb),
       playerMini: (cb) => playerMini.subscribe(cb),
       playerPaused: (cb) => playerPaused.subscribe(cb),
