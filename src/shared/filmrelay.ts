@@ -245,8 +245,15 @@ export function chooseFilm(states: Iterable<FilmState>): FilmState | null {
  * video and frames. Frames are exempt because hiding one hides the film inside
  * it: the study measured a black picture with the video still running. The
  * native control bar goes too, for players that use it.
+ *
+ * The page's own background is made black as well. A hidden element paints
+ * no background, and a letterboxed video's bands are transparent, so what
+ * showed beside the film was the document's default white: thin strips on the
+ * desktop, wide columns on a phone held upright (the owner, 2026-09-29).
  */
 export const HIDE_CSS =
+  'html,body{background:#000!important}' +
+  'video{background:#000!important}' +
   'body *:not(video):not(iframe){visibility:hidden!important}' +
   'video,iframe{visibility:visible!important}' +
   'video::-webkit-media-controls,video::-webkit-media-controls-enclosure{display:none!important}'
