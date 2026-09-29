@@ -84,6 +84,16 @@ export class PreviewFilm {
   }
 
   /**
+   * Move the film, for the handover from the preview cache: the page aims it
+   * at the second the kept copy is showing. Only ever forward of the saved
+   * place, so the check that keeps the film from starting early is not
+   * undone by it.
+   */
+  seekTo(seconds: number): void {
+    this.link.seekTo(seconds)
+  }
+
+  /**
    * Act on what the frames last reported. Called after every report and on a
    * heartbeat; each call does at most one of each thing, so calling it often
    * costs nothing.

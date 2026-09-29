@@ -18,7 +18,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { CH, EV, PREVIEW_MUTED, PREVIEW_PAUSED, PREVIEW_STATE } from '@shared/ipc'
+import { CH, EV, PREVIEW_MUTED, PREVIEW_PAUSED, PREVIEW_SEEK, PREVIEW_STATE } from '@shared/ipc'
 import type { BarState, PlayerContext, PlayerOverlayConfig, WtaPlayerApi } from '@shared/ipc'
 import { isPlayerAction, isTransportAction, type TransportAction } from '@shared/playerkeys'
 
@@ -85,6 +85,13 @@ const api: WtaPlayerApi = {
       }
       ipcRenderer.on(PREVIEW_PAUSED, listener)
       return () => ipcRenderer.removeListener(PREVIEW_PAUSED, listener)
+    },
+    onSeek: (callback) => {
+      const listener = (_event: unknown, seconds: unknown): void => {
+        if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) callback(seconds)
+      }
+      ipcRenderer.on(PREVIEW_SEEK, listener)
+      return () => ipcRenderer.removeListener(PREVIEW_SEEK, listener)
     },
   },
   subtitles: {

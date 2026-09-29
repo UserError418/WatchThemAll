@@ -121,8 +121,9 @@ export interface IpcDeps {
   results: ResultsAccess
   /** The detail view's stream preview; see `previewPlanFor` in `index.ts`. */
   preview: {
-    plan: (req: PlayRequest) => PreviewPlan | null
-    keep: (req: PlayRequest, seconds: number, duration: number) => void
+    plan: (req: PlayRequest) => Promise<PreviewPlan | null>
+    /** `cacheSource`: also keep a window of the preview's stream, from this source, from there (the preview cache). */
+    keep: (req: PlayRequest, seconds: number, duration: number, cacheSource: string | null) => void
     /** Where the preview standing in for the held player is; see `InlinePlayer.carryTo`. */
     carry: (report: CarryReport) => void
     /** The preview stopped standing in; see `InlinePlayer.carryEnd`. */
@@ -349,8 +350,8 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
    * shared with the phone rather than written twice.
    */
   ipcMain.handle(CH.previewPlan, (_e, req: PlayRequest) => deps.preview.plan(req))
-  ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number) =>
-    deps.preview.keep(req, Number(seconds), Number(duration)),
+  ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number, cacheSource: unknown) =>
+    deps.preview.keep(req, Number(seconds), Number(duration), typeof cacheSource === 'string' ? cacheSource : null),
   )
   ipcMain.handle(CH.previewCarry, (_e, report: unknown) => {
     if (isCarryReport(report)) deps.preview.carry(report)

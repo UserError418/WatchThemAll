@@ -25,6 +25,19 @@ import { applyProviderReferer } from './identity'
 import { PLAYER_SHELL_PATH } from './localserver'
 import { clickPlayInFrames } from './pressplay'
 import { blockAdverts, installFilmRelay, keepProviderInPlace, refusePopupsAndDownloads } from './providerguard'
+import { createCastCapture, type Candidate } from './castcapture'
+
+/**
+ * What the current preview's page fetched, for the preview cache to keep a
+ * window of its stream when the preview is left (`segmentstore.ts`). One
+ * preview plays at a time; each new one starts the list afresh.
+ */
+const capture = createCastCapture()
+
+/** The current preview's requests, newest first. */
+export function previewRequests(): Candidate[] {
+  return capture.candidates()
+}
 
 /** The shell URL's preview target, if `url` is this app's shell in preview mode. */
 export function previewTarget(url: string | undefined, shellBase: string): string | null {
@@ -105,6 +118,8 @@ function protect(guest: WebContents, shellBase: string): void {
   // mute. The page lifts this with the element's own `setAudioMuted`.
   guest.setAudioMuted(true)
   guest.setBackgroundThrottling(false)
+  capture.clear()
+  capture.watch(guest.session)
   refusePopupsAndDownloads(guest)
   if (target !== null) applyProviderReferer(guest.session, rootUrl()!)
   blockAdverts(guest.session, rootUrl)

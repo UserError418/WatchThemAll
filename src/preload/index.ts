@@ -82,8 +82,8 @@ const api: WtaApi = {
   openExternal: (url: string) => ipcRenderer.invoke(CH.openExternal, url),
   preview: {
     plan: (req: PlayRequest) => ipcRenderer.invoke(CH.previewPlan, req),
-    keep: (req: PlayRequest, seconds: number, duration: number) =>
-      ipcRenderer.invoke(CH.previewKeep, req, seconds, duration),
+    keep: (req: PlayRequest, seconds: number, duration: number, options?: { cacheSource?: string }) =>
+      ipcRenderer.invoke(CH.previewKeep, req, seconds, duration, options?.cacheSource ?? null),
     record: (req: PlayRequest, providerId: string, streamedMs: number) =>
       ipcRenderer.invoke(CH.previewRecord, req, providerId, streamedMs),
     carry: (report: CarryReport) => ipcRenderer.invoke(CH.previewCarry, report),

@@ -54,6 +54,23 @@ export type SaveOutcome =
   | { ok: true; startSeconds: number; endSeconds: number; bytes: number }
   | { ok: false; reason: string }
 
+/** Segments downloaded at once: enough to overlap the round trips, few enough not to crowd a phone's connection. */
+const DOWNLOADS_AT_ONCE = 3
+
+/** `work` over `items`, at most `limit` at a time; results in the items' order. */
+async function inParallel<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await work(items[i]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
+  return results
+}
+
 /** How many captured requests to try as the playlist. The chain the player went through is a handful; more are adverts. */
 const CANDIDATES_TRIED = 20
 
@@ -145,18 +162,26 @@ export async function saveStreamWindow(
     bytes += got.bytes
   }
 
-  /** The segments downloaded so far, in order: what is kept if a later one fails. */
-  const kept: StreamWindow['segments'] = []
-  for (const segment of window.segments) {
+  // A few at a time: the preview's plan waits for this window straight after
+  // the player closes, so its download time is time to the first frame.
+  // Sequential, the desktop took 2.1 s for VidSrc's six segments.
+  const results = await inParallel(window.segments, DOWNLOADS_AT_ONCE, async (segment) => {
     const got = await io.download(segment.url, headers, nameOf(segment.url))
     const good = got !== null && (got.status === 200 || got.status === 206) && got.bytes > 0
     // An error page or a picture served in the segment's place is not video,
     // and neither is a segment of a different kind than its playlist says.
     // Encrypted segments are opaque bytes, so only the clear ones are sniffed.
-    if (!good || (segment.key === null && segmentExtension(got.head) !== expected)) break
+    return good && (segment.key !== null || segmentExtension(got.head) === expected) ? got.bytes : null
+  })
+  /** The segments that arrived, in order, up to the first that did not: what is kept. */
+  const kept: StreamWindow['segments'] = []
+  for (const [i, segment] of window.segments.entries()) {
+    if (results[i] === null || results[i] === undefined) break
     kept.push(segment)
-    bytes += got.bytes
   }
+  // Every file written counts against the budget, played or not: a segment
+  // after a failed one arrived all the same.
+  for (const size of results) bytes += size ?? 0
   if (kept.length === 0) return { ok: false, reason: 'segments-unreachable' }
   const last = kept[kept.length - 1]!
   const endSeconds = last.start + last.seconds

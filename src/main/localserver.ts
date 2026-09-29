@@ -47,6 +47,37 @@ const MIME: Record<string, string> = {
 
 let server: Server | null = null
 
+/**
+ * The preview cache's files (`segmentstore.ts`), served under `/__cache/` so
+ * the detail view's own `<video>` loads them from the app's origin. Null until
+ * the store is ready. Only a window id and a file name of the store's own
+ * making are answered: nothing else under the user data directory is.
+ */
+let cacheRoot: string | null = null
+const CACHE_FILE = /^\/__cache\/([a-z0-9-]+)\/([a-z0-9]+\.(m3u8|ts|m4s|mp4|key))$/
+const CACHE_MIME: Record<string, string> = {
+  m3u8: 'application/vnd.apple.mpegurl',
+  ts: 'video/mp2t',
+  m4s: 'video/iso.segment',
+  mp4: 'video/mp4',
+  key: 'application/octet-stream',
+}
+
+export function serveCacheFrom(root: string | null): void {
+  cacheRoot = root
+}
+
+async function serveCached(res: ServerResponse, pathname: string): Promise<boolean> {
+  const match = CACHE_FILE.exec(pathname)
+  if (!match || cacheRoot === null) return false
+  const file = join(cacheRoot, match[1]!, match[2]!)
+  const info = await stat(file)
+  if (!info.isFile()) return false
+  res.writeHead(200, { 'Content-Type': CACHE_MIME[match[3]!]!, 'Content-Length': info.size, 'Cache-Control': 'no-store' })
+  createReadStream(file).pipe(res)
+  return true
+}
+
 /* ── The player shell ───────────────────────────────────────────────────────
  *
  * A page whose only content is a full-bleed iframe pointing at the provider.
@@ -195,6 +226,10 @@ export function startRendererServer(rendererDir: string): Promise<string> {
 
           if (pathname === PLAYER_SHELL_PATH) {
             await servePlayerShell(res, searchParams.get('src'), searchParams.get('bare') === '1', root)
+            return
+          }
+          if (pathname.startsWith('/__cache/')) {
+            if (!(await serveCached(res, pathname))) res.writeHead(404).end('Not found')
             return
           }
           const requested = decodeURIComponent(pathname === '/' ? '/index.html' : pathname)

@@ -877,6 +877,22 @@ export interface PreviewPlan {
   providerName: string
   /** Where the film should be: the saved position, or 0. */
   startSeconds: number
+  /**
+   * A window of this source's stream kept on this device, covering
+   * `startSeconds`: played at once by the page's own `<video>` while the
+   * source loads behind it (the preview cache, `main/segmentwindow.ts`).
+   */
+  cached: CachedPreview | null
+}
+
+export interface CachedPreview {
+  /** The kept window's playlist, on the app's own origin. */
+  src: string
+  /** Film time of the kept video's first frame (its `currentTime` 0), and of its last. */
+  startSeconds: number
+  endSeconds: number
+  /** The whole film's length. */
+  filmSeconds: number
 }
 
 /**
@@ -888,6 +904,8 @@ export const PREVIEW_STATE = 'wta:preview-state'
 export const PREVIEW_MUTED = 'wta:preview-muted'
 /** The page pauses or resumes the preview's film: Resume carried over, and Space pressed. */
 export const PREVIEW_PAUSED = 'wta:preview-paused'
+/** The page moves the preview's film: handing over from the preview cache at the same second. */
+export const PREVIEW_SEEK = 'wta:preview-seek'
 
 /** Where a preview standing in for the player is; see `shared/carryover.ts`. */
 export interface CarryReport {
@@ -950,7 +968,7 @@ export interface WtaApi {
      * Keep where the preview got to as the place to resume from. Only called
      * past the grace period: five seconds heard, not just seen.
      */
-    keep(req: PlayRequest, seconds: number, duration: number): Promise<void>
+    keep(req: PlayRequest, seconds: number, duration: number, options?: { cacheSource?: string }): Promise<void>
     /**
      * File what the preview measured as a test result for its source: it
      * played, this many milliseconds after the preview opened. Once per
@@ -1437,6 +1455,7 @@ export interface WtaPlayerApi {
     report(state: PreviewReport): void
     onMuted(cb: (muted: boolean) => void): () => void
     onPaused(cb: (paused: boolean) => void): () => void
+    onSeek(cb: (seconds: number) => void): () => void
   }
 }
 

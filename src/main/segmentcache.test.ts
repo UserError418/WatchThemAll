@@ -10,6 +10,7 @@ const W = (patch: Partial<CachedWindow> = {}): CachedWindow => ({
   providerId: 'vidsrc-me',
   startSeconds: 595.6,
   endSeconds: 625.6,
+  filmSeconds: 2518.7,
   bytes: 6_600_000,
   savedAt: 1_000,
   ...patch,

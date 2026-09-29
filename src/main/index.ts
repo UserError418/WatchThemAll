@@ -23,9 +23,10 @@ import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
 import { applyBrowserIdentity } from './identity'
-import { playerShellUrl, startRendererServer, stopRendererServer } from './localserver'
+import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
+import { createSegmentStore, type SegmentStore, type WindowWhere } from './segmentstore'
 import { choosePreview } from './previewplan'
-import { allowStreamPreviews } from './previewview'
+import { allowStreamPreviews, previewRequests } from './previewview'
 import { isProbeRun, probeAndQuit } from './probecli'
 import type { PlayCandidate } from './providers'
 import type { VideoPosition } from './playerview'
@@ -212,6 +213,8 @@ const getMainWindow = (): BrowserWindow | null =>
  * Held here so re-creating the window on `activate` reuses the same server.
  */
 let rendererBaseUrl: string | null = null
+/** The preview cache's files; null until it has been opened, and on a probe run. */
+let segmentStore: SegmentStore | null = null
 
 async function createMainWindow(): Promise<void> {
   if (!process.env.ELECTRON_RENDERER_URL) {
@@ -746,8 +749,10 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
  * enabled sources in Automatic's order for the ties. Without the local server
  * (a dev build on Vite) there is no shell to preview in, so none.
  */
-function previewPlanFor(req: PlayRequest): PreviewPlan | null {
+async function previewPlanFor(req: PlayRequest): Promise<PreviewPlan | null> {
   if (!rendererBaseUrl) return null
+  // Straight after the player: its window may still be arriving, and is the one to start from.
+  await segmentStore?.settled(titleKey(req), PLAN_WAITS_FOR_SAVE_MS)
   const doc = store.read()
   const key = titleKey(req)
   const choice = choosePreview({
@@ -757,20 +762,55 @@ function previewPlanFor(req: PlayRequest): PreviewPlan | null {
     resume: resumeOfferFor(doc.resumePoints, req),
   })
   if (choice === null) return null
+  const kept = segmentStore?.find(windowWhere(req, choice.provider.id), choice.startSeconds) ?? null
   return {
     surface: 'webview',
     src: playerShellUrl(rendererBaseUrl, choice.url, { preview: { startSeconds: choice.startSeconds } }),
     providerId: choice.provider.id,
     providerName: choice.provider.name,
     startSeconds: choice.startSeconds,
+    cached: kept && {
+      src: `${rendererBaseUrl}${kept.path}`,
+      startSeconds: kept.startSeconds,
+      endSeconds: kept.endSeconds,
+      filmSeconds: kept.filmSeconds,
+    },
   }
 }
 
-/** Keep where a preview got to, past its grace period, as the player would have. */
-function keepPreviewPosition(req: PlayRequest, seconds: number, duration: number): void {
+/** How long a preview's plan waits for the window the player is saving; the source would take longer to start. */
+const PLAN_WAITS_FOR_SAVE_MS = 5_000
+
+/** Which window of the preview cache a request and source are. */
+function windowWhere(req: PlayRequest, providerId: string): WindowWhere {
+  const episode = episodeOf(req)
+  return { titleKey: titleKey(req), season: episode?.season ?? null, episode: episode?.episode ?? null, providerId }
+}
+
+/**
+ * Keep a window of the stream a page was playing, from where it stopped: the
+ * player on closing, the preview on being left. In the background, one save
+ * at a time; nothing waits for it.
+ */
+function keepStreamWindow(
+  req: PlayRequest,
+  providerId: string | null,
+  position: { seconds: number; duration: number } | null,
+  requests: readonly { url: string; headers: Record<string, string> }[],
+): void {
+  if (segmentStore === null || providerId === null || position === null || requests.length === 0) return
+  void segmentStore.save(windowWhere(req, providerId), requests, position, req.runtimeMinutes ?? null)
+}
+
+/**
+ * Keep where a preview got to, past its grace period, as the player would
+ * have; `cacheSource`: its stream too, from there, for the preview cache.
+ */
+function keepPreviewPosition(req: PlayRequest, seconds: number, duration: number, cacheSource: string | null): void {
   if (!Number.isFinite(seconds) || seconds <= 0) return
   rememberPosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false, paused: false })
   pushPositions.now()
+  if (cacheSource !== null) keepStreamWindow(req, cacheSource, { seconds, duration }, previewRequests())
 }
 
 /** Where this episode or film was left, in seconds. Zero if it was not. */
@@ -846,6 +886,10 @@ function setPlayerMini(mini: boolean): void {
 function closePlayer(announce = true): void {
   if (!player) return
 
+  // What the player was fetching, read before it goes: the preview cache keeps
+  // a window of it from here. Not while casting: the picture here was a muted
+  // copy, and the television's place is not this stream's.
+  if (!onTv) keepStreamWindow(player.context, player.currentProviderId(), player.position(), cast.candidates())
   leaveCurrent()
   upNext.reset()
   player.destroy()
@@ -1115,6 +1159,13 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     await store.load()
     await resultStore.load()
+    try {
+      segmentStore = await createSegmentStore(join(app.getPath('userData'), 'preview-cache'))
+      serveCacheFrom(segmentStore.root)
+    } catch (error) {
+      // The preview then simply starts from its source, as before the cache.
+      console.log(`[cache] unavailable: ${String(error)}`)
+    }
 
     // Before any window is created: providers reject Electron's own
     // User-Agent, so every request the app makes has to look like Chrome.

@@ -21,6 +21,8 @@ export interface CachedWindow {
   /** Film time of the kept video's first frame, and of its last. */
   startSeconds: number
   endSeconds: number
+  /** The whole film's length, as the player's element reported it. */
+  filmSeconds: number
   bytes: number
   savedAt: number
 }
@@ -105,6 +107,7 @@ export function readIndex(raw: unknown): CachedWindow[] {
       typeof v.providerId === 'string' &&
       typeof v.startSeconds === 'number' &&
       typeof v.endSeconds === 'number' &&
+      typeof v.filmSeconds === 'number' &&
       typeof v.bytes === 'number' &&
       typeof v.savedAt === 'number'
     )

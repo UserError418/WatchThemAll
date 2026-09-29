@@ -2113,6 +2113,7 @@ export async function createBridge(): Promise<WtaApi> {
           providerId: choice.provider.id,
           providerName: choice.provider.name,
           startSeconds: choice.startSeconds,
+          cached: null,
         }
       },
       record: async (req: PlayRequest, providerId: string, streamedMs: number): Promise<void> => {
@@ -2127,7 +2128,7 @@ export async function createBridge(): Promise<WtaApi> {
         if (report.muted !== mutedBefore) announceOverlayConfig()
       },
       carryEnd: async (): Promise<void> => releaseCarry(),
-      keep: async (req: PlayRequest, seconds: number, duration: number): Promise<void> => {
+      keep: async (req: PlayRequest, seconds: number, duration: number, _options?: { cacheSource?: string }): Promise<void> => {
         if (!Number.isFinite(seconds) || seconds <= 0) return
         writePosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false })
         pushPositions.now()

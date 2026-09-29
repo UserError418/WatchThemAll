@@ -21,8 +21,10 @@
   import TrailerEmbed from './TrailerEmbed.svelte'
   import StreamPreview, { CARRY_HANDOVER_FADE_MS, CARRY_HANDOVER_HOLD_MS, STREAM_FADE_MS } from './StreamPreview.svelte'
   import { carrying } from '../lib/carry.svelte'
+  import CachedStream from './CachedStream.svelte'
+  import { CarryOver } from '@shared/carryover'
   import { PreviewGrace } from '../lib/previewgrace'
-  import type { PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
+  import type { CachedPreview, PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
   import { untrack } from 'svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
   import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
@@ -341,6 +343,9 @@
       // `carry` below). Where it is now is where the player's URL starts,
       // heard or not: Resume was pressed on what is on screen.
       startCarry()
+      // The copy is what is standing in, and the player replaces the source's
+      // preview loading behind it: that one goes now, and its connection with it.
+      if (copyInFront) streamStop = 'player'
       await window.wta.preview.keep(stream.req, lastReport.seconds, lastReport.duration).catch(() => {})
     } else {
       // The real player takes over: the preview stops first, and a place it
@@ -615,13 +620,110 @@
     grace = new PreviewGrace()
     kept = false
     recordedKey = null
+    dropCopy()
     void window.wta.preview
       .plan(req)
       .then((plan) => {
-        if (asked === planAsked) stream = { key, req, plan }
+        if (asked !== planAsked) return
+        stream = { key, req, plan }
+        if (plan?.cached) adoptCopy(plan.cached)
       })
       .catch(() => {})
   }
+
+  /* ── The preview cache ───────────────────────────────────────────────────
+   *
+   * A window of the stream this device kept when the viewer last stopped
+   * (the owner, 2026-09-29; `main/segmentwindow.ts`), played by the page's
+   * own `<video>` the moment the plan says there is one. The source's own
+   * preview loads behind it, held out of sight and silent, and takes over
+   * at the copy's second: the handover is `CarryOver`'s, as for Resume, with
+   * the copy as the place and the source's film as the one being moved
+   * there. Until then the copy is what is on screen, so it is what the
+   * grace period, the carry and Resume read. If the source never comes, the
+   * copy plays to its end, holds its last frame for as long as the source
+   * may still come, and then gives way to the still.
+   */
+  let copy = $state.raw<CachedPreview | null>(null)
+  /** The copy's first frame is up. */
+  let copyShown = $state(false)
+  /** The copy played to its end, and holds its last frame. */
+  let copyEnded = $state(false)
+  /** The source's preview has taken over; the copy stays under it for the fade. */
+  let handedOver = $state(false)
+  let handover: CarryOver | null = null
+  /** Where the handover wants the source's film; a new object each time. */
+  let freshSeek = $state.raw<{ seconds: number } | null>(null)
+  let copyTimer: ReturnType<typeof setTimeout> | undefined
+
+  /** The copy is the one on screen, and the source's preview is held behind it. */
+  const copyInFront = $derived(copy !== null && !handedOver)
+
+  function adoptCopy(kept: CachedPreview): void {
+    copy = kept
+    copyShown = false
+    copyEnded = false
+    handedOver = false
+    freshSeek = null
+    handover = new CarryOver(Date.now())
+  }
+
+  function dropCopy(): void {
+    clearTimeout(copyTimer)
+    copy = null
+    handover = null
+    handedOver = false
+    freshSeek = null
+  }
+
+  /** The source took over: fade it in over the copy, then let the copy go. */
+  function finishHandover(): void {
+    handedOver = true
+    handover = null
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => (copy = null), STREAM_FADE_MS)
+  }
+
+  function onCopyState(state: { seconds: number; playing: boolean; waiting: boolean; ended: boolean }): void {
+    if (copy === null) return
+    const seconds = copy.startSeconds + state.seconds
+    if (state.playing) copyShown = true
+    copyEnded = state.ended
+    handover?.update({
+      seconds,
+      paused: state.ended || carryPaused,
+      muted: false,
+      stalled: state.waiting,
+      at: Date.now(),
+    })
+    if (handedOver) return
+    const report: PreviewReport = {
+      started: true,
+      seconds,
+      duration: copy.filmSeconds,
+      playing: state.playing && !state.ended,
+      waiting: state.waiting,
+      muted: heroMuted,
+      streamedMs: null,
+    }
+    lastReport = report
+    grace.feed(report)
+    sendCarry()
+    // Nothing is coming to take over: back to the still.
+    if (state.ended && streamStop === 'failed' && !carrying.active) dropCopy()
+  }
+
+  /** The source's preview, out of sight behind the copy: only the handover reads it. */
+  function stepHandover(state: PreviewReport): void {
+    if (handover === null) return
+    const film = state.duration > 0 ? { seconds: state.seconds, duration: state.duration, playing: state.playing, waiting: state.waiting } : null
+    const move = handover.step(film, Date.now())
+    if (move.kind === 'seek') freshSeek = { seconds: move.to }
+    // Shown only once it is itself sure it plays the film (`started`).
+    else if (move.kind === 'release' && state.started) finishHandover()
+  }
+
+  $effect(() => () => clearTimeout(copyTimer))
 
   $effect(() => {
     const key = previewKey
@@ -633,7 +735,7 @@
     const req = untrack(() => previewRequest)!
     startPreview(key, req)
     // Leaving this episode's preview for another: keep a place it earned.
-    return () => void keepPreviewPlace(req)
+    return () => void keepPreviewPlace(req, true)
   })
 
   /*
@@ -694,6 +796,7 @@
     handoverTimer = setTimeout(() => {
       handingOver = false
       streamStop = 'player'
+      dropCopy()
     }, CARRY_HANDOVER_HOLD_MS + CARRY_HANDOVER_FADE_MS)
   }
 
@@ -733,13 +836,15 @@
   })
 
   const showStream = $derived(streamPlan !== null && (!previewAudio.suspended || carrying.active || handingOver))
+  /** The copy is independent of the source's preview: it plays on if that one gives up. */
+  const showCopy = $derived(copy !== null && (!previewAudio.suspended || carrying.active || handingOver))
   /** The mounted stream is really playing (`PreviewReport.started`); it is on screen from here. */
   let streamStarted = $state(false)
   $effect(() => {
     // A stream mounted again (after the player, say) starts over, unseen.
     if (!showStream) streamStarted = false
   })
-  const streamOnScreen = $derived(showStream && streamStarted)
+  const streamOnScreen = $derived((showStream && streamStarted && !copyInFront) || (showCopy && copyShown))
   /**
    * The trailer has been covered for longer than the stream's fade-in
    * (`StreamPreview`'s 600 ms), so taking it away now shows nothing change.
@@ -753,8 +858,30 @@
     const timer = setTimeout(() => (trailerCovered = true), STREAM_FADE_MS)
     return () => clearTimeout(timer)
   })
+  /**
+   * Whether the title has any test results. The trailer is for titles that
+   * have none (the owner, 2026-09-29): a tested title shows its own stream,
+   * from the preview cache at once or from its source within seconds, and
+   * the still meanwhile. Null until known, and no trailer until then.
+   */
+  let tested = $state<boolean | null>(null)
+  $effect(() => {
+    const media = { type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }
+    let current = true
+    void window.wta.providers
+      .outcomes(media, null)
+      .then((state) => {
+        if (current) tested = state.scan !== null
+      })
+      .catch(() => {
+        if (current) tested = false
+      })
+    return () => {
+      current = false
+    }
+  })
   const showTrailer = $derived(
-    showHeroTrailer && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
+    showHeroTrailer && tested === false && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
   )
   /**
    * The source Resume uses while a preview is on: the preview's own. Only
@@ -778,13 +905,19 @@
   }
 
   let kept = false
-  /** Write down where the preview got to, once, if it got past the grace period. */
-  async function keepPreviewPlace(req: PlayRequest): Promise<void> {
+  /**
+   * Write down where the preview got to, once, if it got past the grace
+   * period. `cache`: the preview is being left for good (the detail view
+   * closed, another episode chosen), so its stream is kept from there too;
+   * not when the player takes over, which keeps its own on closing.
+   */
+  async function keepPreviewPlace(req: PlayRequest, cache = false): Promise<void> {
     const place = grace.kept()
     if (place === null || kept) return
     kept = true
+    const cacheSource = cache ? (stream?.plan?.providerId ?? undefined) : undefined
     try {
-      await window.wta.preview.keep(req, place.seconds, place.duration)
+      await window.wta.preview.keep(req, place.seconds, place.duration, { cacheSource })
     } catch {
       // Not keeping it only means resuming from the place saved before.
     }
@@ -797,7 +930,7 @@
 
   // Closing the detail view keeps an earned place too.
   $effect(() => () => {
-    if (stream) void keepPreviewPlace(stream.req)
+    if (stream) void keepPreviewPlace(stream.req, true)
   })
 
   $effect(() => {
@@ -840,21 +973,46 @@
           title="{subject.title} trailer"
         />
       {/if}
+      {#if showCopy && copy}
+        <CachedStream
+          src={copy.src}
+          from={Math.max(0, (stream?.plan?.startSeconds ?? copy.startSeconds) - copy.startSeconds)}
+          muted={carrying.active ? carryMuted : handingOver || heroMuted || !copyShown || handedOver}
+          paused={(carrying.active || handingOver) && carryPaused}
+          carried={copyInFront && (carrying.active || handingOver)}
+          leaving={handingOver}
+          onstate={onCopyState}
+          onfail={() => {
+            console.log('[cache] the kept copy would not play')
+            dropCopy()
+          }}
+          ontap={() => void window.wta.preview.carryEnd().catch(() => {})}
+        />
+      {/if}
       {#if showStream && streamPlan}
         <StreamPreview
           plan={streamPlan}
-          muted={carrying.active ? carryMuted : handingOver || heroMuted || !streamStarted}
+          muted={carrying.active ? carryMuted : handingOver || heroMuted || !streamStarted || copyInFront}
           paused={(carrying.active || handingOver) && carryPaused}
-          carried={carrying.active || handingOver}
+          carried={!copyInFront && (carrying.active || handingOver)}
           leaving={handingOver}
+          hold={copyInFront}
+          seek={freshSeek}
           onstate={(state) => {
+            if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
+            if (copyInFront) {
+              stepHandover(state)
+              return
+            }
             if (state.started) streamStarted = true
             lastReport = state
             grace.feed(state)
-            if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
             sendCarry()
           }}
-          onfail={() => (streamStop = 'failed')}
+          onfail={() => {
+            streamStop = 'failed'
+            if (copyEnded && !carrying.active) dropCopy()
+          }}
           ontap={() => void window.wta.preview.carryEnd().catch(() => {})}
         />
       {/if}

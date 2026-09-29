@@ -30,7 +30,7 @@
    *   `PreviewFilm` the desktop's shell runs.
    */
   import { untrack } from 'svelte'
-  import { PREVIEW_MUTED, PREVIEW_PAUSED, PREVIEW_STATE, type PreviewPlan, type PreviewReport } from '@shared/ipc'
+  import { PREVIEW_MUTED, PREVIEW_PAUSED, PREVIEW_SEEK, PREVIEW_STATE, type PreviewPlan, type PreviewReport } from '@shared/ipc'
   import { FilmLink } from '../player/filmlink'
   import { PreviewFilm } from '../player/previewfilm'
 
@@ -50,12 +50,30 @@
     leaving?: boolean
     /** Paused at the viewer's word; only while carried. */
     paused?: boolean
+    /**
+     * Kept out of sight even once playing: the preview cache's copy is on
+     * screen, and this takes over only when the page says (`hold` lifted).
+     */
+    hold?: boolean
+    /** Move the film to this second; a new object each time asks again. */
+    seek?: { seconds: number } | null
     onstate: (state: PreviewReport) => void
     onfail: () => void
     ontap?: () => void
   }
 
-  const { plan, muted, carried = false, leaving = false, paused = false, onstate, onfail, ontap }: Props = $props()
+  const {
+    plan,
+    muted,
+    carried = false,
+    leaving = false,
+    paused = false,
+    hold = false,
+    seek = null,
+    onstate,
+    onfail,
+    ontap,
+  }: Props = $props()
 
   /**
    * How long a preview may take to show a film. The plan only offers sources
@@ -135,6 +153,12 @@
     if (view === null || !webviewReady) return
     view.send(PREVIEW_PAUSED, paused)
   })
+  $effect(() => {
+    const view = webview
+    const to = seek
+    if (view === null || !webviewReady || to === null) return
+    view.send(PREVIEW_SEEK, to.seconds)
+  })
 
   /* ── Phone: an iframe of the provider, driven from here ──────────────── */
 
@@ -173,6 +197,9 @@
   $effect(() => {
     film?.setPaused(paused)
   })
+  $effect(() => {
+    if (seek !== null) film?.seekTo(seek.seconds)
+  })
 
   function isReport(value: unknown): value is PreviewReport {
     if (typeof value !== 'object' || value === null) return false
@@ -197,7 +224,7 @@
 -->
 <div
   class="stream-frame"
-  class:shown={started}
+  class:shown={started && !hold}
   class:carried
   class:leaving
   style:--fade="{STREAM_FADE_MS}ms"

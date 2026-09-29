@@ -92,6 +92,8 @@ export interface CastService {
   watch(session: Session): void
   /** Drop captures, on every provider, episode or title change. */
   forget(): void
+  /** What the player's page fetched since the last `forget`, newest first (the preview cache reads it too). */
+  candidates(): Candidate[]
 
   startDiscovery(): Promise<void>
   stopDiscovery(): Promise<void>
@@ -207,6 +209,7 @@ export function createCastService(): CastService {
   return {
     watch: (electronSession) => capture.watch(electronSession),
     forget: () => capture.clear(),
+    candidates: () => capture.candidates(),
 
     /**
      * Discovery is a one-shot query rather than a subscription.

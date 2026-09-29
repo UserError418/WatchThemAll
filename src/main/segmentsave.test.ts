@@ -75,7 +75,8 @@ describe('saveStreamWindow', () => {
       ['https://cdn.example/seg/123.ts'],
     )
     const outcome = await saveStreamWindow([{ url: 'https://cdn.example/ep/index.m3u8', headers: HEADERS }], FILM, 42, io)
-    expect(outcome).toEqual({ ok: true, startSeconds: 600, endSeconds: 615, bytes: 3 * 1_300_000 })
+    // The fifth segment arrived too, after the broken fourth, and is on disk.
+    expect(outcome).toEqual({ ok: true, startSeconds: 600, endSeconds: 615, bytes: 4 * 1_300_000 })
     expect(written['index.m3u8']?.match(/#EXTINF/g)).toHaveLength(3)
   })
 
