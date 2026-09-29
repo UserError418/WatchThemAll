@@ -718,9 +718,15 @@
     if (handover === null) return
     const film = state.duration > 0 ? { seconds: state.seconds, duration: state.duration, playing: state.playing, waiting: state.waiting } : null
     const move = handover.step(film, Date.now())
-    if (move.kind === 'seek') freshSeek = { seconds: move.to }
+    if (move.kind === 'seek') {
+      console.log(`[cache] handover: the source's film to ${Math.round(move.to)} s (at ${film ? Math.round(film.seconds) : '?'} s)`)
+      freshSeek = { seconds: move.to }
+    }
     // Shown only once it is itself sure it plays the film (`started`).
-    else if (move.kind === 'release' && state.started) finishHandover()
+    else if (move.kind === 'release' && state.started) {
+      console.log(`[cache] handed over to the source at ${Math.round(state.seconds)} s (${move.why})`)
+      finishHandover()
+    }
   }
 
   $effect(() => () => clearTimeout(copyTimer))
@@ -898,10 +904,10 @@
 
   /** The preview whose stream was filed as a test result: once per preview, however often it re-mounts. */
   let recordedKey: string | null = null
-  function recordPreview(providerId: string, streamedMs: number): void {
+  function recordPreview(providerId: string, streamedMs: number, filmSeconds: number): void {
     if (stream === null || recordedKey === stream.key) return
     recordedKey = stream.key
-    void window.wta.preview.record(stream.req, providerId, streamedMs).catch(() => {})
+    void window.wta.preview.record(stream.req, providerId, streamedMs, filmSeconds).catch(() => {})
   }
 
   let kept = false
@@ -999,7 +1005,7 @@
           hold={copyInFront}
           seek={freshSeek}
           onstate={(state) => {
-            if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs)
+            if (state.streamedMs !== null) recordPreview(streamPlan.providerId, state.streamedMs, state.duration)
             if (copyInFront) {
               stepHandover(state)
               return

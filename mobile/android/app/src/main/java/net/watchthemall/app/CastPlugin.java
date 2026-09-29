@@ -190,6 +190,90 @@ public class CastPlugin extends Plugin {
         fetchPool.execute(() -> fetchTextNow(call, url, headers, limit, binary));
     }
 
+    /**
+     * Fetch a URL with the source's headers straight into a file, for the
+     * preview cache (`src/main/segmentsave.ts`). The bytes never cross into
+     * the WebView: a window is several megabytes, and base64 over the bridge
+     * would triple that in memory for nothing, since the page plays the file
+     * from disk (`convertFileSrc`).
+     *
+     * `path` is relative to the app's files directory and must stay under
+     * `preview-cache/`: nothing else there is this method's to write. Resolves
+     * with the status, the bytes written and the first bytes (base64), which
+     * the TypeScript side reads to tell a segment from an error page.
+     */
+    @PluginMethod
+    public void downloadToFile(PluginCall call) {
+        String url = call.getString("url");
+        String path = call.getString("path");
+        if (url == null || path == null) {
+            call.reject("url and path are required");
+            return;
+        }
+        java.io.File root = new java.io.File(getContext().getFilesDir(), "preview-cache");
+        java.io.File target = new java.io.File(getContext().getFilesDir(), path);
+        try {
+            if (!target.getCanonicalPath().startsWith(root.getCanonicalPath() + java.io.File.separator)) {
+                call.reject("path must be under preview-cache/");
+                return;
+            }
+        } catch (IOException error) {
+            call.reject("bad path");
+            return;
+        }
+        JSObject headers = call.getObject("headers", new JSObject());
+        fetchPool.execute(() -> downloadNow(call, url, headers, target));
+    }
+
+    /** `downloadToFile`'s request, on `fetchPool`. */
+    private static void downloadNow(PluginCall call, String url, JSObject headers, java.io.File target) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setConnectTimeout(15_000);
+            connection.setReadTimeout(20_000);
+            connection.setInstanceFollowRedirects(true);
+            if (headers != null) {
+                Iterator<String> keys = headers.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    connection.setRequestProperty(key, headers.getString(key));
+                }
+            }
+            int status = connection.getResponseCode();
+            long written = 0;
+            byte[] head = new byte[400];
+            int headLength = 0;
+            if (status < 400) {
+                java.io.File parent = target.getParentFile();
+                if (parent != null) parent.mkdirs();
+                try (InputStream in = connection.getInputStream();
+                        java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        if (headLength < head.length) {
+                            int take = Math.min(read, head.length - headLength);
+                            System.arraycopy(buffer, 0, head, headLength, take);
+                            headLength += take;
+                        }
+                        out.write(buffer, 0, read);
+                        written += read;
+                    }
+                }
+            }
+            JSObject result = new JSObject();
+            result.put("status", status);
+            result.put("bytes", written);
+            result.put("head", Base64.encodeToString(head, 0, headLength, Base64.NO_WRAP));
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("download failed: " + error.getMessage());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     /** `fetchText`'s request, on `fetchPool`. A `PluginCall` may be resolved from any thread. */
     private static void fetchTextNow(PluginCall call, String url, JSObject headers, int limit, boolean binary) {
         HttpURLConnection connection = null;

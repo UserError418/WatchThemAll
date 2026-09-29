@@ -80,6 +80,8 @@ export interface InlinePlayer {
   carryTo: (report: CarryReport) => void
   /** The preview stopped standing in: show the player now, wherever its film is. */
   carryEnd: () => void
+  /** Still held behind the preview: not yet shown. */
+  held: () => boolean
   /** Every provider that can serve this title, best first. */
   candidates: PlayCandidate[]
   /** Index into `candidates` of the provider currently loaded. */
@@ -536,6 +538,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const player: InlinePlayer = {
     carryTo: () => {},
     carryEnd: () => {},
+    held: () => false,
     session: contents.session,
     context,
     candidates,
@@ -2331,6 +2334,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (report.muted !== mutedBefore) sendConfig()
   }
   player.carryEnd = releaseHeld
+  player.held = held
 
   player.setBounds(bounds)
   beginLoad()

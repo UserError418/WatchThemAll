@@ -25,6 +25,7 @@ import * as tmdb from './tmdb'
 import { applyBrowserIdentity } from './identity'
 import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
 import { createSegmentStore, type SegmentStore, type WindowWhere } from './segmentstore'
+import { nodeCacheFiles } from './segmentfiles'
 import { choosePreview } from './previewplan'
 import { allowStreamPreviews, previewRequests } from './previewview'
 import { isProbeRun, probeAndQuit } from './probecli'
@@ -529,6 +530,7 @@ function openPlayer(
     onSuggest: (suggestion) => send(EV.playerSuggestion, suggestion),
     onPlayingChange: (playing) => {
       videoPlaying = playing
+      if (playing) notePlayerPlaylist()
       send(EV.playerPaused, !playing)
       // A pause is a stop the other device may pick up from: write the exact
       // place and send it now, rather than at the next five-second sample.
@@ -769,17 +771,30 @@ async function previewPlanFor(req: PlayRequest): Promise<PreviewPlan | null> {
     providerId: choice.provider.id,
     providerName: choice.provider.name,
     startSeconds: choice.startSeconds,
-    cached: kept && {
-      src: `${rendererBaseUrl}${kept.path}`,
-      startSeconds: kept.startSeconds,
-      endSeconds: kept.endSeconds,
-      filmSeconds: kept.filmSeconds,
-    },
+    cached: kept,
   }
 }
 
 /** How long a preview's plan waits for the window the player is saving; the source would take longer to start. */
 const PLAN_WAITS_FOR_SAVE_MS = 5_000
+
+/** The source and episode whose playlist was last noted, so a pause and play does not note it again. */
+let notedPlaylistFor: string | null = null
+
+/**
+ * The player's film is playing: note its playlist for the preview cache
+ * while it is still among the newest requests. A source whose segments have
+ * no file extension floods the capture within a minute.
+ */
+function notePlayerPlaylist(): void {
+  const providerId = player?.currentProviderId() ?? null
+  if (!player || providerId === null || segmentStore === null || onTv) return
+  const where = windowWhere(player.context, providerId)
+  const key = `${where.titleKey}|${where.season}|${where.episode}|${providerId}`
+  if (key === notedPlaylistFor) return
+  notedPlaylistFor = key
+  void segmentStore.notePlaylist(where, cast.candidates(), player.position()?.duration ?? 0, player.context.runtimeMinutes ?? null)
+}
 
 /** Which window of the preview cache a request and source are. */
 function windowWhere(req: PlayRequest, providerId: string): WindowWhere {
@@ -885,6 +900,9 @@ function setPlayerMini(mini: boolean): void {
  */
 function closePlayer(announce = true): void {
   if (!player) return
+  // Closed while still held: the page's preview is standing in for a player
+  // that will now never show, and must stop.
+  if (player.held()) send(EV.carryReleased, null)
 
   // What the player was fetching, read before it goes: the preview cache keeps
   // a window of it from here. Not while casting: the picture here was a muted
@@ -1160,8 +1178,9 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
     await store.load()
     await resultStore.load()
     try {
-      segmentStore = await createSegmentStore(join(app.getPath('userData'), 'preview-cache'))
-      serveCacheFrom(segmentStore.root)
+      const root = join(app.getPath('userData'), 'preview-cache')
+      segmentStore = await createSegmentStore(await nodeCacheFiles(root, () => rendererBaseUrl))
+      serveCacheFrom(root)
     } catch (error) {
       // The preview then simply starts from its source, as before the cache.
       console.log(`[cache] unavailable: ${String(error)}`)
@@ -1292,8 +1311,12 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       preview: {
         plan: previewPlanFor,
         keep: keepPreviewPosition,
+        started: (req, providerId, filmSeconds) =>
+          void segmentStore?.notePlaylist(windowWhere(req, providerId), previewRequests(), filmSeconds, req.runtimeMinutes ?? null),
         carry: (report) => player?.carryTo(report),
-        carryEnd: () => player?.carryEnd(),
+        // Nothing held to show (the player closed, or never opened): the page
+        // is told the carry is over all the same, or it would stand in forever.
+        carryEnd: () => (player?.held() ? player.carryEnd() : send(EV.carryReleased, null)),
       },
       scan,
     })

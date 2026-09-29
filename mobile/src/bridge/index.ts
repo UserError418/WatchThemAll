@@ -112,7 +112,9 @@ import {
   ResumeSeek,
   WrittenPositions,
 } from '@main/resume'
-import { createCastBridge } from './cast'
+import { capture, createCastBridge } from './cast'
+import { createSegmentStore, type SegmentStore, type WindowWhere } from '@main/segmentstore'
+import { phoneCacheFiles } from './segmentfiles'
 import { App as CapacitorApp } from '@capacitor/app'
 import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
@@ -761,7 +763,11 @@ export async function createBridge(): Promise<WtaApi> {
 
   /** Show the held player, with the preview's sound and pause; the page then lets the preview go. */
   const releaseCarry = (): void => {
-    if (carry === null || carryTimer === null) return
+    if (carry === null || carryTimer === null) {
+      // Nothing held: the page is told all the same, or it would stand in forever.
+      carryReleased.emit(null)
+      return
+    }
     endCarryTimer()
     // Shown before its film was ever read (a tap on the preview, the
     // give-up): nothing has put the film at the preview's place, so the
@@ -818,6 +824,33 @@ export async function createBridge(): Promise<WtaApi> {
    * rebuilt per call would lose track of a server it had already started.
    */
   const castBridge = createCastBridge()
+
+  /*
+   * The preview cache (the owner, 2026-09-29; `src/main/segmentwindow.ts`):
+   * a window of the stream kept when the player or the preview is left, for
+   * the detail view to play at once next time. Null until the files are open,
+   * and for good if they cannot be: the preview then starts from its source.
+   */
+  let segmentStore: SegmentStore | null = null
+  void phoneCacheFiles()
+    .then((files) => createSegmentStore(files))
+    .then((store) => (segmentStore = store))
+    .catch((error: unknown) => console.log(`[cache] unavailable: ${String(error)}`))
+
+  /** How long a preview's plan waits for the window the player is saving; the source would take longer to start. */
+  const PLAN_WAITS_FOR_SAVE_MS = 5_000
+
+  const windowWhere = (req: PlayRequest, providerId: string): WindowWhere => {
+    const episode = episodeOf(req)
+    return { titleKey: titleKey(req), season: episode?.season ?? null, episode: episode?.episode ?? null, providerId }
+  }
+
+  /** In the background, one at a time; nothing waits for it. The frames' requests are one buffer, newest first. */
+  const keepStreamWindow = (req: PlayRequest, providerId: string | null, from: { seconds: number; duration: number }): void => {
+    const store = segmentStore
+    if (store === null || providerId === null) return
+    void store.save(windowWhere(req, providerId), capture.list().catch(() => []), from, req.runtimeMinutes ?? null)
+  }
   /**
    * Whether the picture is on the television, so the phone's is blanked.
    *
@@ -1023,6 +1056,14 @@ export async function createBridge(): Promise<WtaApi> {
     const ms = at - progress.candidateShownAt
     const where = { device: testResults.device(), titleKey: titleKey(current.req), episode: episodeOf(current.req), providerId }
     testResults.record([playResult(where, 'play', { at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) })])
+    // The film is playing: its playlist is among the newest requests now, and
+    // will not be once the segments have flooded the capture.
+    void segmentStore?.notePlaylist(
+      windowWhere(current.req, providerId),
+      capture.list().catch(() => []),
+      progress.reading?.duration ?? 0,
+      current.req.runtimeMinutes ?? null,
+    )
   }
 
   const settleOutcome = (req: PlayRequest, providerId: string, switching: boolean): void => {
@@ -1206,9 +1247,22 @@ export async function createBridge(): Promise<WtaApi> {
    * view.
    */
   const closePlayer = (): void => {
+    // Closed while still held (Back during the carry): the page's preview is
+    // standing in for a player that will now never show.
+    if (carry !== null && !carry.done) carryReleased.emit(null)
     endCarryTimer()
     carry = null
     if (session) {
+      // What the player was fetching, before it goes: the preview cache keeps
+      // a window of it from here. Not while casting: the TV's place is not
+      // this stream's.
+      const reading = progress?.reading ?? null
+      if (!onTv && reading !== null && reading.duration !== null) {
+        keepStreamWindow(session.req, session.candidates[session.index]?.provider.id ?? null, {
+          seconds: reading.seconds,
+          duration: reading.duration,
+        })
+      }
       leaveCandidate(false)
       settleProgress(session.req)
     }
@@ -1955,7 +2009,10 @@ export async function createBridge(): Promise<WtaApi> {
       // had finished lived on to the next play (a Watchlist card's, from the
       // mini player) and took away that title's resume seek below.
       if (carry !== null) {
-        releaseCarry()
+        // Only one still in flight is announced as over: a finished one was,
+        // and announcing it again would end the carry this play is starting.
+        if (!carry.done) releaseCarry()
+        endCarryTimer()
         carry = null
       }
       if (options?.carry) holdForCarry()
@@ -2098,8 +2155,10 @@ export async function createBridge(): Promise<WtaApi> {
      */
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
-        const doc = store.read()
         const key = titleKey(req)
+        // Straight after the player: its window may still be arriving, and is the one to start from.
+        await segmentStore?.settled(key, PLAN_WAITS_FOR_SAVE_MS)
+        const doc = store.read()
         const choice = choosePreview({
           providers: automaticOrderFor(req).providers,
           scan: titleResults(testResults.sources(), key, episodeOf(req), 'phone').scan,
@@ -2113,13 +2172,15 @@ export async function createBridge(): Promise<WtaApi> {
           providerId: choice.provider.id,
           providerName: choice.provider.name,
           startSeconds: choice.startSeconds,
-          cached: null,
+          cached: segmentStore?.find(windowWhere(req, choice.provider.id), choice.startSeconds) ?? null,
         }
       },
-      record: async (req: PlayRequest, providerId: string, streamedMs: number): Promise<void> => {
+      record: async (req: PlayRequest, providerId: string, streamedMs: number, filmSeconds = 0): Promise<void> => {
         const where = { device: testResults.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
         const result = previewResult(where, streamedMs, Date.now())
         if (result) testResults.record([result])
+        // The preview's film is playing: note its playlist while the capture still has it.
+        void segmentStore?.notePlaylist(windowWhere(req, providerId), capture.list().catch(() => []), filmSeconds, req.runtimeMinutes ?? null)
       },
       carry: async (report: CarryReport): Promise<void> => {
         if (carry === null || carry.done) return
@@ -2128,10 +2189,11 @@ export async function createBridge(): Promise<WtaApi> {
         if (report.muted !== mutedBefore) announceOverlayConfig()
       },
       carryEnd: async (): Promise<void> => releaseCarry(),
-      keep: async (req: PlayRequest, seconds: number, duration: number, _options?: { cacheSource?: string }): Promise<void> => {
+      keep: async (req: PlayRequest, seconds: number, duration: number, options?: { cacheSource?: string }): Promise<void> => {
         if (!Number.isFinite(seconds) || seconds <= 0) return
         writePosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false })
         pushPositions.now()
+        if (options?.cacheSource) keepStreamWindow(req, options.cacheSource, { seconds, duration })
       },
     },
     openExternal: async (url: string): Promise<boolean> => {

@@ -974,7 +974,7 @@ export interface WtaApi {
      * played, this many milliseconds after the preview opened. Once per
      * preview.
      */
-    record(req: PlayRequest, providerId: string, streamedMs: number): Promise<void>
+    record(req: PlayRequest, providerId: string, streamedMs: number, filmSeconds?: number): Promise<void>
     /** While standing in for the player: where the preview is now. */
     carry(report: CarryReport): Promise<void>
     /** The preview stopped standing in (gone, or tapped): show the player now. */

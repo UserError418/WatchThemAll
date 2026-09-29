@@ -53,6 +53,12 @@ interface CastNative {
     /** `base64` returns the raw bytes, encoded; see `capture.peekBytes`. */
     encoding?: 'text' | 'base64'
   }): Promise<{ status: number; contentType: string; body: string }>
+  /** A URL's bytes straight into `path` under the app's files directory (`preview-cache/` only). */
+  downloadToFile(options: {
+    url: string
+    headers: Record<string, string>
+    path: string
+  }): Promise<{ status: number; bytes: number; head: string }>
   startProxy(options: {
     playlists: Record<string, string>
     targets: Record<string, string>
@@ -110,6 +116,22 @@ const Cast = registerPlugin<CastNative>('Cast')
  * it read it.
  */
 export const capture = {
+  /** What the WebView's frames fetched, newest first: the player's surface and the preview alike. */
+  async list(): Promise<Candidate[]> {
+    return (await Cast.candidates()).candidates
+  },
+  /** A URL's text, with a captured request's headers replayed; for the preview cache. */
+  text(url: string, headers: Record<string, string>, limitBytes = SNIFF_LIMIT_BYTES): Promise<{ status: number; contentType: string; body: string }> {
+    return Cast.fetchText({ url, headers: replayable(headers), limitBytes })
+  },
+  /** A URL's bytes into a file under `preview-cache/`, with a captured request's headers replayed. */
+  async download(url: string, headers: Record<string, string>, path: string): Promise<{ status: number; bytes: number; head: Uint8Array }> {
+    const result = await Cast.downloadToFile({ url, headers: replayable(headers), path })
+    const binary = atob(result.head)
+    const head = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) head[i] = binary.charCodeAt(i)
+    return { status: result.status, bytes: result.bytes, head }
+  },
   /**
    * Fetch the start of one captured request, replaying its headers.
    *

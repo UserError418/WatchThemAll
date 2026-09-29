@@ -122,6 +122,8 @@ export interface IpcDeps {
   /** The detail view's stream preview; see `previewPlanFor` in `index.ts`. */
   preview: {
     plan: (req: PlayRequest) => Promise<PreviewPlan | null>
+    /** The preview's film has started playing: the preview cache notes its playlist while it is fresh. */
+    started: (req: PlayRequest, providerId: string, filmSeconds: number) => void
     /** `cacheSource`: also keep a window of the preview's stream, from this source, from there (the preview cache). */
     keep: (req: PlayRequest, seconds: number, duration: number, cacheSource: string | null) => void
     /** Where the preview standing in for the held player is; see `InlinePlayer.carryTo`. */
@@ -357,10 +359,11 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     if (isCarryReport(report)) deps.preview.carry(report)
   })
   ipcMain.handle(CH.previewCarryEnd, () => deps.preview.carryEnd())
-  ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number) => {
+  ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const result = previewResult(where, Number(streamedMs), Date.now())
     if (result) deps.results.record([result])
+    if (typeof providerId === 'string') deps.preview.started(req, providerId, Number(filmSeconds) || 0)
   })
 
   ipcMain.handle(CH.openExternal, async (_e, url: string): Promise<boolean> => {

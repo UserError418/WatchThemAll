@@ -37,9 +37,17 @@ export interface CapturedRequest {
   headers: Record<string, string>
 }
 
-export interface SaveIo {
-  /** A URL's text, fetched with these headers; null when it could not be reached. */
-  fetchText(url: string, headers: Record<string, string>): Promise<{ status: number; body: string } | null>
+/** Fetching with a source's headers, which the page's own origin could not send. */
+export interface StreamFetch {
+  /**
+   * A URL's text, fetched with these headers; null when it could not be
+   * reached. `limitBytes`: only the start of it. Candidates are sniffed that
+   * way, since most are segments of several megabytes.
+   */
+  fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null>
+}
+
+export interface SaveIo extends StreamFetch {
   /**
    * A URL's bytes, fetched with these headers, written as `name` in the
    * window's directory. Returns the status, the size and the first bytes
@@ -71,6 +79,9 @@ async function inParallel<T, R>(items: readonly T[], limit: number, work: (item:
   return results
 }
 
+/** Enough of a response to see `#EXTM3U` and whether it is a master: a playlist's head. */
+const SNIFF_BYTES = 16 * 1024
+
 /** How many captured requests to try as the playlist. The chain the player went through is a handful; more are adverts. */
 const CANDIDATES_TRIED = 20
 
@@ -99,18 +110,26 @@ function lengthMatches(playlistSeconds: number, filmSeconds: number): boolean {
  */
 async function findPlaylist(
   requests: readonly CapturedRequest[],
-  io: SaveIo,
+  io: StreamFetch,
   fits: (playlistSeconds: number) => boolean,
-): Promise<{ playlist: MediaPlaylist; headers: Record<string, string> } | { reason: string }> {
+): Promise<{ playlist: MediaPlaylist; url: string; headers: Record<string, string> } | { reason: string }> {
   let master: { body: string; url: string; headers: Record<string, string> } | null = null
   /** Why the best candidate so far was refused, for the log when nothing is found. */
   let refused: string | null = null
-  for (const request of requests.slice(0, CANDIDATES_TRIED)) {
-    const text = await io.fetchText(request.url, request.headers)
-    if (text === null || (text.status !== 200 && text.status !== 206)) continue
+  const tried = new Set<string>()
+  for (const request of requests) {
+    if (tried.size >= CANDIDATES_TRIED) break
+    if (tried.has(request.url)) continue
+    tried.add(request.url)
+    const head = await io.fetchText(request.url, request.headers, SNIFF_BYTES)
+    if (head === null || (head.status !== 200 && head.status !== 206)) continue
+    if (!head.body.trimStart().startsWith('#EXTM3U')) continue
+    // A playlist: now the whole of it, unless its head already was.
+    const text = head.body.length < SNIFF_BYTES ? head : await io.fetchText(request.url, request.headers)
+    if (text === null || text.status !== 200) continue
     const parsed = parseMediaPlaylist(text.body, request.url)
     if (parsed.ok) {
-      if (fits(parsed.playlist.totalSeconds)) return { playlist: parsed.playlist, headers: request.headers }
+      if (fits(parsed.playlist.totalSeconds)) return { playlist: parsed.playlist, url: request.url, headers: request.headers }
       refused ??= 'not-the-film'
     } else if (parsed.reason === 'master') master ??= { body: text.body, url: request.url, headers: request.headers }
     else if (parsed.reason !== 'not-a-playlist') refused ??= parsed.reason
@@ -124,7 +143,40 @@ async function findPlaylist(
   if (text === null || text.status !== 200) return { reason: 'variant-unreachable' }
   const parsed = parseMediaPlaylist(text.body, variant.url)
   if (!parsed.ok) return { reason: parsed.reason }
-  return fits(parsed.playlist.totalSeconds) ? { playlist: parsed.playlist, headers: master.headers } : { reason: 'not-the-film' }
+  return fits(parsed.playlist.totalSeconds)
+    ? { playlist: parsed.playlist, url: variant.url, headers: master.headers }
+    : { reason: 'not-the-film' }
+}
+
+/**
+ * Whether a playlist is the film. When the page's own element said how long
+ * the film is, that is the test: the window is a copy of what was on screen,
+ * and the source's preview will show that same stream anyway. TMDB's runtime
+ * is only the guard when the element's length is not known: sources number
+ * some episodes differently (VidRock's S04E05 of The Office is 42 minutes,
+ * TMDB's far shorter), and held to TMDB a stream the viewer had just watched
+ * was refused (measured on the phone, 2026-09-29).
+ */
+function fitsTheFilm(filmSeconds: number, expectedMinutes: number | null): (seconds: number) => boolean {
+  if (Number.isFinite(filmSeconds) && filmSeconds > 0) return (seconds) => lengthMatches(seconds, filmSeconds)
+  return (seconds) => lengthVerdict(seconds, expectedMinutes) !== 'implausible'
+}
+
+/**
+ * The request that is the film's media playlist, found while the film is
+ * playing, so it can be tried first when the window is kept later. By then
+ * the capture may no longer hold it: a source whose segments carry no file
+ * extension (VidRock) floods the capture's forty places within a minute
+ * (measured on the phone, 2026-09-29). `filmSeconds` 0 when not yet known.
+ */
+export async function findStreamPlaylist(
+  requests: readonly CapturedRequest[],
+  io: StreamFetch,
+  filmSeconds: number,
+  expectedMinutes: number | null,
+): Promise<CapturedRequest | { reason: string }> {
+  const found = await findPlaylist(requests, io, fitsTheFilm(filmSeconds, expectedMinutes))
+  return 'reason' in found ? found : { url: found.url, headers: found.headers }
 }
 
 /**
@@ -138,9 +190,7 @@ export async function saveStreamWindow(
   expectedMinutes: number | null,
   io: SaveIo,
 ): Promise<SaveOutcome> {
-  const fits = (seconds: number): boolean =>
-    lengthVerdict(seconds, expectedMinutes) !== 'implausible' && lengthMatches(seconds, from.duration)
-  const found = await findPlaylist(requests, io, fits)
+  const found = await findPlaylist(requests, io, fitsTheFilm(from.duration, expectedMinutes))
   if ('reason' in found) return { ok: false, reason: found.reason }
   const { playlist, headers } = found
 
