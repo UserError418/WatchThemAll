@@ -18,7 +18,6 @@
     OverlayArea,
     PlayerContext,
     PlayerSuggestion,
-    UpNextOffer,
     ProbeVerdict,
     ScanInFlight,
     ScanReason,
@@ -893,34 +892,6 @@
     return () => clearInterval(tick)
   })
 
-  /**
-   * The next-episode countdown, run by main or the bridge (`main/upnext.ts`).
-   *
-   * The clock is theirs: this only draws it, counting down to the offer's own
-   * deadline, so a chrome that mounts or wakes late shows the right number.
-   */
-  let upNext = $state<UpNextOffer | null>(null)
-  let upNextLeft = $state(0)
-  $effect(() =>
-    api?.onUpNext((next) => {
-      upNext = next
-    }),
-  )
-  $effect(() => {
-    const offer = upNext
-    if (!offer) return
-    // The end of an episode is when the controls should be in front of the
-    // viewer, not away: bring the bar back and hold it while the offer stands.
-    awayUntil = null
-    barVisible = true
-    const tick = (): void => {
-      upNextLeft = Math.max(0, Math.ceil((offer.at - Date.now()) / 1000))
-    }
-    tick()
-    const timer = setInterval(tick, 250)
-    return () => clearInterval(timer)
-  })
-
   function switchNow(): void {
     if (!suggestion) return
     countdown = null
@@ -1039,7 +1010,6 @@
     // Not while sent away: the offer waits for the bar, and an auto-switch
     // goes ahead on its own either way.
     if (suggestion && awayUntil === null) barVisible = true
-    if (upNext) barVisible = true
   })
 
   $effect(() => {
@@ -1049,7 +1019,6 @@
     // bar hides with them (the owner, 2026-09-27: "hide together").
     if (touch && !owned) return
     if (suggestion) return
-    if (upNext) return
     // Hovering the chrome holds it open — including hovering a panel, which is
     // a child of it — and so does the shell while paused or in use.
     // A tap is reported as a mouseenter with no leave to follow, so on a
@@ -1516,27 +1485,6 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#snippet upNextBanner(offer: UpNextOffer)}
-  <!--
-    The seconds are hidden from assistive tech for the reason the source offer
-    hides them: `role="status"` would read a live counter out every second.
-  -->
-  <div class="suggestion up-next" class:tv={offer.onTv} role="status">
-    <span class="reason">
-      Next: {episodeCode(offer.season, offer.episode)}{offer.name ? ` · ${offer.name}` : ''}
-    </span>
-    <span class="offer">
-      {offer.onTv ? 'On the television' : 'Playing'}
-      <span class="count" aria-hidden="true">in {upNextLeft}s</span>
-    </span>
-    <button class="switch" onclick={() => void api.upNextNow()}>Play now</button>
-    <button class="wait" onclick={() => void api.upNextCancel()}>Cancel</button>
-    <div class="timer" aria-hidden="true">
-      <span style:width="{Math.min(100, (upNextLeft / 5) * 100)}%"></span>
-    </div>
-  </div>
-{/snippet}
-
 {#snippet castRow(provider: { id: string; name: string }, castable: Castability)}
   {@const dot = providerDot(
     sourceState.outcomes[provider.id],
@@ -1669,7 +1617,6 @@
     onvolume={(level) => void setReceiverVolume(level)}
     onmute={() => void setReceiverMuted(!(castStatus?.muted ?? false))}
   />
-  {#if upNext}{@render upNextBanner(upNext)}{/if}
 {:else if awayUntil !== null}
   <!--
     All that is left of the chrome while it is away, in a view exactly this
@@ -2021,9 +1968,7 @@
     playing. The remote's `stuck` phase already gives the same advice for the
     case that matters, with the source picker one button away.
   -->
-  {#if upNext && !showRemote}
-    {@render upNextBanner(upNext)}
-  {:else if suggestion && !showRemote && awayUntil === null}
+  {#if suggestion && !showRemote && awayUntil === null}
     <div class="suggestion" role="alert">
       <span class="reason">{suggestion.reason}.</span>
       <!--
@@ -2113,18 +2058,6 @@
 
   .reason {
     font-weight: 600;
-  }
-
-  /* Over the remote's lower edge while casting, where the offer slot is
-     covered by the remote itself. */
-  .up-next.tv {
-    position: fixed;
-    left: 50%;
-    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-    transform: translateX(-50%);
-    margin: 0;
-    max-width: calc(100vw - 28px);
-    z-index: 5;
   }
 
   .offer {

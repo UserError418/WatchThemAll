@@ -288,7 +288,7 @@ describe('time going up', () => {
     ])
   })
 
-  /** The end starts the next-episode countdown, so it cannot wait two seconds. */
+  /** The end moves to the next episode, so it cannot wait two seconds. */
   it('reports the end at once', () => {
     vi.useFakeTimers({ now: 1_000_000 })
     const { player, heard } = world()

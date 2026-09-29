@@ -142,9 +142,6 @@ export interface IpcDeps {
   freshenPositions: () => Promise<void>
   /** The user chose to sit out a slow provider rather than switch away. */
   keepWaiting: () => void
-  /** Auto-next: play the offered episode now, or not this time. */
-  upNextNow: () => void
-  upNextCancel: () => void
   /** The user, or the countdown, took the offer to switch. False if there was none. */
   acceptSuggestion: () => boolean
   /** Reload the embed currently playing, in place. */
@@ -522,8 +519,6 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.playSetBounds, (_e, bounds: PlayerBounds) => deps.setPlayerBounds(bounds))
   ipcMain.handle(CH.playClose, () => deps.closePlayer())
   ipcMain.handle(CH.playDismissSuggestion, () => deps.keepWaiting())
-  ipcMain.handle(CH.playUpNextNow, () => deps.upNextNow())
-  ipcMain.handle(CH.playUpNextCancel, () => deps.upNextCancel())
   ipcMain.handle(CH.playAcceptSuggestion, () => deps.acceptSuggestion())
   ipcMain.handle(CH.playReload, () => deps.reloadPlayer())
   // Strictly booleans: anything else from a renderer is a bug, not a request.

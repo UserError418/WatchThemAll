@@ -44,7 +44,6 @@ import type {
   PreviewPlan,
   PlayerState,
   PlayerSuggestion,
-  UpNextOffer,
   RowRequest,
   ForYouPlanRequest,
   ForYouRowRequest,
@@ -225,7 +224,6 @@ export async function createBridge(): Promise<WtaApi> {
   const carryAction = new Signal<CarryAction>()
   const playerState = new Signal<PlayerState | null>()
   const playerSuggestion = new Signal<PlayerSuggestion | null>()
-  const playerUpNext = new Signal<UpNextOffer | null>()
   /** The phone's side of main's `playerMini` / `playerPaused`; see `setMini`. */
   const playerMini = new Signal<boolean>()
   const playerPaused = new Signal<boolean>()
@@ -1362,7 +1360,6 @@ export async function createBridge(): Promise<WtaApi> {
       if (detail === null) return null
       return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
     },
-    announce: (offer) => playerUpNext.emit(offer),
     advance: (next, toTv) => {
       void playerGoTo(next.season, next.episode).then(() => {
         if (toTv) void beamNextToTv()
@@ -1403,8 +1400,6 @@ export async function createBridge(): Promise<WtaApi> {
 
     const place = placeOf(session.req)
     if (place !== null && isEpisodeEnd(reading, session.req.runtimeMinutes)) void upNext.ended(place, true)
-    // The countdown's own timer may be a minute late in the background.
-    upNext.poke()
   })
 
   const playerSwitchProvider = async (providerId: string): Promise<boolean> => {
@@ -1799,9 +1794,6 @@ export async function createBridge(): Promise<WtaApi> {
     subscribeState: (cb) => playerState.subscribe(cb),
     currentState: () => currentPlayerState,
     subscribeSuggestion: (cb) => playerSuggestion.subscribe(cb),
-    subscribeUpNext: (cb) => playerUpNext.subscribe(cb),
-    upNextNow: () => upNext.playNow(),
-    upNextCancel: () => upNext.cancel(),
     minimize: () => setMini(true),
     subscribeMini: (cb) => playerMini.subscribe(cb),
     goTo: playerGoTo,
@@ -2045,8 +2037,6 @@ export async function createBridge(): Promise<WtaApi> {
 
       close: async () => closePlayer(),
       dismissSuggestion: async () => {},
-      upNextNow: async () => upNext.playNow(),
-      upNextCancel: async () => upNext.cancel(),
       reload: playerReload,
       setMini: async (next) => setMini(next),
       setPaused: async (paused) => surface.setPaused(paused),
@@ -2287,7 +2277,6 @@ export async function createBridge(): Promise<WtaApi> {
       playerMini: (cb) => playerMini.subscribe(cb),
       playerPaused: (cb) => playerPaused.subscribe(cb),
       playerSuggestion: (cb) => playerSuggestion.subscribe(cb),
-      playerUpNext: (cb) => playerUpNext.subscribe(cb),
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
       watchlistTest: () => () => {},

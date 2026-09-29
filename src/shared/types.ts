@@ -897,7 +897,7 @@ export interface Settings {
    */
   skipIntro: boolean
   /**
-   * At the end of an episode, count down five seconds and play the next one.
+   * At the end of an episode, play the next one, at once (the owner, 2026-09-29).
    * Series only; see `main/upnext.ts`. On by default (the owner, 2026-09-27).
    */
   autoNext: boolean

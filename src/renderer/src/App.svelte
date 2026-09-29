@@ -8,7 +8,7 @@
    * screen and re-rendered all of it whenever anything changed.
    */
   import type { MediaSummary } from '@shared/types'
-  import type { PlayerState, UpNextOffer } from '@shared/ipc'
+  import type { PlayerState } from '@shared/ipc'
   import { library } from './lib/library.svelte'
   import { previewAudio } from './lib/preview.svelte'
   import Browse from './views/Browse.svelte'
@@ -109,8 +109,6 @@
    * not yet exist to hear it.
    */
   let offerStanding = $state(false)
-  /** The next-episode countdown, for the mini player; the chrome hears it itself. */
-  let upNext = $state<UpNextOffer | null>(null)
   let providersOpen = $state(false)
   let paletteOpen = $state(false)
   let ready = $state(false)
@@ -198,7 +196,6 @@
         if (state === null) {
           mini = false
           offerStanding = false
-          upNext = null
         }
       }),
       window.wta.on.playerMini((next) => {
@@ -209,9 +206,6 @@
       }),
       window.wta.on.playerSuggestion((offer) => {
         offerStanding = offer !== null
-      }),
-      window.wta.on.playerUpNext((offer) => {
-        upNext = offer
       }),
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
@@ -451,7 +445,7 @@
 -->
 {#if playing}
   {#if mini}
-    <MiniPlayer player={playing} paused={videoPaused} stalled={offerStanding} {upNext} />
+    <MiniPlayer player={playing} paused={videoPaused} stalled={offerStanding} />
   {:else}
     <PlayerFrame />
   {/if}

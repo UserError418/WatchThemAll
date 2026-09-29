@@ -871,7 +871,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    *
    * Two and a half seconds: the position is saved every second poll (five
    * seconds, see `PERSIST_EVERY_MS`), and the end of an episode, which starts
-   * the next-episode countdown, is noticed within a poll of the last frame.
+   * auto-next, is noticed within a poll of the last frame.
    * It was four until auto-next needed the end sooner; faster than this runs
    * script in every frame of an untrusted page for nothing anyone would notice.
    */

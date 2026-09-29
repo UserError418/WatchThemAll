@@ -90,9 +90,6 @@ export const CH = {
   /** "Keep waiting": stop offering to leave the provider currently loading. */
   playDismissSuggestion: 'play:dismiss-suggestion',
   playAcceptSuggestion: 'play:accept-suggestion',
-  /** Auto-next: play the offered episode now, or say no to it. */
-  playUpNextNow: 'play:up-next-now',
-  playUpNextCancel: 'play:up-next-cancel',
   /** Reload the embed in place, for when a source hangs part-way. */
   playReload: 'play:reload',
   /** Shrink the player into the corner so the app can be browsed, or bring it back. */
@@ -262,8 +259,6 @@ export const EV = {
    * move on their own, because there is nothing there to wait for.
    */
   playerSuggestion: 'evt:player-suggestion',
-  /** The next-episode countdown, or null when there is none. */
-  playerUpNext: 'evt:player-up-next',
 
   /** main → player window: what this window is showing. */
   playerContext: 'evt:player-context',
@@ -791,23 +786,6 @@ export interface CastStatus {
   muted: boolean
 }
 
-/**
- * The next-episode countdown, while it runs. See `main/upnext.ts`.
- *
- * `at` is when it plays by itself, as an epoch time rather than a number of
- * seconds left, so every screen showing it counts down to the same moment
- * however late it heard.
- */
-export interface UpNextOffer {
-  season: number
-  episode: number
-  /** The episode's title, when TMDB has one. */
-  name: string | null
-  at: number
-  /** True when it will be sent to the television, not played here. */
-  onTv: boolean
-}
-
 /** An offer to move to another source, raised when the current one stalls. */
 export interface PlayerSuggestion {
   /** What went wrong, in the user's words. */
@@ -1043,10 +1021,6 @@ export interface WtaApi {
     close(): Promise<void>
     /** "Keep waiting" — stop offering to leave the provider that is loading. */
     dismissSuggestion(): Promise<void>
-    /** Auto-next: play the offered episode now. */
-    upNextNow(): Promise<void>
-    /** Auto-next: not this time. The next episode's end offers again. */
-    upNextCancel(): Promise<void>
     /** Reload the embed in place, without losing the episode position. */
     reload(): Promise<void>
     /**
@@ -1207,8 +1181,6 @@ export interface WtaApi {
     /** Whether the video is paused, as the video itself reports it. */
     playerPaused(cb: (paused: boolean) => void): () => void
     playerSuggestion(cb: (suggestion: PlayerSuggestion | null) => void): () => void
-    /** The next-episode countdown, or null when there is none. */
-    playerUpNext(cb: (offer: UpNextOffer | null) => void): () => void
     /** True while the pointer is near the top edge of the video. */
     playerPointerTop(cb: (nearTop: boolean) => void): () => void
     /**
@@ -1308,10 +1280,6 @@ export interface WtaChromeApi {
    * next offer cannot point back at it.
    */
   acceptSuggestion(): Promise<boolean>
-  /** The next-episode countdown, or null; see `UpNextOffer`. */
-  onUpNext(cb: (offer: UpNextOffer | null) => void): () => void
-  upNextNow(): Promise<void>
-  upNextCancel(): Promise<void>
   /** Jump to this position, in seconds. Used only by the skip-intro button. */
   skipTo(seconds: number): void
   /** Size the skip view to exactly the button, so it covers nothing else. */
