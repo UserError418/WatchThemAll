@@ -16,7 +16,7 @@ import type { PlayRequest, PreviewPlan, TitleRef } from '@shared/ipc'
 import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
-import { UpNextController, isEpisodeEnd, type UpNextPlace } from './upnext'
+import { UpNextController, type UpNextPlace } from './upnext'
 import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
 import { malIdFor } from './animeids'
 import { buildMenu, createTray, type MenuDeps } from './menu'
@@ -410,7 +410,8 @@ async function watchTv(): Promise<void> {
   if (tvPlaying && !status.playing && !status.finished) pushPositions.now()
   tvPlaying = status.playing
 
-  if (isEpisodeEnd(reading, context.runtimeMinutes)) void upNext.ended(placeOf(context)!, true)
+  const place = placeOf(context)
+  if (place !== null) upNext.observe(place, reading, context.runtimeMinutes, true)
 }
 
 /** Where auto-next counts from, or null for a film or an unnumbered episode. */
@@ -617,7 +618,7 @@ function openPlayer(
       if (onTv) return
       const current = player?.context ?? context
       const place = placeOf(current)
-      if (place !== null && isEpisodeEnd(position, current.runtimeMinutes)) void upNext.ended(place, false)
+      if (place !== null) upNext.observe(place, position, current.runtimeMinutes, false)
     },
     /**
      * Save the place being left, and hand back the place to pick up at.

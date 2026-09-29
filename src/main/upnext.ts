@@ -70,22 +70,42 @@ export interface UpNextDeps {
 }
 
 /**
- * One move per end.
+ * One move per end, and only the end of what is really playing.
  *
- * `ended` is called on every reading that looks like the end, which is
- * several per end: the last polls, the video's own `ended`, the television's
- * FINISHED. Only the first counts. `reset` is for anything that moves the
- * viewer — opening a title, stepping episode by hand, closing — and makes the
- * next end count again; it also drops a move whose TMDB answer is still out.
+ * `observe` is fed every reading. Several per end look like the end: the
+ * last polls, the video's own `ended`, the television's FINISHED; only the
+ * first counts. `reset` is for anything that moves the viewer — opening a
+ * title, stepping episode by hand, closing — and makes the next end count
+ * again; it also drops a move whose TMDB answer is still out.
+ *
+ * An end counts only for an episode first seen playing before its end. The
+ * episode being left keeps reporting for a moment after a step (its
+ * document's last messages, a relay's last report), and with the countdown
+ * gone (2.0.6) nothing stood between such a reading and the next step: on
+ * the emulator one end ran S1E3 on to S2E1 in twenty seconds.
  */
 export class UpNextController {
   /** The episode whose end has been handled, by key, until `reset`. */
   private handled: string | null = null
+  /** The episode seen playing before its end, by key, until `reset`. */
+  private playing: string | null = null
 
   constructor(private readonly deps: UpNextDeps) {}
 
-  async ended(place: UpNextPlace, onTv: boolean): Promise<void> {
-    const key = `${place.tmdbId}:${place.season}:${place.episode}`
+  /** One reading of `place`, which is what the host believes is loaded. */
+  observe(place: UpNextPlace, reading: EndReading, expectedMinutes: number | null, onTv: boolean): void {
+    const key = keyOf(place)
+    if (!isEpisodeEnd(reading, expectedMinutes)) {
+      // The film's own length, not an advert's before it.
+      const duration = reading.duration
+      if (duration !== null && duration > 0 && lengthVerdict(duration, expectedMinutes) !== 'implausible') this.playing = key
+      return
+    }
+    if (this.playing === key) void this.ended(place, onTv)
+  }
+
+  private async ended(place: UpNextPlace, onTv: boolean): Promise<void> {
+    const key = keyOf(place)
     if (this.handled === key || !this.deps.enabled()) return
     this.handled = key
 
@@ -98,5 +118,10 @@ export class UpNextController {
   /** The viewer moved: a new episode, a new title, or the player closed. */
   reset(): void {
     this.handled = null
+    this.playing = null
   }
+}
+
+function keyOf(place: UpNextPlace): string {
+  return `${place.tmdbId}:${place.season}:${place.episode}`
 }

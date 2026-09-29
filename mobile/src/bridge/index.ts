@@ -100,7 +100,7 @@ import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { choosePreview } from '@main/previewplan'
 import { checkAll, sweepDueIn } from '@main/releases'
-import { UpNextController, isEpisodeEnd, type UpNextPlace } from '@main/upnext'
+import { UpNextController, type UpNextPlace } from '@main/upnext'
 import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
 import { findSegments } from '@main/skiplookup'
 import { SkipWatch } from '@main/skipwatch'
@@ -740,9 +740,7 @@ export async function createBridge(): Promise<WtaApi> {
       // The end of the episode here, as opposed to on the television, which
       // `castBridge.onProgress` watches.
       const place = placeOf(session.req)
-      if (!onTv && place !== null && isEpisodeEnd(reading, session.req.runtimeMinutes)) {
-        void upNext.ended(place, false)
-      }
+      if (!onTv && place !== null) upNext.observe(place, reading, session.req.runtimeMinutes, false)
     },
   })
   const chrome = createChromeOverlay()
@@ -1415,6 +1413,7 @@ export async function createBridge(): Promise<WtaApi> {
     enabled: () => store.read().settings.autoNext,
     resolve: nextEpisodeAfter,
     advance: (next, toTv) => {
+      console.log(`[upnext] playing S${next.season}E${next.episode}${toTv ? ' on the television' : ''}`)
       void playerGoTo(next.season, next.episode).then(() => {
         if (toTv) void beamNextToTv()
       })
@@ -1453,7 +1452,7 @@ export async function createBridge(): Promise<WtaApi> {
     if (wasPlaying && !tv.playing && !tv.finished) pushPositions.now()
 
     const place = placeOf(session.req)
-    if (place !== null && isEpisodeEnd(reading, session.req.runtimeMinutes)) void upNext.ended(place, true)
+    if (place !== null) upNext.observe(place, reading, session.req.runtimeMinutes, true)
   })
 
   const playerSwitchProvider = async (providerId: string): Promise<boolean> => {

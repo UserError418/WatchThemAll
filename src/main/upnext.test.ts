@@ -29,6 +29,10 @@ describe('isEpisodeEnd', () => {
 describe('UpNextController', () => {
   const place = { tmdbId: 7, season: 1, episode: 1 }
   const next: NextEpisode = { season: 1, episode: 2, name: 'Two' }
+  const PLAYING = { seconds: 600, duration: 2700, ended: false }
+  const END = { seconds: 2700, duration: 2700, ended: true }
+  /** Lets the TMDB answer settle. */
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
   function controller(options: { enabled?: boolean; resolve?: NextEpisode | null } = {}) {
     const advanced: Array<[NextEpisode, boolean]> = []
@@ -37,40 +41,69 @@ describe('UpNextController', () => {
       resolve: async () => (options.resolve === undefined ? next : options.resolve),
       advance: (episode, onTv) => advanced.push([episode, onTv]),
     })
-    return { upNext, advanced }
+    /** The episode plays, then ends. */
+    const watchToEnd = async (at = place, onTv = false): Promise<void> => {
+      upNext.observe(at, PLAYING, 45, onTv)
+      upNext.observe(at, END, 45, onTv)
+      await flush()
+    }
+    return { upNext, advanced, watchToEnd }
   }
 
   /** The owner, 2026-09-29: no countdown and no prompt. */
   it('plays the next episode as soon as the end is seen, here or on the television', async () => {
     const here = controller()
-    await here.upNext.ended(place, false)
+    await here.watchToEnd()
     expect(here.advanced).toEqual([[next, false]])
 
     const tv = controller()
-    await tv.upNext.ended(place, true)
+    await tv.watchToEnd(place, true)
     expect(tv.advanced).toEqual([[next, true]])
   })
 
   /** Several readings report the same end; only one may move the viewer. */
   it('handles each end once, and the next end after a reset', async () => {
-    const { upNext, advanced } = controller()
-
-    await upNext.ended(place, false)
-    await upNext.ended(place, false)
+    const { upNext, advanced, watchToEnd } = controller()
+    await watchToEnd()
+    upNext.observe(place, END, 45, false)
+    await flush()
     expect(advanced).toHaveLength(1)
 
     upNext.reset()
-    await upNext.ended({ ...place, episode: 2 }, false)
+    await watchToEnd({ ...place, episode: 2 })
     expect(advanced).toHaveLength(2)
+  })
+
+  /**
+   * The episode left keeps reporting its end for a moment after the step.
+   * Measured on the emulator: one end ran S1E3 on to S2E1 in twenty seconds.
+   */
+  it('does not take the episode left, still reporting its end, for the end of the next', async () => {
+    const { upNext, advanced, watchToEnd } = controller()
+    await watchToEnd()
+    upNext.reset()
+    const stepped = { ...place, episode: 2 }
+    upNext.observe(stepped, END, 45, false)
+    upNext.observe(stepped, END, 45, false)
+    await flush()
+    expect(advanced).toHaveLength(1)
+  })
+
+  it('does not count an advert as the episode playing', async () => {
+    const { upNext, advanced } = controller()
+    upNext.observe(place, { seconds: 10, duration: 30, ended: false }, 45, false)
+    upNext.observe(place, END, 45, false)
+    await flush()
+    expect(advanced).toEqual([])
   })
 
   it('does nothing when switched off or when nothing is next', async () => {
     const off = controller({ enabled: false })
-    await off.upNext.ended(place, false)
+    await off.watchToEnd()
     expect(off.advanced).toEqual([])
 
     const last = controller({ resolve: null })
-    await last.upNext.ended(place, false)
+    await last.watchToEnd()
     expect(last.advanced).toEqual([])
   })
 
@@ -83,10 +116,11 @@ describe('UpNextController', () => {
       advance: (episode) => advanced.push(episode),
     })
 
-    const pending = upNext.ended(place, false)
+    upNext.observe(place, PLAYING, 45, false)
+    upNext.observe(place, END, 45, false)
     upNext.reset()
     answer(next)
-    await pending
+    await flush()
     expect(advanced).toEqual([])
   })
 })
