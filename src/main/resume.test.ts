@@ -254,6 +254,21 @@ describe('WrittenPositions', () => {
  * The phone's seek through the relay, fed one report of the film's time at a
  * time. A 48-minute episode left at 25 minutes.
  */
+describe('shouldSeek from the very start', () => {
+  /** Since 2.0.6 a place in the first half minute is saved, so it has to be gone back to. */
+  it('seeks to a place saved early when the stream starts from zero', () => {
+    expect(shouldSeek(25, 0.9, 2885)).toBe(true)
+  })
+
+  it('leaves a provider that has already moved itself close by', () => {
+    expect(shouldSeek(625, 610, 2885)).toBe(false)
+  })
+
+  it('does not jump for a second or two', () => {
+    expect(shouldSeek(2.5, 1, 2885)).toBe(false)
+  })
+})
+
 describe('ResumeSeek', () => {
   const EPISODE = 2885
   const at = (seconds: number, duration = EPISODE) => ({ seconds, duration })

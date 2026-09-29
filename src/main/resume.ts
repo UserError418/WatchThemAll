@@ -38,6 +38,16 @@
 const RESUMED_TOLERANCE_SECONDS = 30
 
 /**
+ * A stream this close to its own start has not resumed by itself, whatever
+ * the tolerance says: without this, a place saved in the first half minute
+ * was never gone back to, and since 2.0.6 such places are saved.
+ */
+const AT_START_SECONDS = 5
+
+/** Not worth a visible jump. */
+const MIN_SEEK_SECONDS = 2
+
+/**
  * How much of the end may be missed and still count as finished.
  *
  * The old rule was a flat 50%: halfway through was "watched". That is wrong in
@@ -230,9 +240,9 @@ export function shouldSeek(saved: number, current: number, duration: number): bo
   if (!shouldStorePosition(saved, duration)) return false
   if (!Number.isFinite(current)) return false
   // Already there: the provider resumed by itself, or its URL did it.
-  if (Math.abs(saved - current) <= RESUMED_TOLERANCE_SECONDS) return false
+  if (current > AT_START_SECONDS && Math.abs(saved - current) <= RESUMED_TOLERANCE_SECONDS) return false
   // Never seek backwards into something already further along than the memory.
-  return saved > current
+  return saved - current >= MIN_SEEK_SECONDS
 }
 
 /** What the phone's relay reads off the film's own element; see `ResumeSeek`. */
