@@ -943,10 +943,16 @@ export interface WtaApi {
     /** How this episode or film would preview, or null when it does not. */
     plan(req: PlayRequest): Promise<PreviewPlan | null>
     /**
-     * Keep where the preview got to as the place to resume from. Only called
-     * past the grace period: five seconds heard, not just seen.
+     * Settle the preview like a play: where it was last heard is the place to
+     * resume from, and `playedMs` (heard, not just seen) goes into the history,
+     * which also marks it watched if it reached the credits. See `PreviewWatch`.
      */
-    keep(req: PlayRequest, seconds: number, duration: number, options?: { cacheSource?: string }): Promise<void>
+    keep(
+      req: PlayRequest,
+      seconds: number,
+      duration: number,
+      options?: { cacheSource?: string; playedMs?: number },
+    ): Promise<void>
     /**
      * File what the preview measured as a test result for its source: it
      * played, this many milliseconds after the preview opened. Once per

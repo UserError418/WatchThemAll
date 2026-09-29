@@ -19,8 +19,14 @@
  * a network or a video.
  */
 
-/** Below this, a position is a false start rather than progress worth keeping. */
-const MIN_RESUME_SECONDS = 60
+/*
+ * There is no "false start" floor any more. Until 2.0.6 a position under a
+ * minute was never written, and the owner asked for the opposite
+ * (2026-09-29): watching counts wherever and however briefly it happened.
+ * What the floor also did is done by name instead: an advert's clip is told
+ * apart by its length (`resumeAction`), and the film's own start before the
+ * resume seek has taken is not saved (`ResumeSeek.pending`).
+ */
 
 /**
  * How close to the stored position counts as already there.
@@ -86,17 +92,31 @@ export function watchedThresholdSeconds(duration: number): number {
 export { resumeKey } from '@shared/types'
 import { resumeKey } from '@shared/types'
 
-import { lengthVerdict } from './runtimecheck'
+/**
+ * Shorter than anything the viewer opened: an advert, a trailer, a provider's
+ * intro clip, a placeholder length. Only a title TMDB itself calls shorter
+ * than ten minutes may be this short.
+ *
+ * Deliberately not `lengthVerdict`, which also refuses a real stream whose
+ * length strays from TMDB's (a long finale against the show's usual runtime):
+ * that one is still where the viewer is, and its place is worth keeping.
+ */
+const ADVERT_SECONDS = 180
+
+export function isAdvertLength(duration: number, runtimeMinutes: number | null): boolean {
+  if (!Number.isFinite(duration) || duration <= 0) return false
+  if (runtimeMinutes !== null && runtimeMinutes > 0 && runtimeMinutes < 10) return false
+  return duration < ADVERT_SECONDS
+}
 
 /**
- * Is this position worth writing down?
+ * Is this position worth writing down, or resuming to?
  *
- * Not the first minute, and not past the point it counts as watched. Storing either produces a
- * resume offer that is worse than no offer: one throws away nothing, the other
- * drops the user into the credits.
+ * Anything past the very start, and not past the point it counts as watched:
+ * a position there produces an offer to drop the user into the credits.
  */
 export function shouldStorePosition(seconds: number, duration: number): boolean {
-  if (!Number.isFinite(seconds) || seconds < MIN_RESUME_SECONDS) return false
+  if (!Number.isFinite(seconds) || seconds <= 0) return false
   if (!Number.isFinite(duration) || duration <= 0) return true
   // The same line that decides "watched", deliberately. A position past it has
   // nothing left to resume *into*, and storing one produces an offer to jump
@@ -156,9 +176,11 @@ export interface ResumeReading {
  *   fail to save a position, they erased the one a *working* provider had
  *   stored. Switching source mid-episode and back lost the place entirely,
  *   which is exactly how this was reported.
- * - **A position inside the first minute.** The normal state of a stream that
- *   has just loaded. Leaving a provider two seconds in deleted ten minutes of
- *   remembered progress.
+ * - **An advert's clip.** Its reading is a real `<video>` with a real length,
+ *   and the wrong one. Storing its second under the episode, or forgetting
+ *   the episode at its end, would be believing the advert. Until 2.0.6 a
+ *   minute's floor kept most of these out by accident; now their length does
+ *   it by name (`isAdvertLength`).
  *
  * Only one case should forget: the title is finished. `keep` is the honest
  * answer to everything else — it says we know nothing new, not that what we
@@ -166,23 +188,26 @@ export interface ResumeReading {
  */
 export type ResumeAction = 'store' | 'forget' | 'keep'
 
-export function resumeAction(reading: ResumeReading | null): ResumeAction {
+export function resumeAction(reading: ResumeReading | null, runtimeMinutes: number | null = null): ResumeAction {
   // Nothing was read. That is a fact about the provider, not about the title.
   if (reading === null) return 'keep'
+
+  const { seconds, duration } = reading
+  // Not the film: an advert, or a placeholder length.
+  if (isAdvertLength(duration, runtimeMinutes)) return 'keep'
 
   // Watched to the last frame by the element's own account. No threshold gets
   // to argue with that, and a stored position here resumes into the credits.
   if (reading.ended) return 'forget'
 
-  const { seconds, duration } = reading
   if (!Number.isFinite(seconds) || seconds < 0) return 'keep'
 
   if (Number.isFinite(duration) && duration > 0 && seconds >= watchedThresholdSeconds(duration)) {
     return 'forget'
   }
 
-  // A false start. Says nothing about where the title was really left.
-  if (seconds < MIN_RESUME_SECONDS) return 'keep'
+  // The very start says nothing a stored point could use; see `resumeOfferFor`.
+  if (seconds <= 0) return 'keep'
 
   return 'store'
 }
@@ -217,16 +242,15 @@ export interface FilmTime {
 }
 
 /**
- * One load's attempt to put the video back where it was left, on the phone.
+ * One load's attempt to put the video back where it was left.
  *
- * The phone's first mechanism is the provider's URL parameter, which only
- * four sources read. This is the second: the media relay (see
- * `mobile/src/bridge/mediarelay.ts`) reaches the provider's `<video>` in
- * every frame and can set its `currentTime`, as the desktop does through
- * `WebFrameMain`.
+ * Both platforms' second mechanism, after the provider's URL parameter: the
+ * phone's relay (`mobile/src/bridge/mediarelay.ts`) and the desktop's
+ * `WebFrameMain` reach the provider's `<video>` in every frame and set its
+ * `currentTime`. The desktop sought once, unchecked, until 2.0.6.
  *
- * It checks and retries rather than seeking once, because on the phone a
- * seek can simply not take. A player attaching its stream after the first
+ * It checks and retries rather than seeking once, because a seek can simply
+ * not take. A player attaching its stream after the first
  * `timeupdate` puts itself back at its own start, and a provider whose URL
  * start was ignored reports zero. Every relay report of the film's time is
  * fed in. The answer is where to seek now, or null for nothing to do yet.
@@ -238,17 +262,27 @@ export class ResumeSeek {
   static readonly ATTEMPTS = 4
   /** The relay reports every two seconds; this leaves one report for a seek to show. */
   static readonly RETRY_MS = 2_500
+  /**
+   * How long positions wait for it. A source whose film cannot be reached
+   * still posts its position (`playermessage.ts`), and that must not wait
+   * for a seek that can never be sent.
+   */
+  static readonly WAIT_MS = 30_000
 
   private attempts = 0
   private sentAt = 0
   private settled: boolean
 
+  private readonly startedAt: number
+
   constructor(
     private readonly target: number,
     /** TMDB's runtime, so an advert's clip is not taken for the film. */
     private readonly runtimeMinutes: number | null,
+    now: number = Date.now(),
   ) {
     this.settled = !(target > 0)
+    this.startedAt = now
   }
 
   /** Finished, one way or the other. */
@@ -257,18 +291,21 @@ export class ResumeSeek {
   }
 
   /**
-   * A seek has been sent and has not yet been seen to take. Meanwhile the
-   * video's time is where the provider put it, not where the viewer is, and
-   * saving it would write over the very position being restored.
+   * The video has not yet been put where it should be, nor given up on.
+   * Meanwhile its time is where the provider put it, not where the viewer
+   * is, and saving it would write over the very position being restored.
+   * Since there is no minute's floor (see the top of this file), this is
+   * what keeps the film's first seconds from doing that. For `WAIT_MS` at most.
    */
-  get inFlight(): boolean {
-    return !this.settled && this.attempts > 0
+  pending(now: number = Date.now()): boolean {
+    return !this.settled && now - this.startedAt < ResumeSeek.WAIT_MS
   }
 
   next(time: FilmTime, now: number): number | null {
     if (this.settled) return null
-    // An advert or a trailer in the film's place: wait for the episode itself.
-    if (lengthVerdict(time.duration, this.runtimeMinutes) === 'implausible') return null
+    // No length yet (a seek would be ignored), or an advert or a trailer in
+    // the film's place: wait for the episode itself.
+    if (!(time.duration > 0) || isAdvertLength(time.duration, this.runtimeMinutes)) return null
     if (!shouldSeek(this.target, time.seconds, time.duration) || this.attempts >= ResumeSeek.ATTEMPTS) {
       this.settled = true
       return null

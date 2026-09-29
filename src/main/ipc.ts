@@ -125,7 +125,7 @@ export interface IpcDeps {
     /** The preview's film has started playing: the preview cache notes its playlist while it is fresh. */
     started: (req: PlayRequest, providerId: string, filmSeconds: number) => void
     /** `cacheSource`: also keep a window of the preview's stream, from this source, from there (the preview cache). */
-    keep: (req: PlayRequest, seconds: number, duration: number, cacheSource: string | null) => void
+    keep: (req: PlayRequest, seconds: number, duration: number, cacheSource: string | null, playedMs: number) => void
     /** Where the preview standing in for the held player is; see `InlinePlayer.carryTo`. */
     carry: (report: CarryReport) => void
     /** The preview stopped standing in; see `InlinePlayer.carryEnd`. */
@@ -349,8 +349,16 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
    * shared with the phone rather than written twice.
    */
   ipcMain.handle(CH.previewPlan, (_e, req: PlayRequest) => deps.preview.plan(req))
-  ipcMain.handle(CH.previewKeep, (_e, req: PlayRequest, seconds: number, duration: number, cacheSource: unknown) =>
-    deps.preview.keep(req, Number(seconds), Number(duration), typeof cacheSource === 'string' ? cacheSource : null),
+  ipcMain.handle(
+    CH.previewKeep,
+    (_e, req: PlayRequest, seconds: number, duration: number, cacheSource: unknown, playedMs: unknown) =>
+      deps.preview.keep(
+        req,
+        Number(seconds),
+        Number(duration),
+        typeof cacheSource === 'string' ? cacheSource : null,
+        typeof playedMs === 'number' && Number.isFinite(playedMs) ? Math.max(0, playedMs) : 0,
+      ),
   )
   ipcMain.handle(CH.previewCarry, (_e, report: unknown) => {
     if (isCarryReport(report)) deps.preview.carry(report)

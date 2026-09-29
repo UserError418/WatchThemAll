@@ -740,7 +740,7 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
   const key = resumeKey(context)
   const points = store.collection('resumePoints')
 
-  const action = resumeAction(position)
+  const action = resumeAction(position, context.runtimeMinutes)
   if (action === 'keep') return
   if (action === 'forget') {
     points.remove(key)
@@ -834,9 +834,20 @@ function keepStreamWindow(
  * Keep where a preview got to, past its grace period, as the player would
  * have; `cacheSource`: its stream too, from there, for the preview cache.
  */
-function keepPreviewPosition(req: PlayRequest, seconds: number, duration: number, cacheSource: string | null): void {
+/**
+ * The preview settles like a play (the owner, 2026-09-29: watching counts
+ * wherever it happened): the place, the heard time into the history, and
+ * "watched" if it reached the credits. See `PreviewWatch`.
+ */
+function keepPreviewPosition(
+  req: PlayRequest,
+  seconds: number,
+  duration: number,
+  cacheSource: string | null,
+  playedMs: number,
+): void {
   if (!Number.isFinite(seconds) || seconds <= 0) return
-  rememberPosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false, paused: false })
+  settleProgress(req, playedMs, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false, paused: false })
   pushPositions.now()
   if (cacheSource !== null) keepStreamWindow(req, cacheSource, { seconds, duration }, previewRequests())
 }

@@ -577,9 +577,9 @@ class Library {
     episode: number | null,
   ): void {
     // Replaying the same episode moves it to the top rather than duplicating.
-    const withoutDuplicate = this.history.filter(
-      (h) => !(h.tmdbId === media.tmdbId && h.season === season && h.episode === episode),
-    )
+    const same = (h: HistoryEntry): boolean => h.tmdbId === media.tmdbId && h.season === season && h.episode === episode
+    const earlier = this.history.find(same)
+    const withoutDuplicate = this.history.filter((h) => !same(h))
 
     const entry: HistoryEntry = {
       id: newId(),
@@ -590,6 +590,11 @@ class Library {
       season,
       episode,
       watchedAt: Date.now(),
+      // The time already watched moves up with it. Until 2.0.6 a replay, or
+      // Resume after a preview that was heard, started the row from nothing,
+      // and those minutes left the History totals.
+      ...(earlier?.playedMs ? { playedMs: earlier.playedMs } : {}),
+      ...(earlier?.completed ? { completed: true } : {}),
     }
 
     this.history = newestFirst([entry, ...withoutDuplicate]).slice(0, Library.HISTORY_LIMIT)

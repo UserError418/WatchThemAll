@@ -23,8 +23,10 @@ describe('resumeKey', () => {
 })
 
 describe('shouldStorePosition', () => {
-  it('ignores the first minute as a false start', () => {
-    expect(shouldStorePosition(42, 3600)).toBe(false)
+  /** The owner, 2026-09-29: watching counts however briefly it happened. */
+  it('keeps the first minute too, but not the very start', () => {
+    expect(shouldStorePosition(42, 3600)).toBe(true)
+    expect(shouldStorePosition(0, 3600)).toBe(false)
   })
 
   it('keeps a real position', () => {
@@ -56,10 +58,27 @@ describe('resumeAction', () => {
     expect(resumeAction(null)).toBe('keep')
   })
 
-  it('keeps the stored position through the first minute of a new stream', () => {
-    // The normal state two seconds after a switch. Nothing has been learned,
-    // so nothing should be thrown away.
-    expect(resumeAction({ seconds: 3, duration: 3600 })).toBe('keep')
+  /**
+   * A new stream's first seconds, before its resume seek has taken, are kept
+   * out by `ResumeSeek.pending` now, not by a floor here: a few seconds of
+   * the film really watched are stored.
+   */
+  it('stores the first seconds of the film, but not its very start', () => {
+    expect(resumeAction({ seconds: 3, duration: 3600 }, 60)).toBe('store')
+    expect(resumeAction({ seconds: 0, duration: 3600 }, 60)).toBe('keep')
+  })
+
+  /** What the minute's floor did by accident until 2.0.6. */
+  it('believes nothing an advert says, not even that it ended', () => {
+    expect(resumeAction({ seconds: 12, duration: 30 }, 45)).toBe('keep')
+    expect(resumeAction({ seconds: 30, duration: 30, ended: true }, 45)).toBe('keep')
+    // A short title TMDB calls short is not an advert.
+    expect(resumeAction({ seconds: 60, duration: 170 }, 3)).toBe('store')
+  })
+
+  /** A long finale against the show's usual runtime is still the film. */
+  it('stores a stream longer than TMDB says', () => {
+    expect(resumeAction({ seconds: 900, duration: 4200 }, 45)).toBe('store')
   })
 
   it('stores a real position', () => {
@@ -240,13 +259,27 @@ describe('ResumeSeek', () => {
   const at = (seconds: number, duration = EPISODE) => ({ seconds, duration })
 
   it('seeks at the first report from the beginning, and stops once it took', () => {
-    const seek = new ResumeSeek(1500, 48)
-    expect(seek.inFlight).toBe(false)
+    const seek = new ResumeSeek(1500, 48, 0)
+    expect(seek.pending(0)).toBe(true)
     expect(seek.next(at(2), 0)).toBe(1500)
-    expect(seek.inFlight).toBe(true)
+    expect(seek.pending(1_000)).toBe(true)
     expect(seek.next(at(1502), 2_000)).toBeNull()
     expect(seek.done).toBe(true)
-    expect(seek.inFlight).toBe(false)
+    expect(seek.pending(2_000)).toBe(false)
+  })
+
+  /** Positions are held back while it is pending; a source whose film cannot be reached must not hold them for good. */
+  it('stops holding positions back after a while, even unsettled', () => {
+    const seek = new ResumeSeek(1500, 48, 0)
+    expect(seek.pending(ResumeSeek.WAIT_MS - 1)).toBe(true)
+    expect(seek.pending(ResumeSeek.WAIT_MS)).toBe(false)
+    expect(new ResumeSeek(0, 48, 0).pending(0)).toBe(false)
+  })
+
+  it('waits for a length before seeking, since a seek before one is ignored', () => {
+    const seek = new ResumeSeek(1500, 48, 0)
+    expect(seek.next({ seconds: 0, duration: 0 }, 0)).toBeNull()
+    expect(seek.done).toBe(false)
   })
 
   it('does nothing when the URL already put the video there', () => {

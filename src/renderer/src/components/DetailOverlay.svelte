@@ -23,7 +23,7 @@
   import { carrying } from '../lib/carry.svelte'
   import CachedStream from './CachedStream.svelte'
   import { CarryOver } from '@shared/carryover'
-  import { PreviewGrace } from '../lib/previewgrace'
+  import { PreviewWatch } from '../lib/previewwatch'
   import type { CachedPreview, PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
   import { untrack } from 'svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
@@ -585,7 +585,7 @@
    * or the real player took over (`leavePreview`). Null while it may play.
    */
   let streamStop = $state<'failed' | 'player' | null>(null)
-  let grace = new PreviewGrace()
+  let heard = new PreviewWatch()
 
   /**
    * Asked once Resume knows its episode: before the anchor's season list has
@@ -617,7 +617,7 @@
     endHandover()
     stream = { key, req, plan: undefined }
     streamStop = null
-    grace = new PreviewGrace()
+    heard = new PreviewWatch()
     kept = false
     recordedKey = null
     dropCopy()
@@ -640,7 +640,7 @@
    * at the copy's second: the handover is `CarryOver`'s, as for Resume, with
    * the copy as the place and the source's film as the one being moved
    * there. Until then the copy is what is on screen, so it is what the
-   * grace period, the carry and Resume read. If the source never comes, the
+   * preview's heard time, the carry and Resume read. If the source never comes, the
    * copy plays to its end, holds its last frame for as long as the source
    * may still come, and then gives way to the still.
    */
@@ -707,7 +707,7 @@
       streamedMs: null,
     }
     lastReport = report
-    grace.feed(report)
+    heard.feed(report)
     sendCarry()
     // Nothing is coming to take over: back to the still.
     if (state.ended && streamStop === 'failed' && !carrying.active) dropCopy()
@@ -912,18 +912,19 @@
 
   let kept = false
   /**
-   * Write down where the preview got to, once, if it got past the grace
-   * period. `cache`: the preview is being left for good (the detail view
-   * closed, another episode chosen), so its stream is kept from there too;
-   * not when the player takes over, which keeps its own on closing.
+   * Settle the preview, once, if any of it was heard: where it got to and how
+   * long it was heard (`PreviewWatch`). `cache`: the preview is being left
+   * for good (the detail view closed, another episode chosen), so its stream
+   * is kept from there too; not when the player takes over, which keeps its
+   * own on closing.
    */
   async function keepPreviewPlace(req: PlayRequest, cache = false): Promise<void> {
-    const place = grace.kept()
+    const place = heard.kept()
     if (place === null || kept) return
     kept = true
     const cacheSource = cache ? (stream?.plan?.providerId ?? undefined) : undefined
     try {
-      await window.wta.preview.keep(req, place.seconds, place.duration, { cacheSource })
+      await window.wta.preview.keep(req, place.seconds, place.duration, { cacheSource, playedMs: place.heardMs })
     } catch {
       // Not keeping it only means resuming from the place saved before.
     }
@@ -934,7 +935,7 @@
     if (stream) await keepPreviewPlace(stream.req)
   }
 
-  // Closing the detail view keeps an earned place too.
+  // Closing the detail view settles it too.
   $effect(() => () => {
     if (stream) void keepPreviewPlace(stream.req, true)
   })
@@ -1012,7 +1013,7 @@
             }
             if (state.started) streamStarted = true
             lastReport = state
-            grace.feed(state)
+            heard.feed(state)
             sendCarry()
           }}
           onfail={() => {

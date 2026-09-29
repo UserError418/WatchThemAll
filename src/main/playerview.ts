@@ -51,7 +51,7 @@ import { findSegments } from './skiplookup'
 import { skipButtonBounds } from './skipplacement'
 import { SkipWatch } from './skipwatch'
 import type { PlayCandidate } from './providers'
-import { shouldSeek } from './resume'
+import { ResumeSeek } from './resume'
 import { createPointerZoneWatcher } from './pointerzone'
 import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type OfferKind } from './switchoffer'
 import { mediaKind, totalBytesOf } from './mediarequest'
@@ -814,7 +814,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // the video started is worse than never having made one.
     playing = true
     if (playingSince === null) playingSince = Date.now()
-    if (!seekDone) setTimeout(() => restorePosition(), SEEK_SETTLE_MS)
+    // Sooner than the next poll; the poll carries on from there.
+    setTimeout(() => void readPosition().then((found) => found && stepResume(found)), SEEK_SETTLE_MS)
     // Nothing further can be recorded against this load: it demonstrably works.
     failureRecorded = true
     clearPendingVerdicts()
@@ -1089,6 +1090,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
         watchForStall(found)
         offerSkip(found)
         if (!found) return
+        if (carry === null || carry.done) stepResume(found)
         notePicture(found)
         lastPosition = found
         judgeRuntime(found)
@@ -1111,6 +1113,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let lastPersistedAt = 0
 
   const maybePersist = (found: VideoPosition): void => {
+    if (resume.pending()) return
     const now = Date.now()
     if (now - lastPersistedAt < PERSIST_EVERY_MS) return
     lastPersistedAt = now
@@ -1120,25 +1123,23 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   /**
    * Put the video back where it was left.
    *
-   * Deliberately late and deliberately conditional. `media-started-playing`
-   * only says decoding began; the element's duration and seekable range often
-   * arrive a beat later, and seeking before then is silently ignored. And if
-   * the provider has already put the video there, by its own memory or its
-   * URL's start parameter, `shouldSeek` sees that and leaves it alone.
+   * Deliberately late and deliberately checked. `media-started-playing` only
+   * says decoding began; the element's duration and seekable range often
+   * arrive a beat later, and a seek before then is silently ignored. So every
+   * reading is fed to this load's `ResumeSeek`, which seeks, looks again,
+   * retries, waits out an advert, and leaves alone a provider that has put
+   * the video there itself. Until 2.0.6 this sought once and never looked.
    */
   const SEEK_SETTLE_MS = 1_500
-  const SEEK_ATTEMPTS = 4
 
   /**
-   * Where the current load should resume to, and whether that is settled.
+   * This load's resume. Per *load*, not per player: every navigation arms a
+   * new one (`armResume`), or every later load would start at zero.
    *
-   * Per *load*, not per player. These used to be read straight off
-   * `options.resumeAt`, which is fixed at construction — so the seek happened
-   * at most once in a view's lifetime and every later navigation started at
-   * zero.
+   * While it is `pending`, the film's time is where the provider put it, so
+   * nothing is saved from it (`maybePersist`, `player.position`).
    */
-  let resumeAt = options.resumeAt ?? 0
-  let seekDone = resumeAt <= 0
+  let resume = new ResumeSeek(options.resumeAt ?? 0, options.context.runtimeMinutes)
 
   /**
    * Settle the position being left and arm the one being loaded.
@@ -1147,31 +1148,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * worth resuming — simply means the next load starts at the beginning.
    */
   const armResume = (reason: NavigationReason): void => {
-    resumeAt = options.onNavigate?.(reason) ?? 0
-    seekDone = resumeAt <= 0
+    resume = new ResumeSeek(options.onNavigate?.(reason) ?? 0, player.context.runtimeMinutes)
   }
 
-  const restorePosition = (attempt = 1): void => {
-    if (seekDone || !alive()) return
-
-    void readPosition().then((found) => {
-      if (seekDone || !alive()) return
-
-      if (!found) {
-        if (attempt < SEEK_ATTEMPTS) setTimeout(() => restorePosition(attempt + 1), SEEK_SETTLE_MS)
-        return
-      }
-
-      const target = resumeAt
-      if (!shouldSeek(target, found.seconds, found.duration)) {
-        // Either the provider handled it or the memory is not worth acting on.
-        seekDone = true
-        return
-      }
-
-      seekDone = true
-      seekTo(target)
-    })
+  const stepResume = (found: VideoPosition): void => {
+    if (!alive()) return
+    const to = resume.next({ seconds: found.seconds, duration: found.duration }, Date.now())
+    if (to !== null) seekTo(to)
   }
 
   /**
@@ -1836,7 +1819,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * failed would fire almost immediately and offer to switch provider before
    * the reloaded page had a chance.
    */
-  player.position = (): VideoPosition | null => lastPosition
+  player.position = (): VideoPosition | null => (resume.pending() ? null : lastPosition)
 
   player.takeProgressMs = (): number => {
     // Fold in the stretch still running, so leaving mid-playback counts it.
@@ -2249,11 +2232,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     const target = carry.target(Date.now())
     carry.release()
     if (!alive() || win.isDestroyed()) return
-    if (lastPosition === null && target !== null) {
-      resumeAt = target
-      seekDone = false
-      restorePosition()
-    }
+    if (lastPosition === null && target !== null) resume = new ResumeSeek(target, player.context.runtimeMinutes)
     player.setBounds(slot)
     contents.setAudioMuted(mutedFromOutside)
     sendConfig()
@@ -2265,7 +2244,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   if (carry !== null) {
     contents.setAudioMuted(true)
     // The carry does the seeking, to where the preview is by then.
-    seekDone = true
+    resume = new ResumeSeek(0, player.context.runtimeMinutes)
     heldTimer = setInterval(() => {
       void readPosition().then((found) => {
         if (carry.done) return

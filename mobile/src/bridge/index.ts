@@ -1167,8 +1167,9 @@ export async function createBridge(): Promise<WtaApi> {
 
   const rememberPosition = (req: PlayRequest): void => {
     // The video is where the provider put it, not where the viewer is, until
-    // the resume seek is seen to take; see `ResumeSeek.inFlight`.
-    if (resumeSeek?.inFlight) return
+    // the resume seek is seen to take; see `ResumeSeek.pending`. The
+    // television resumes by itself, and nothing feeds the seek while it plays.
+    if (!onTv && resumeSeek?.pending()) return
     const reading = progress?.reading ?? null
     writePosition(
       contextFor(req, reading),
@@ -1187,7 +1188,7 @@ export async function createBridge(): Promise<WtaApi> {
     // because collapsing "nothing was learned" into "forget what you knew" is
     // what made resuming flaky on the desktop, and a provider that reports
     // nothing is the *normal* case here rather than the exception.
-    const action = resumeAction(reading)
+    const action = resumeAction(reading, context.runtimeMinutes)
     if (action === 'keep') return
     if (action === 'forget') {
       points.remove(resumeKey(context))
@@ -2234,10 +2235,28 @@ export async function createBridge(): Promise<WtaApi> {
         if (report.muted !== mutedBefore) announceOverlayConfig()
       },
       carryEnd: async (): Promise<void> => releaseCarry(),
-      keep: async (req: PlayRequest, seconds: number, duration: number, options?: { cacheSource?: string }): Promise<void> => {
+      /** The preview settles like a play; see `keepPreviewPosition` on the desktop. */
+      keep: async (
+        req: PlayRequest,
+        seconds: number,
+        duration: number,
+        options?: { cacheSource?: string; playedMs?: number },
+      ): Promise<void> => {
         if (!Number.isFinite(seconds) || seconds <= 0) return
-        writePosition(req, { seconds, duration: Number.isFinite(duration) ? duration : 0, ended: false })
+        const length = Number.isFinite(duration) ? duration : 0
+        writePosition(req, { seconds, duration: length, ended: false })
         pushPositions.now()
+        const playedMs = Math.max(0, options?.playedMs ?? 0)
+        const watched = isWatchedEnough({
+          seconds,
+          duration: length > 0 ? length : null,
+          playedMs,
+          runtimeMinutes: req.runtimeMinutes,
+          fallbackMs: WATCHED_FALLBACK_MS,
+        })
+        const episode = { tmdbId: req.tmdbId, type: req.type, season: req.season ?? null, episode: req.episode ?? null }
+        playbackSettled.emit({ ...episode, playedMs, seconds, duration: length > 0 ? length : null, watched })
+        if (watched) episodeWatched.emit(episode)
         if (options?.cacheSource) keepStreamWindow(req, options.cacheSource, { seconds, duration })
       },
     },

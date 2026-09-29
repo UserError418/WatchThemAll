@@ -181,10 +181,12 @@ describe('resume position in the URL', () => {
     )
   })
 
-  it('does not resume into the first minute', () => {
-    // The normal state of a stream that has just loaded. Resuming into it is
-    // indistinguishable from not resuming, and costs a parameter.
+  /** The owner, 2026-09-29: no minute's floor; half a minute watched is half a minute. */
+  it('resumes from the first minute too, but not from the very start', () => {
     expect(renderTemplate(resuming, base, { seconds: 30, duration: 3600 })).toBe(
+      'https://example.test/tv/tt0903747/2/5?progress=30',
+    )
+    expect(renderTemplate(resuming, base, { seconds: 0, duration: 3600 })).toBe(
       'https://example.test/tv/tt0903747/2/5',
     )
   })
