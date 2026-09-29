@@ -1946,6 +1946,13 @@ export async function createBridge(): Promise<WtaApi> {
         writtenAt: now,
         namedEpisode: null,
       }
+      // A carry belongs to the Resume that asked for it. Until this, one that
+      // had finished lived on to the next play (a Watchlist card's, from the
+      // mini player) and took away that title's resume seek below.
+      if (carry !== null) {
+        releaseCarry()
+        carry = null
+      }
       if (options?.carry) holdForCarry()
       showCandidate(0)
       // The carry does the seeking, to where the preview is by then.

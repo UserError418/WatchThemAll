@@ -19,7 +19,7 @@
   import { airDate, countdown, episodeCode, hasAired, runtime, year } from '../lib/format'
   import EpisodeRow from './EpisodeRow.svelte'
   import TrailerEmbed from './TrailerEmbed.svelte'
-  import StreamPreview, { STREAM_FADE_MS } from './StreamPreview.svelte'
+  import StreamPreview, { CARRY_HANDOVER_FADE_MS, CARRY_HANDOVER_HOLD_MS, STREAM_FADE_MS } from './StreamPreview.svelte'
   import { carrying } from '../lib/carry.svelte'
   import { PreviewGrace } from '../lib/previewgrace'
   import type { PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
@@ -351,7 +351,8 @@
     const result = await window.wta.play(requestFor(episode, providerId), { carry: carrying.active })
 
     if (!result.ok) {
-      if (carrying.active) endCarry()
+      // No player to hand over to: the preview goes back into the hero.
+      carrying.active = false
       playError = result.error ?? 'Could not open a player'
       return
     }
@@ -608,6 +609,7 @@
    */
   function startPreview(key: string, req: PlayRequest): void {
     const asked = ++planAsked
+    endHandover()
     stream = { key, req, plan: undefined }
     streamStop = null
     grace = new PreviewGrace()
@@ -674,11 +676,29 @@
     carryMuted = false
   }
 
-  /** The player is showing: the preview goes, as it would have on Resume. */
+  /**
+   * The player is showing: the preview goes, as it would have on Resume, but
+   * not at once. It stays over the player a moment, silent, and fades
+   * (`CARRY_HANDOVER_HOLD_MS`), because the player's picture is not there in
+   * the instant it is shown.
+   */
+  let handingOver = $state(false)
+  let handoverTimer: ReturnType<typeof setTimeout> | undefined
+
   function endCarry(): void {
     if (!carrying.active) return
     carrying.active = false
-    streamStop = 'player'
+    handingOver = true
+    handoverTimer = setTimeout(() => {
+      handingOver = false
+      streamStop = 'player'
+    }, CARRY_HANDOVER_HOLD_MS + CARRY_HANDOVER_FADE_MS)
+  }
+
+  /** Cut short by a preview starting over (the player closed meanwhile). */
+  function endHandover(): void {
+    clearTimeout(handoverTimer)
+    handingOver = false
   }
 
   function sendCarry(): void {
@@ -699,12 +719,13 @@
   )
   // Closing the detail view takes the preview with it: the player shows at once.
   $effect(() => () => {
+    clearTimeout(handoverTimer)
     if (!carrying.active) return
     carrying.active = false
     void window.wta.preview.carryEnd().catch(() => {})
   })
 
-  const showStream = $derived(streamPlan !== null && (!previewAudio.suspended || carrying.active))
+  const showStream = $derived(streamPlan !== null && (!previewAudio.suspended || carrying.active || handingOver))
   /** The mounted stream is really playing (`PreviewReport.started`); it is on screen from here. */
   let streamStarted = $state(false)
   $effect(() => {
@@ -815,9 +836,10 @@
       {#if showStream && streamPlan}
         <StreamPreview
           plan={streamPlan}
-          muted={carrying.active ? carryMuted : heroMuted || !streamStarted}
-          paused={carrying.active && carryPaused}
-          carried={carrying.active}
+          muted={carrying.active ? carryMuted : handingOver || heroMuted || !streamStarted}
+          paused={(carrying.active || handingOver) && carryPaused}
+          carried={carrying.active || handingOver}
+          leaving={handingOver}
           onstate={(state) => {
             if (state.started) streamStarted = true
             lastReport = state

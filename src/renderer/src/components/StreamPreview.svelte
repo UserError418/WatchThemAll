@@ -1,6 +1,15 @@
 <script module lang="ts">
   /** How long the film takes to fade in over whatever the hero showed before it. */
   export const STREAM_FADE_MS = 600
+  /**
+   * The player shown, a carried preview stays over it this long, silent,
+   * then fades out. A player is not painted in the instant it is shown: the
+   * phone showed ~150 ms of black between the two when the preview went at
+   * once (screen recording, 2026-09-29). On the desktop the player's view
+   * paints over the page, so there the preview simply goes unseen.
+   */
+  export const CARRY_HANDOVER_HOLD_MS = 300
+  export const CARRY_HANDOVER_FADE_MS = 250
 </script>
 
 <script lang="ts">
@@ -34,6 +43,11 @@
      * for the player (`ontap`).
      */
     carried?: boolean
+    /**
+     * Carried, and the player is showing now: the film stays over it for
+     * `CARRY_HANDOVER_HOLD_MS`, then fades, and taps go to the player.
+     */
+    leaving?: boolean
     /** Paused at the viewer's word; only while carried. */
     paused?: boolean
     onstate: (state: PreviewReport) => void
@@ -41,7 +55,7 @@
     ontap?: () => void
   }
 
-  const { plan, muted, carried = false, paused = false, onstate, onfail, ontap }: Props = $props()
+  const { plan, muted, carried = false, leaving = false, paused = false, onstate, onfail, ontap }: Props = $props()
 
   /**
    * How long a preview may take to show a film. The plan only offers sources
@@ -184,9 +198,12 @@
   class="stream-frame"
   class:shown={started}
   class:carried
+  class:leaving
   style:--fade="{STREAM_FADE_MS}ms"
+  style:--leave-hold="{CARRY_HANDOVER_HOLD_MS}ms"
+  style:--leave-fade="{CARRY_HANDOVER_FADE_MS}ms"
   aria-hidden="true"
-  onclick={() => carried && ontap?.()}
+  onclick={() => carried && !leaving && ontap?.()}
 >
   {#if plan.surface === 'webview'}
     <webview bind:this={webview} class="stream" src={plan.src} tabindex="-1"></webview>
@@ -230,6 +247,12 @@
     background: #000;
     pointer-events: auto;
     cursor: pointer;
+  }
+
+  .stream-frame.carried.leaving {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--leave-fade) ease-in var(--leave-hold);
   }
 
   .stream-frame.carried .stream {
