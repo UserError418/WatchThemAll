@@ -34,9 +34,19 @@ describe('CarryOver', () => {
     expect(carry.step(film(601), T0 + 4_000)).toEqual({ kind: 'seek', to: 604 + CARRY_SEEK_LEAD_S })
     // The seek has not landed yet.
     expect(carry.step(film(601.5), T0 + 4_500)).toEqual({ kind: 'wait' })
-    // Landed, within a second of the preview.
-    expect(carry.step(film(605.8), T0 + 5_600)).toEqual({ kind: 'release' })
+    // Landed, within a second of the preview, but not yet seen moving: it may still be buffering.
+    expect(carry.step(film(605.8), T0 + 5_600)).toEqual({ kind: 'wait' })
+    // A second later it has moved on by a second: playing, so it is shown.
+    expect(carry.step(film(606.8), T0 + 6_600)).toEqual({ kind: 'release' })
     expect(carry.done).toBe(true)
+  })
+
+  it('waits while the film says it is buffering, and starts watching it move again afterwards', () => {
+    const carry = new CarryOver(T0)
+    carry.update({ seconds: 600, paused: false, muted: false, at: T0 })
+    expect(carry.step(film(600.1, { waiting: true }), T0 + 100)).toEqual({ kind: 'wait' })
+    expect(carry.step(film(600.1), T0 + 200)).toEqual({ kind: 'wait' })
+    expect(carry.step(film(601.1), T0 + 1_200)).toEqual({ kind: 'release' })
   })
 
   it('does not lead a paused preview: the film waits at its second', () => {
@@ -65,7 +75,8 @@ describe('CarryOver', () => {
 
   it('lets the player be seen as soon as its film plays when the preview never said where it was', () => {
     const carry = new CarryOver(T0)
-    expect(carry.step(film(12), T0 + 3_000)).toEqual({ kind: 'release' })
+    expect(carry.step(film(12), T0 + 3_000)).toEqual({ kind: 'wait' })
+    expect(carry.step(film(12.5), T0 + 3_500)).toEqual({ kind: 'release' })
   })
 
   it('releases at most once, and keeps saying so', () => {

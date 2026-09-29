@@ -95,6 +95,7 @@ import {
 } from '@main/providerscan'
 import { ResultStore } from '@shared/store/results'
 import { CarryOver, type HeldFilm } from '@shared/carryover'
+import { FilmLink } from '@/player/filmlink'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { choosePreview } from '@main/previewplan'
@@ -494,6 +495,17 @@ export async function createBridge(): Promise<WtaApi> {
   /** The held player's film, as the relay last reported it. */
   let heldFilm: HeldFilm | null = null
   let carryTimer: ReturnType<typeof setInterval> | null = null
+  /** The surface's frame, for the carry to read and move its film. */
+  let surfaceFrame: HTMLIFrameElement | null = null
+  /**
+   * The held film, read through the film relay's full reports, as our
+   * overlay reads it. Not the relay's two-second `time` reports, which it
+   * sends only for the element it has settled on as the film. On the
+   * emulator (2026-09-29) a held VidRock played muted at the preview's very
+   * second while none of those reached the carry, which gave up at 15 s.
+   */
+  let heldLink: FilmLink | null = null
+  let stopHeldListening: (() => void) | null = null
 
   const overlayHub = createOverlayHub()
   const overlayConfig = new Signal<PlayerOverlayConfig>()
@@ -576,7 +588,10 @@ export async function createBridge(): Promise<WtaApi> {
   const overlayHost = createOverlayHost(playerApi)
 
   const surface = createPlayerSurface({
-    onFrameLoad: (frame) => overlayHost.load(frame),
+    onFrameLoad: (frame) => {
+      surfaceFrame = frame
+      overlayHost.load(frame)
+    },
     onMediaState: (playing) => {
       videoPlaying = playing
       playerPaused.emit(!playing)
@@ -599,11 +614,6 @@ export async function createBridge(): Promise<WtaApi> {
      * television has the picture while casting, and resumes on its own.
      */
     onFilmTime: (time) => {
-      if (carry !== null && !carry.done) {
-        heldFilm = { seconds: time.seconds, duration: time.duration, playing: time.playing }
-        stepCarry()
-        return
-      }
       if (!session || onTv || resumeSeek === null) return
       const to = resumeSeek.next(time, Date.now())
       if (to !== null) surface.seek(to, time.duration)
@@ -707,6 +717,22 @@ export async function createBridge(): Promise<WtaApi> {
   const endCarryTimer = (): void => {
     if (carryTimer) clearInterval(carryTimer)
     carryTimer = null
+    stopHeldListening?.()
+    stopHeldListening = null
+    heldLink = null
+  }
+
+  const listenToHeldFilm = (): void => {
+    const link = new FilmLink((message) => surfaceFrame?.contentWindow?.postMessage(message, '*'))
+    const onMessage = (event: MessageEvent): void => {
+      if (surfaceFrame === null || event.source !== surfaceFrame.contentWindow || !link.receive(event.data)) return
+      const film = link.view().film
+      heldFilm = film && { seconds: film.seconds, duration: film.duration, playing: !film.paused, waiting: film.waiting }
+      stepCarry()
+    }
+    window.addEventListener('message', onMessage)
+    heldLink = link
+    stopHeldListening = () => window.removeEventListener('message', onMessage)
   }
 
   /** Open held: the surface out of sight, our controls down, the film silent (`held` in its config). */
@@ -717,15 +743,19 @@ export async function createBridge(): Promise<WtaApi> {
     applyHidden()
     announceOverlayConfig()
     endCarryTimer()
-    // On a clock as well as on the film's reports: a film that never reports
-    // must still run out the give-up time.
-    carryTimer = setInterval(() => stepCarry(), 500)
+    listenToHeldFilm()
+    // On a clock as well as on the film's reports: asking for them, and so
+    // that a film that never reports still runs out the give-up time.
+    carryTimer = setInterval(() => {
+      heldLink?.watch()
+      stepCarry()
+    }, 500)
   }
 
   const stepCarry = (): void => {
     if (carry === null || carry.done) return
     const move = carry.step(heldFilm, Date.now())
-    if (move.kind === 'seek') surface.seek(move.to, heldFilm?.duration ?? 0)
+    if (move.kind === 'seek') heldLink?.seekTo(move.to)
     if (move.kind === 'release') releaseCarry()
   }
 

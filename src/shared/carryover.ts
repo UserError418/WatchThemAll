@@ -38,6 +38,8 @@ export interface HeldFilm {
   seconds: number
   duration: number
   playing: boolean
+  /** Buffering, where the reader can tell (the film relay can; the desktop's poll cannot). */
+  waiting?: boolean
 }
 
 export type CarryMove = { kind: 'wait' } | { kind: 'seek'; to: number } | { kind: 'release' }
@@ -64,6 +66,8 @@ const MIN_FILM_SECONDS = 120
 
 export class CarryOver {
   private place: CarriedPlace | null = null
+  /** The reading before this one, to see the film move; forgotten across a seek. */
+  private previous: { seconds: number; at: number } | null = null
   private seeks = 0
   private lastSeekAt = Number.NEGATIVE_INFINITY
   private released = false
@@ -94,16 +98,29 @@ export class CarryOver {
   step(film: HeldFilm | null, now: number): CarryMove {
     if (this.released) return { kind: 'release' }
     if (now - this.openedAt >= CARRY_GIVE_UP_MS) return this.release()
-    // Not the film yet (nothing, an advert, or loaded and not moving).
-    if (film === null || film.duration < MIN_FILM_SECONDS || !film.playing) return { kind: 'wait' }
+    // Not the film yet (nothing, an advert, loaded and not playing, or buffering).
+    if (film === null || film.duration < MIN_FILM_SECONDS || !film.playing || film.waiting) {
+      this.previous = null
+      return { kind: 'wait' }
+    }
+    /*
+     * Shown only while its time is seen moving, not merely at the right
+     * second: straight after a seek the film reports the new second while it
+     * is still buffering there, and the source's own poster is what would be
+     * on screen (measured on the phone, VidRock, 2026-09-29).
+     */
+    const before = this.previous
+    this.previous = { seconds: film.seconds, at: now }
+    const moving = before !== null && film.seconds - before.seconds > 0.2 && film.seconds - before.seconds < (now - before.at) / 1000 + 2
     const target = this.target(now)
-    // No word from the preview: the film is playing, which is all there is to wait for.
-    if (target === null) return this.release()
-    if (Math.abs(film.seconds - target) <= CARRY_TOLERANCE_S) return this.release()
+    // No word from the preview: the film playing is all there is to wait for.
+    if (target === null) return moving ? this.release() : { kind: 'wait' }
+    if (Math.abs(film.seconds - target) <= CARRY_TOLERANCE_S) return moving ? this.release() : { kind: 'wait' }
     if (now - this.lastSeekAt < CARRY_SEEK_SETTLE_MS) return { kind: 'wait' }
     if (this.seeks >= CARRY_MAX_SEEKS) return this.release()
     this.seeks += 1
     this.lastSeekAt = now
+    this.previous = null
     return { kind: 'seek', to: target + (this.place?.paused ? 0 : CARRY_SEEK_LEAD_S) }
   }
 
