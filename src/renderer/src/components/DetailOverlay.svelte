@@ -562,14 +562,15 @@
    * plays the episode Resume would start, from the saved place, and needs no
    * watch history.
    *
-   * The trailer plays meanwhile (the owner, 2026-09-28: "the user would
-   * always see at least some video"), and the stream crossfades in over it
-   * once it is really playing. Until then the stream is silent, so the two
-   * never play out loud together. Should the stream give up, the trailer
-   * simply carries on. The backdrop is left only while neither has started,
-   * or when both failed. This used to hold the trailer back until the plan
-   * was known, so it never flashed up only to be replaced; the owner prefers
-   * the video.
+   * What shows until it plays (2.0.6, agreed 2026-09-29): the stream's own
+   * first seconds, kept on this device (`CachedStream`, the copy), when the
+   * player or a preview was left here or a test found the source; else the
+   * still. The YouTube trailer is only for a title with no test results at
+   * all, which has no stream preview either. From 2.0.4 to 2.0.5 the trailer
+   * played under every loading preview ("the user would always see at least
+   * some video"); the copy is that video now, and it is the title itself.
+   * The stream crossfades in over the copy or the still once it is really
+   * playing, silent until then, so nothing plays out loud twice.
    */
 
   /**

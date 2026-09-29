@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**WatchThemAll** · Last updated: 28 September 2026
+**WatchThemAll** · Last updated: 29 September 2026
 
 WatchThemAll is an open-source desktop and Android application with no backend.
 There is no server operated by this project, no account to create, and no
@@ -16,6 +16,12 @@ quality, and whether that was measured on a desktop or a phone. On desktop,
 Settings shows you where; on Android both live in the app's private storage.
 
 Nothing in these files is sent anywhere unless you turn on sync.
+
+To start a title's preview at once, the application also keeps about half a
+minute of its video **on your device**: where you left the player or a preview,
+or the start after a provider test. It is fetched from the provider just as the
+player fetches it, for at most 40 titles and 1 GB, the oldest removed first, and
+it is never synced or sent anywhere.
 
 ## Optional sync
 
