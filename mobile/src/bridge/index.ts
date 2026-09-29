@@ -115,7 +115,7 @@ import {
   ResumeSeek,
   WrittenPositions,
 } from '@main/resume'
-import { capture, createCastBridge } from './cast'
+import { capture, createCastBridge, type Candidate } from './cast'
 import { createSegmentStore, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
 import { App as CapacitorApp } from '@capacitor/app'
@@ -1798,7 +1798,53 @@ export async function createBridge(): Promise<WtaApi> {
       surface.restore(candidate ? resumeUrl(candidate) : undefined)
     },
     onProgress: (payload) => providerScan.emit(payload),
+    onStream: (key, providerId, requests) => {
+      const title = scanStreams.get(key) ?? new Map<string, Candidate[]>()
+      title.set(providerId, requests)
+      scanStreams.set(key, title)
+    },
   })
+
+  /**
+   * The playlists each source's session asked for in the scan under way, by
+   * title then source; in memory only, dropped once the scan is filed.
+   */
+  const scanStreams = new Map<string, Map<string, Candidate[]>>()
+
+  /**
+   * After a test, keep the preview's first seconds, as on the desktop
+   * (`cacheAfterTest` in `src/main/index.ts`): its source, from where it would
+   * start, if no window is kept yet.
+   */
+  const cacheAfterTest = (media: TitleRef, episode: { season: number; episode: number } | null, runtimeMinutes: number | null): void => {
+    const key = titleKey(media)
+    const streams = scanStreams.get(key)
+    scanStreams.delete(key)
+    const cache = segmentStore
+    if (!streams || cache === null) return
+    const req: PlayRequest = {
+      ...media,
+      title: '',
+      season: episode?.season ?? null,
+      episode: episode?.episode ?? null,
+      providerId: null,
+      runtimeMinutes,
+    }
+    const choice = choosePreview({
+      providers: automaticOrderFor(req).providers,
+      scan: titleResults(testResults.sources(), key, episodeOf(req), 'phone').scan,
+      req,
+      resume: resumeOfferFor(store.read().resumePoints, req),
+    })
+    const requests = choice && streams.get(choice.provider.id)
+    if (!choice || !requests) {
+      const why = choice ? `${choice.provider.id}, its preview source, did not stream in it` : 'no source previews'
+      console.log(`[cache] nothing kept after the test (${key}): ${why}`)
+      return
+    }
+    if (cache.find(windowWhere(req, choice.provider.id), choice.startSeconds) !== null) return
+    void cache.save(windowWhere(req, choice.provider.id), requests, { seconds: choice.startSeconds, duration: 0 }, runtimeMinutes)
+  }
 
   /**
    * A scan stops when the app leaves the foreground.
@@ -1844,6 +1890,7 @@ export async function createBridge(): Promise<WtaApi> {
     )
     // Filed under the episode it tested: see `scanEpisode` and `airedEpisode`.
     testResults.record(resultsFromScan(result, testResults.device(), target))
+    cacheAfterTest(media, target, facts?.runtime ?? null)
     return result
   }
 

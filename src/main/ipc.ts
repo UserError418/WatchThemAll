@@ -193,6 +193,8 @@ export interface IpcDeps {
    * exist.
    */
   scan: ScanService
+  /** A scan was filed: keep the preview's first seconds from it (`cacheAfterTest`). */
+  scanFiled: (media: TitleRef, episode: { season: number; episode: number } | null) => void
   /** The watchlist tester's state, for Settings. */
   backgroundStatus: () => WatchlistTestStatus
 }
@@ -334,6 +336,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
       // Filed under the episode it tested, which is not always the one asked
       // for: see `scanEpisode` and `airedEpisode`.
       deps.results.record(resultsFromScan(scan, deps.results.device(), target))
+      deps.scanFiled(media, target)
       return scan
     },
   )

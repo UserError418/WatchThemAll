@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
 import type { PlayRequest, PreviewPlan, TitleRef } from '@shared/ipc'
+import type { CapturedRequest } from './segmentsave'
 import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
@@ -265,6 +266,7 @@ const scan = createScanService({
   // The bare shell: a test measures the source, not v2's controls over it.
   frameUrl: (providerUrl) =>
     rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl, { bare: true }) : providerUrl,
+  onStream: noteScanStream,
   onProgress: (progress) => {
     send(EV.providerScan, progress)
     // The player chrome is a separate document with its own preload, so the
@@ -364,6 +366,7 @@ const autoTester = new AutoTester({
         : { hold: () => player !== null },
     )
     testResults.record(resultsFromScan(result, testResults.device(), target))
+    cacheAfterTest(entry, target)
   },
 })
 
@@ -892,9 +895,65 @@ function keepStreamWindow(
 }
 
 /**
- * Keep where a preview got to, past its grace period, as the player would
- * have; `cacheSource`: its stream too, from there, for the preview cache.
+ * The playlists each source's page asked for in the scan under way, by title
+ * then source: what `cacheAfterTest` saves the preview's window from. In
+ * memory only, and dropped once the scan is filed.
  */
+const scanStreams = new Map<string, Map<string, CapturedRequest[]>>()
+
+/** Titles held at most: the background tester's one-source probes are never filed through `cacheAfterTest`. */
+const SCAN_STREAM_TITLES = 4
+
+function noteScanStream(key: string, providerId: string, requests: CapturedRequest[]): void {
+  const title = scanStreams.get(key) ?? new Map<string, CapturedRequest[]>()
+  title.set(providerId, requests)
+  scanStreams.delete(key)
+  scanStreams.set(key, title)
+  // Oldest first out; a Map iterates in insertion order.
+  while (scanStreams.size > SCAN_STREAM_TITLES) scanStreams.delete(scanStreams.keys().next().value!)
+}
+
+/**
+ * After a test, keep the preview's first seconds (scope agreed 2026-09-29):
+ * a title that was tested and never played then previews at once, as one
+ * left from the player does. The window is the one the preview would play —
+ * its source, from the place it would start — and only if none is kept yet.
+ */
+function cacheAfterTest(ref: TitleRef, episode: { season: number; episode: number } | null): void {
+  const key = titleKey(ref)
+  const streams = scanStreams.get(key)
+  scanStreams.delete(key)
+  if (!streams || segmentStore === null) return
+  const cache = segmentStore
+  void (async () => {
+    const facts = await tmdb.detail(ref.tmdbId, ref.type).catch(() => null)
+    const req: PlayRequest = {
+      tmdbId: ref.tmdbId,
+      imdbId: ref.imdbId,
+      type: ref.type,
+      title: facts?.title ?? '',
+      season: episode?.season ?? null,
+      episode: episode?.episode ?? null,
+      providerId: null,
+      runtimeMinutes: facts?.runtime ?? null,
+    }
+    const choice = choosePreview({
+      providers: automaticOrderFor(req).providers,
+      scan: titleResults(testResults.sources(), key, episodeOf(req), 'desktop').scan,
+      req,
+      resume: resumeOfferFor(store.read().resumePoints, req),
+    })
+    const requests = choice && streams.get(choice.provider.id)
+    if (!choice || !requests) {
+      const why = choice ? `${choice.provider.id}, its preview source, did not stream in it` : 'no source previews'
+      console.log(`[cache] nothing kept after the test (${key}): ${why}`)
+      return
+    }
+    if (cache.find(windowWhere(req, choice.provider.id), choice.startSeconds) !== null) return
+    await cache.save(windowWhere(req, choice.provider.id), requests, { seconds: choice.startSeconds, duration: 0 }, req.runtimeMinutes)
+  })()
+}
+
 /**
  * The preview settles like a play (the owner, 2026-09-29: watching counts
  * wherever it happened): the place, the heard time into the history, and
@@ -1402,6 +1461,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
         carryEnd: () => (player?.held() ? player.carryEnd() : send(EV.carryReleased, null)),
       },
       scan,
+      scanFiled: cacheAfterTest,
     })
 
     // After the IPC is up, so its first status reaches a window that can ask.

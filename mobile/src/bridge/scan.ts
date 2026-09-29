@@ -152,6 +152,8 @@ export interface ScanRunnerOptions {
   suspendPlayback: () => void
   resumePlayback: () => void
   onProgress: (progress: ProviderScanProgress) => void
+  /** A provider streamed: its session's playlist requests, for the preview cache to save from once the scan is filed. */
+  onStream?: (titleKey: string, providerId: string, requests: Candidate[]) => void
 }
 
 /**
@@ -190,6 +192,8 @@ interface Measured {
   reason: ScanReason | null
   /** How the video arrived, for a stream only. See `StreamDelivery`. */
   delivery: StreamDelivery | null
+  /** A stream's playlist requests, with the page's headers, newest first: for the preview cache. */
+  requests?: Candidate[]
 }
 
 export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
@@ -276,6 +280,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     }
 
     const settle = (provider: Provider, measured: Measured): void => {
+      if (measured.verdict === 'stream' && measured.requests?.length) options.onStream?.(titleKey, provider.id, measured.requests)
       verdicts[provider.id] = measured.verdict
       testedAt[provider.id] = Date.now()
       if (measured.reason !== null) reasons[provider.id] = measured.reason
@@ -525,6 +530,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
           quality: await readQuality(bodies, latestCandidates),
           reason: null,
           delivery: proven.delivery,
+          requests: [...candidates()].reverse(),
         }
       }
 

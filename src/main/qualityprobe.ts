@@ -38,6 +38,7 @@
  * answer like any other file.
  */
 
+import type { CapturedRequest } from './segmentsave'
 import type { WebContents } from 'electron'
 import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
 import { probeStream, streamReason, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
@@ -164,6 +165,13 @@ export interface QualityProbeResult {
   /** What the scan counted as the stream — the evidence behind `verdict`. */
   mediaSamples: string[]
   playlists: PlaylistReading[]
+  /**
+   * The playlists the page asked for, with its headers, those that answered
+   * first: what the preview cache saves a window from after a test
+   * (`segmentstore.ts`). Held in memory only; the tokens in them are the
+   * source's, and never written into a result.
+   */
+  requests: CapturedRequest[]
   /** Whole-file media URLs the page fetched, truncated. */
   wholeFiles: string[]
   /** The `<video>` judged to be the title — the longest one with a picture. */
@@ -452,11 +460,24 @@ export async function probeQuality(
     delivery: result.delivery,
     mediaSamples: result.mediaSamples,
     playlists: read,
+    requests: playlistRequests(candidates, read),
     wholeFiles,
     video,
     sniffed,
     judgement,
   }
+}
+
+/** The captured playlists as requests to replay, the ones that answered before the rest. */
+function playlistRequests(
+  candidates: ReadonlyMap<string, { kind: Candidate; headers: Record<string, string> }>,
+  read: readonly PlaylistReading[],
+): CapturedRequest[] {
+  const answered = new Set(read.filter((p) => p.status === 200).map((p) => p.url))
+  const all = [...candidates.entries()]
+    .filter(([, c]) => c.kind !== 'whole-file')
+    .map(([url, c]) => ({ url, headers: c.headers }))
+  return [...all.filter((r) => answered.has(r.url)), ...all.filter((r) => !answered.has(r.url))]
 }
 
 /**

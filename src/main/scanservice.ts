@@ -65,6 +65,7 @@
  * the contention the first pass used to run at.
  */
 
+import type { CapturedRequest } from './segmentsave'
 import type { Provider, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
 import type { ProbeSubject } from './streamprobe'
@@ -116,6 +117,11 @@ export interface ScanServiceOptions {
   longTimeoutMs?: number
   /** How many providers are under test at every moment. See the header. */
   concurrency?: number
+  /**
+   * A provider streamed: the playlist requests its page made, for the preview
+   * cache to save a window from once the scan is filed (`index.ts`).
+   */
+  onStream?: (titleKey: string, providerId: string, requests: CapturedRequest[]) => void
 }
 
 /**
@@ -207,13 +213,14 @@ export function createScanService(options: ScanServiceOptions): ScanService {
    * The quality is `probeQuality`'s scan reading, which stops where the probe
    * always stopped; see `QualityMode` for why it must not linger.
    */
-  const probe = async (provider: Provider, subject: ProbeSubject, budget: number): Promise<Measured> => {
+  const probe = async (titleKey: string, provider: Provider, subject: ProbeSubject, budget: number): Promise<Measured> => {
     const result = await probeQuality(provider, subject, {
       mode: 'scan',
       timeoutMs: budget,
       frameUrl: options.frameUrl,
     })
     const streamed = result.verdict === 'stream'
+    if (streamed && result.requests.length > 0) options.onStream?.(titleKey, provider.id, result.requests)
     return {
       verdict: streamed || !result.reason ? 'stream' : verdictForReason(result.reason),
       ms: streamed ? result.timeToMediaMs : null,
@@ -230,7 +237,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
     async probeOne(titleKey, subject, provider) {
       const before = token
-      const measured = await probe(provider, subject, longTimeoutMs)
+      const measured = await probe(titleKey, provider, subject, longTimeoutMs)
       // A scan by hand started, or was cancelled, while this one ran.
       if (token !== before || running) return null
       const at = Date.now()
@@ -320,7 +327,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
        * longer budget: "timeout (25 s)" is the truer sentence.
        */
       const perform = async (job: Job): Promise<void> => {
-        const measured = await probe(job.provider, subject, job.budgetMs)
+        const measured = await probe(titleKey, job.provider, subject, job.budgetMs)
         inFlight.delete(job.provider.id)
         // Checked after the await: the user may have cancelled during the
         // probe, and a late write would corrupt the next run's verdicts.
