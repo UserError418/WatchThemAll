@@ -99,7 +99,7 @@ import { checkAll, sweepDueIn } from '@main/releases'
 import { UpNextController, isEpisodeEnd, type UpNextPlace } from '@main/upnext'
 import { nextAiredEpisode } from '@shared/episodesteps'
 import { isOpenableExternally } from '@main/externalurl'
-import type { PlayerReading } from '@main/playermessage'
+import { readingEpisode, type PlayerReading } from '@main/playermessage'
 import {
   isWatchedEnough,
   resumeAction,
@@ -626,19 +626,17 @@ export async function createBridge(): Promise<WtaApi> {
        * viewer actually is.
        */
       const named = progress.namedEpisode
-      const names = reading.season !== null && reading.episode !== null
+      const names = readingEpisode(session.req.type, reading)
       const advanced =
-        names &&
-        named !== null &&
-        (named.season !== reading.season || named.episode !== reading.episode)
+        names !== null && named !== null && (named.season !== names.season || named.episode !== names.episode)
 
       if (advanced) {
         settleProgress(session.req)
-        session = { ...session, req: { ...session.req, season: reading.season, episode: reading.episode } }
+        session = { ...session, req: { ...session.req, ...names } }
         progress.episodeOpenedAt = Date.now()
         emitPlayerState()
       }
-      if (names) progress.namedEpisode = { season: reading.season!, episode: reading.episode! }
+      if (names !== null) progress.namedEpisode = names
 
       progress.reading = reading
       progress.candidateReported = true
@@ -957,9 +955,10 @@ export async function createBridge(): Promise<WtaApi> {
    * resume the wrong episode next time.
    */
   const contextFor = (req: PlayRequest, reading: PlayerReading | null): PlayRequest => {
-    if (reading === null || reading.season === null || reading.episode === null) return req
-    if (reading.season === req.season && reading.episode === req.episode) return req
-    return { ...req, season: reading.season, episode: reading.episode }
+    const named = reading === null ? null : readingEpisode(req.type, reading)
+    if (named === null) return req
+    if (named.season === req.season && named.episode === req.episode) return req
+    return { ...req, ...named }
   }
 
   /**

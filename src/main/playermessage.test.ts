@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parsePlayerMessage } from './playermessage'
+import { parsePlayerMessage, readingEpisode } from './playermessage'
 
 /**
  * The two payloads below are transcribed from an Android 16 emulator, captured
@@ -433,5 +433,20 @@ describe('choosing an entry out of a store', () => {
   it('ignores an entry with no position in it', () => {
     const payload = store({ 'movie-550': { id: 550, title: 'Fight Club' } })
     expect(parsePlayerMessage(payload)).toBeNull()
+  })
+})
+
+describe('readingEpisode', () => {
+  it('is the episode a reading names, for a series', () => {
+    expect(readingEpisode('tv', { season: 2, episode: 5 })).toEqual({ season: 2, episode: 5 })
+  })
+
+  it('is nothing for a film, whatever the source names', () => {
+    expect(readingEpisode('movie', { season: 1, episode: 1 })).toBeNull()
+  })
+
+  it('is nothing when the reading names no episode', () => {
+    expect(readingEpisode('tv', { season: null, episode: null })).toBeNull()
+    expect(readingEpisode('tv', { season: 1, episode: null })).toBeNull()
   })
 })

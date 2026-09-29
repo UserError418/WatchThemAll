@@ -221,6 +221,23 @@ export interface PlayerContext {
 }
 
 /**
+ * The episode a reading names, for a series only.
+ *
+ * A film has no episodes, and at least one source names "season 1, episode 1"
+ * for one anyway (Videasy with Fight Club, seen on the emulator 2026-09-28).
+ * Believed, it filed the film's position under an episode's key, where
+ * nothing reads it, and would have taken a change of it for the provider
+ * moving on to another episode.
+ */
+export function readingEpisode(
+  type: 'tv' | 'movie',
+  reading: Pick<PlayerReading, 'season' | 'episode'>,
+): { season: number; episode: number } | null {
+  if (type !== 'tv' || reading.season === null || reading.episode === null) return null
+  return { season: reading.season, episode: reading.episode }
+}
+
+/**
  * Parse one `message` payload, or return null if it is not one of ours.
  *
  * Null is the common case and not an error: an app window receives messages
