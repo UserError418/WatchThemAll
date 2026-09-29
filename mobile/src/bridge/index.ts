@@ -763,6 +763,11 @@ export async function createBridge(): Promise<WtaApi> {
   const releaseCarry = (): void => {
     if (carry === null || carryTimer === null) return
     endCarryTimer()
+    // Shown before its film was ever read (a tap on the preview, the
+    // give-up): nothing has put the film at the preview's place, so the
+    // ordinary resume seek does, there, as it would have without the carry.
+    const target = carry.target(Date.now())
+    if (heldFilm === null && target !== null && session) resumeSeek = new ResumeSeek(target, session.req.runtimeMinutes)
     carry.release()
     surface.setConcealed(false)
     applyHidden()

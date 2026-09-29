@@ -2289,8 +2289,17 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (carry === null || !heldTimer) return
     clearInterval(heldTimer)
     heldTimer = null
+    // Shown before its film was ever read (a click on the preview, the
+    // give-up): nothing has put the film at the preview's place, so the
+    // ordinary resume seek does, there, as it would have without the carry.
+    const target = carry.target(Date.now())
     carry.release()
     if (!alive() || win.isDestroyed()) return
+    if (lastPosition === null && target !== null) {
+      resumeAt = target
+      seekDone = false
+      restorePosition()
+    }
     player.setBounds(slot)
     contents.setAudioMuted(mutedFromOutside)
     sendConfig()

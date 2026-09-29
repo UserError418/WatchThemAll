@@ -126,8 +126,14 @@
     background: #000;
   }
 
+  /*
+    Resume carried over: the detail view's preview stands in beneath this,
+    and must be seen and clicked through it. Its own z-index counts only
+    inside the detail view, which is below this frame.
+  */
   .player.carrying,
   .player.carrying .slot {
     background: transparent;
+    pointer-events: none;
   }
 </style>
