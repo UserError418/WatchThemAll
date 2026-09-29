@@ -384,6 +384,13 @@ export interface InlinePlayerOptions {
 }
 
 /**
+ * How much of a held player stays inside the window's left edge. Not none:
+ * Chromium hides a view with nothing inside the window, and a hidden view is
+ * what the held player must not be (see "Held" in `createInlinePlayer`).
+ */
+const HELD_SLIVER = 1
+
+/**
  * Pause every video in a frame, for the mini player's button.
  *
  * Every one, not just the film: an advert left running is exactly what a
@@ -522,6 +529,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   let mini = false
   /** Held while the detail view's preview stands in; see "Held" below. Null for an ordinary start. */
   const carry = options.held ? new CarryOver(Date.now()) : null
+  const held = (): boolean => carry !== null && !carry.done
+  /** The slot the renderer last asked for; the view is there unless held. */
+  let slot: PlayerBounds = bounds
 
   const player: InlinePlayer = {
     carryTo: () => {},
@@ -1803,11 +1813,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   player.setBounds = (next: PlayerBounds): void => {
     if (closed || win.isDestroyed()) return
+    slot = next
     // Rounded because Electron wants integer device-independent pixels and the
     // renderer measures fractional CSS pixels; a fractional bound is silently
     // truncated, which drifts the video a pixel off its slot per resize.
     view.setBounds({
-      x: Math.round(next.x),
+      // Held: just left of the window, at its real size (see "Held" below).
+      // The overlay and the skip button are laid out from this view, so they
+      // go with it.
+      x: held() ? HELD_SLIVER - Math.round(next.width) : Math.round(next.x),
       y: Math.round(next.y),
       width: Math.max(1, Math.round(next.width)),
       height: Math.max(1, Math.round(next.height)),
@@ -2251,6 +2265,16 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
   /* ── Held: the preview stands in until the film is where it is ────────── */
 
+  /*
+   * Out of sight means beside the window, not hidden. A hidden view's page
+   * lays out at 0×0 and gets no frames: the film relay, which takes the
+   * largest video for the film, found none and told our overlay nothing, so
+   * its curtain was still up over the film for ~0.5 s after the swap; and the
+   * source had no player size to choose a stream for (measured 2026-09-29).
+   * Beside the window it is laid out and painted as it will be shown, and is
+   * shown by moving it into its slot.
+   */
+
   /** What `player.setMuted` (casting) asked for, applied once the player shows. */
   let mutedFromOutside = false
   let heldTimer: ReturnType<typeof setInterval> | null = null
@@ -2267,9 +2291,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     heldTimer = null
     carry.release()
     if (!alive() || win.isDestroyed()) return
-    view.setVisible(true)
-    overlay?.setVisible(true)
-    skipView?.setVisible(true)
+    player.setBounds(slot)
     contents.setAudioMuted(mutedFromOutside)
     sendConfig()
     if (carry.last()?.paused) player.setPaused(true)
@@ -2278,9 +2300,6 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   if (carry !== null) {
-    view.setVisible(false)
-    overlay?.setVisible(false)
-    skipView?.setVisible(false)
     contents.setAudioMuted(true)
     // The carry does the seeking, to where the preview is by then.
     seekDone = true

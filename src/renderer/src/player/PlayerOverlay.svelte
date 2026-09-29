@@ -89,6 +89,14 @@
    */
   const curtain = $derived(playerMode && !revealed && (!started || film === null))
 
+  /**
+   * A fade's length, or none while the player is held (Resume carried over).
+   * Held on the desktop, this page is out of sight and gets no frames, so a
+   * fade started then only runs once the player is shown: the curtain lifted
+   * over the film for ~0.6 s after the swap (screen recording, 2026-09-29).
+   */
+  const fadeMs = (ms: number): number => (config.held ? 0 : ms)
+
   const REVEAL_AFTER_MS = 25_000
   const LOST_REVEAL_MS = 10_000
   /** When to press the source's own play control while it has no film yet. */
@@ -702,12 +710,12 @@
     ></button>
 
     {#if film !== null && film.waiting && !paused}
-      <div class="spinner" transition:fade={{ duration: 200 }} aria-hidden="true"></div>
+      <div class="spinner" transition:fade={{ duration: fadeMs(200) }} aria-hidden="true"></div>
     {/if}
   {/if}
 
   {#if curtain}
-    <div class="curtain" transition:fade={{ duration: 350 }} aria-live="polite">
+    <div class="curtain" transition:fade={{ duration: fadeMs(350) }} aria-live="polite">
       <div class="curtain-spinner" aria-hidden="true"></div>
       <p class="curtain-label">
         {started ? 'Reconnecting' : `Starting ${context?.providerName ?? 'the source'}`}
