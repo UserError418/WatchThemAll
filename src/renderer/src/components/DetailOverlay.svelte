@@ -447,6 +447,18 @@
     void play(resumeEpisode(), previewSource ?? chosenProvider, streamOnScreen)
   }
 
+  /**
+   * An episode pressed in the list. The one the preview is showing opens the
+   * way Resume does, carried over on the preview's source: it is the same
+   * request, and the owner found tapping it started the player cold
+   * (2026-09-30). Any other episode has nothing on screen to carry.
+   */
+  function playEpisode(episode: EpisodeRef & { runtime?: number | null }): void {
+    const previewing = stream?.req.season === episode.season && stream?.req.episode === episode.episode
+    if (previewing) void play(episode, previewSource ?? chosenProvider, streamOnScreen)
+    else void play(episode)
+  }
+
   /** What pressing "+ Watched" will actually file, in words. */
   const watchedScopeLabel = $derived(
     subject.type === 'movie' ? 'Watched' : `Season ${selectedSeason} watched`,
@@ -1217,7 +1229,7 @@
                   watched={library.isWatched(subject.tmdbId, episode.season, episode.episode)}
                   current={resumeAt.season === episode.season &&
                     resumeAt.episode === episode.episode}
-                  onplay={(e) => play(e)}
+                  onplay={playEpisode}
                   ontoggleWatched={(e, watched) => {
                     library.entryFor(detail ?? subject)
                     library.setWatched(subject.tmdbId, e.season, e.episode, watched)
