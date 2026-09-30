@@ -167,6 +167,7 @@ function fromTyped(
   doc.settings = { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) }
   // Validated rather than trusted: it decides what Automatic plays.
   doc.settings.sourceOrder = normalizeSourceOrder(doc.settings.sourceOrder)
+  if (doc.settings.resumeSource !== 'last' && doc.settings.resumeSource !== 'best') doc.settings.resumeSource = 'last'
 
   doc.activeProviderIds = stringList(raw.activeProviderIds)
   doc.knownProviderIds = stringList(raw.knownProviderIds)

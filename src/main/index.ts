@@ -41,7 +41,6 @@ import bundledCatalog from './providers.json'
 import type { Provider, ProviderCatalog } from '@shared/types'
 import {
   defaultProviderOrder,
-  lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
   record,
@@ -49,6 +48,8 @@ import {
 } from './outcomes'
 import {
   kindTested,
+  lastPlayedHere,
+  WarmStarts,
   ownRows,
   playResult,
   resumeFirst,
@@ -662,7 +663,7 @@ function openPlayer(
     reportResult: (providerId, seen) => {
       const playing = player?.context ?? context
       const where = { device: testResults.device(), titleKey: titleKey(playing), episode: episodeOf(playing), providerId }
-      testResults.record([playResult(where, 'play', seen)])
+      testResults.record([playResult(where, 'play', warmStarts.measure(where.titleKey, providerId, seen))])
     },
     /**
      * Write the position down as it goes, not only when the player closes.
@@ -836,15 +837,18 @@ async function previewPlanFor(req: PlayRequest): Promise<PreviewPlan | null> {
   const doc = store.read()
   const key = titleKey(req)
   const resume = resumeOfferFor(doc.resumePoints, req)
+  // The window kept for this episode, from whichever source it came: it plays
+  // whatever source the preview then takes over from.
+  const keptSource = segmentStore?.keptSource(episodeWhere(req), resume?.seconds ?? 0) ?? null
   const choice = planPreview({
     providers: automaticOrderFor(req).providers,
     scan: titleResults(testResults.sources(), key, episodeOf(req), 'desktop').scan,
     req,
     resume,
-    keptSource: segmentStore?.keptSource(episodeWhere(req), resume?.seconds ?? 0) ?? null,
+    keptSource,
   })
   if (choice === null) return null
-  const kept = segmentStore?.find(windowWhere(req, choice.provider.id), choice.startSeconds) ?? null
+  const kept = keptSource === null ? null : (segmentStore?.find(windowWhere(req, keptSource), choice.startSeconds) ?? null)
   return {
     surface: 'webview',
     src: playerShellUrl(rendererBaseUrl, choice.url, { preview: { startSeconds: choice.startSeconds } }),
@@ -901,6 +905,9 @@ function keepStreamWindow(
   if (segmentStore === null || providerId === null || position === null || requests.length === 0) return
   void segmentStore.save(windowWhere(req, providerId), requests, position, req.runtimeMinutes ?? null)
 }
+
+/** Starts of sources on titles on this device: a warm one files no start time (`WarmStarts`). */
+const warmStarts = new WarmStarts()
 
 /**
  * The playlists each source's page asked for in the scan under way, by title
@@ -1195,8 +1202,10 @@ function automaticOrderFor(req: TitleRef & { season?: number | null; episode?: n
     scan,
     sourceOrder: settings.sourceOrder,
   })
-  // Then back to the source this title was last watched on — see `resumeFirst`.
-  return resumeFirst(ordered, lastWorkingForTitle(streamOutcomes, key), outcomes, scan)
+  // Then back to the source this title was last watched on here, unless the
+  // owner asked for the best every time — see `resumeFirst`, `lastPlayedHere`.
+  const last = settings.resumeSource === 'best' ? null : lastPlayedHere(testResults.sources(), key)
+  return resumeFirst(ordered, last, outcomes, scan)
 }
 
 /**
@@ -1470,6 +1479,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
         cacheStatus: () => segmentStore?.status() ?? null,
       },
       scan,
+      warmStarts,
       scanFiled: cacheAfterTest,
     })
 

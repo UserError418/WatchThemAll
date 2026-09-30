@@ -134,6 +134,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // The user's own order first: exactly the behaviour before this setting
   // existed, so nobody's Automatic changes until they choose otherwise.
   sourceOrder: ['list', 'speed', 'quality'],
+  // As before the setting existed: back to the source last played here.
+  resumeSource: 'last',
 }
 
 export function emptyDocument(deviceId = newDeviceId()): StoreDocument {

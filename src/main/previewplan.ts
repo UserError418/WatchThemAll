@@ -53,11 +53,10 @@ export interface PreviewChoice {
  * results are already gone.
  */
 /**
- * The preview from the source of a window kept on this device, when no test
- * here qualified (`SegmentStore.keptSource`). That source streamed here, the
- * copy is on screen at once, and it covers a start slower than the tests'
- * 8 s. Without this, a phone whose titles were tested on the PC kept windows
- * it never showed (2026-09-30): the plan gave up before looking for one.
+ * A source's preview behind a kept copy (`planPreview`), when no test here
+ * qualified. The copy is on screen at once and covers a start slower than
+ * the tests' 8 s. Without this, a phone whose titles were tested on the PC
+ * kept windows it never showed (2026-09-30).
  */
 export function keptPreview(
   provider: Provider,
@@ -111,15 +110,26 @@ export function choosePreview(input: {
 }
 
 /**
- * What the detail view previews: `choosePreview`'s answer, else the source of
- * the window kept for this episode (`keptSource`, null when none), else
- * nothing. A source picked by hand is still the only one, as in
- * `choosePreview`.
+ * What the detail view previews: `choosePreview`'s answer, else — when a
+ * window is kept for this episode (`keptSource`, from whatever source) — the
+ * source Resume would use, else nothing.
+ *
+ * With a copy on screen at once, the source behind it may be slow or
+ * untested here: the copy covers its start. That source is the one Resume
+ * plays (picked by hand, else the first in Automatic's order), not
+ * necessarily the one the copy came from; the owner, 2026-09-30: the copy
+ * "always plays, even if there is a mismatch between current chosen provider
+ * and where the cache came from". Two sources' cuts can differ by a few
+ * seconds, which the handover then shows as a small jump.
  */
 export function planPreview(input: Parameters<typeof choosePreview>[0] & { keptSource: string | null }): PreviewChoice | null {
   const tested = choosePreview(input)
   if (tested !== null || input.keptSource === null) return tested
-  if (input.req.providerId && input.req.providerId !== input.keptSource) return null
-  const provider = input.providers.find((p) => p.id === input.keptSource)
-  return provider === undefined ? null : keptPreview(provider, input.req, input.resume)
+  const { providers, req, resume } = input
+  const picked = req.providerId ? providers.find((p) => p.id === req.providerId) : undefined
+  for (const provider of picked ? [picked] : providers) {
+    const choice = keptPreview(provider, req, resume)
+    if (choice !== null) return choice
+  }
+  return null
 }

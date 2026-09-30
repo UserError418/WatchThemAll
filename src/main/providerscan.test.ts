@@ -16,6 +16,7 @@ import {
   castResult,
   isRetestDue,
   kindTested,
+  lastPlayedHere,
   ownRows,
   providerRank,
   resumeFirst,
@@ -23,6 +24,8 @@ import {
   scanEpisode,
   scanProgress,
   titleResults,
+  WarmStarts,
+  WARM_START_MS,
   type ResultSources,
 } from './providerscan'
 import type { SourceResult } from '@shared/sourceresults'
@@ -389,6 +392,14 @@ describe('titleResults', () => {
     expect(kindTested(sources({ history: played }), 'desktop', 'tv:tt1', ['a'])).toBe(false)
   })
 
+  /** The owner, 2026-09-30: the resume source is per device. */
+  it('resumes on the source last played on this device, not on another one', () => {
+    const play = (providerId: string, at: number, deviceId = here.deviceId) => ({ ...tested(providerId, 'stream', at), origin: 'play' as const, deviceId })
+    const history = [play('a', now - 3 * day), play('b', now - day, 'phone-1'), tested('c', 'stream', now)]
+    expect(lastPlayedHere(sources({ history }), 'tv:tt1')).toBe('a')
+    expect(lastPlayedHere(sources({ history: [play('b', now, 'phone-1')] }), 'tv:tt1')).toBeNull()
+  })
+
   it('reads the history for the episode asked about', () => {
     const history = [tested('a', 'stream', now - day, 1), tested('a', 'dead', now - day, 2)]
     expect(titleResults(sources({ history }), 'tv:tt1', { season: 1, episode: 1 }, 'desktop', now).scan?.verdicts).toEqual({ a: 'stream' })
@@ -466,5 +477,26 @@ describe('castResult', () => {
 
   it('records no answer where the television did not give a clear one', () => {
     expect(castResult(where, { delivery: 'segmented', outcome: null }, now)).not.toHaveProperty('cast')
+  })
+})
+
+/** The owner, 2026-09-30: sources that "load in under 1 s" were warm starts timed as cold ones. */
+describe('WarmStarts', () => {
+  const at = 1_800_000_000_000
+
+  it('times the first start of a source on a title, and not one soon after', () => {
+    const warm = new WarmStarts()
+    expect(warm.measure('tv:tt1', 'a', { at, streamed: true, ms: 4_000 }).ms).toBe(4_000)
+    expect(warm.measure('tv:tt1', 'a', { at: at + 60_000, streamed: true, ms: 300 }).ms).toBeUndefined()
+    // Another source, or another title, is cold.
+    expect(warm.measure('tv:tt1', 'b', { at: at + 60_000, streamed: true, ms: 5_000 }).ms).toBe(5_000)
+    expect(warm.measure('tv:tt2', 'a', { at: at + 60_000, streamed: true, ms: 5_000 }).ms).toBe(5_000)
+  })
+
+  it('is cold again after a while, and answers the same for the same start re-filed', () => {
+    const warm = new WarmStarts()
+    warm.measure('tv:tt1', 'a', { at, streamed: true, ms: 4_000 })
+    expect(warm.measure('tv:tt1', 'a', { at, streamed: true, ms: 4_000 }).ms).toBe(4_000)
+    expect(warm.measure('tv:tt1', 'a', { at: at + WARM_START_MS, streamed: true, ms: 6_000 }).ms).toBe(6_000)
   })
 })

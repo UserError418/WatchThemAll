@@ -72,7 +72,6 @@ import { buildPlayUrl, renderTemplate } from '@main/providers'
 import type { PlayCandidate } from '@main/providers'
 import {
   defaultProviderOrder,
-  lastWorkingForTitle,
   mediaKey,
   outcomesForTitle,
   record,
@@ -85,6 +84,8 @@ import {
   PLAY_MIN_FILM_SECONDS,
   PLAY_TIMING_MAX_MS,
   kindTested,
+  lastPlayedHere,
+  WarmStarts,
   playResult,
   previewResult,
   resumeFirst,
@@ -123,7 +124,7 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
-import { installFilmRelay } from './mediarelay'
+import { installFilmRelay, type RelayTime } from './mediarelay'
 import { createOverlayHub } from './overlayhub'
 import { createOverlayHost } from './overlayhost'
 import { createPhoneFullscreen } from './phonefullscreen'
@@ -467,6 +468,12 @@ export async function createBridge(): Promise<WtaApi> {
     candidateReported: boolean
     /** This source's play has been filed as a test result (`PlayMeasurement`). */
     candidateMeasured: boolean
+    /**
+     * The film element's first report at a film's length, for this source:
+     * when, and at what second. A play is filed once a later report shows its
+     * time moving on (`noteFilmPlaying`).
+     */
+    filmFirst: { at: number; seconds: number } | null
     /** When a reading was last written as the position; see `POSITION_WRITE_MS`. */
     writtenAt: number
     /**
@@ -667,7 +674,9 @@ export async function createBridge(): Promise<WtaApi> {
      * television has the picture while casting, and resumes on its own.
      */
     onFilmTime: (time) => {
-      if (!session || onTv || resumeSeek === null) return
+      if (!session || onTv) return
+      noteFilmPlaying(time)
+      if (resumeSeek === null) return
       const to = resumeSeek.next(time, Date.now())
       if (to !== null) surface.seek(to, time.duration)
     },
@@ -729,11 +738,6 @@ export async function createBridge(): Promise<WtaApi> {
       // Playing, and the time did not move since the last report: buffering.
       filmBuffering = reading.playing === true && progress.reading !== null && reading.seconds <= progress.reading.seconds
       progress.reading = reading
-      progress.candidateReported = true
-      if (!progress.candidateMeasured && (reading.duration ?? 0) >= PLAY_MIN_FILM_SECONDS) {
-        progress.candidateMeasured = true
-        recordPlay(session)
-      }
 
       // Written as it goes, not only when the player is left: Android can kill
       // the app at any moment, and until 1.9.8 everything since the last
@@ -1104,13 +1108,50 @@ export async function createBridge(): Promise<WtaApi> {
    * relay's readings do not carry the picture, and no failures: nothing the
    * phone sees while playing is the source's servers declaring one.
    */
-  const recordPlay = (current: { req: PlayRequest; candidates: PlayCandidate[]; index: number }): void => {
+  /**
+   * Starts of sources on titles here: a warm one files no start time. The
+   * phone most of all, where the preview and the player share one WebView
+   * and its cache (`WarmStarts`).
+   */
+  const warmStarts = new WarmStarts()
+
+  /**
+   * The source is streaming: the film element itself, at a film's length,
+   * with its time moving between two reports. Only the relay's reading of the
+   * element counts (`onFilmTime`).
+   *
+   * Until 2.0.9 any film-length reading did, including what a provider posts
+   * of its own accord: VidFast posts its whole watch history the moment its
+   * page loads, so a source that then failed was filed as streaming (measured
+   * on the emulator: VidFast "streamed" The Office in 8.3 s and never played).
+   * Timed to the first report at a film's length, not to the proof.
+   */
+  const noteFilmPlaying = (time: RelayTime): void => {
+    if (!session || !progress || progress.candidateMeasured) return
+    if (time.duration < PLAY_MIN_FILM_SECONDS || !time.playing) return
+    const first = progress.filmFirst
+    if (first === null) {
+      progress.filmFirst = { at: Date.now(), seconds: time.seconds }
+      return
+    }
+    if (time.seconds <= first.seconds) return
+    progress.candidateMeasured = true
+    progress.candidateReported = true
+    recordPlay(session, first.at)
+  }
+
+  const recordPlay = (current: { req: PlayRequest; candidates: PlayCandidate[]; index: number }, filmAt: number): void => {
     const providerId = current.candidates[current.index]?.provider.id
     if (!progress || providerId === undefined) return
     const at = Date.now()
-    const ms = at - progress.candidateShownAt
+    const ms = filmAt - progress.candidateShownAt
     const where = { device: testResults.device(), titleKey: titleKey(current.req), episode: episodeOf(current.req), providerId }
-    testResults.record([playResult(where, 'play', { at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) })])
+    const seen = warmStarts.measure(where.titleKey, providerId, {
+      at,
+      streamed: true as const,
+      ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}),
+    })
+    testResults.record([playResult(where, 'play', seen)])
     // The film is playing: its playlist is among the newest requests now, and
     // will not be once the segments have flooded the capture.
     void segmentStore?.notePlaylist(
@@ -1125,8 +1166,9 @@ export async function createBridge(): Promise<WtaApi> {
     if (!progress) return
     const shownMs = Date.now() - progress.candidateShownAt
 
-    // Proof, not inference: the provider's player posted a position out, which
-    // it only does once it has something to play.
+    // Proof, not inference: the film element was seen playing (`noteFilmPlaying`).
+    // A position the provider posts is not proof since 2.0.9: VidFast posts
+    // its watch history on load.
     const outcome: Outcome | null = progress.candidateReported
       ? 'stream'
       : shownMs >= DWELL_STREAM_MS
@@ -1537,6 +1579,7 @@ export async function createBridge(): Promise<WtaApi> {
       progress.candidateShownAt = Date.now()
       progress.candidateReported = false
       progress.candidateMeasured = false
+      progress.filmFirst = null
     }
     emitPlayerState()
     return true
@@ -1750,8 +1793,10 @@ export async function createBridge(): Promise<WtaApi> {
       scan,
       sourceOrder: settings.sourceOrder,
     })
-    // Then back to the source this title was last watched on — see `resumeFirst`.
-    return resumeFirst(ordered, lastWorkingForTitle(streamOutcomes, key), outcomes, scan)
+    // Then back to the source this title was last watched on here, unless the
+    // owner asked for the best every time — see `resumeFirst`, `lastPlayedHere`.
+    const last = settings.resumeSource === 'best' ? null : lastPlayedHere(testResults.sources(), key)
+    return resumeFirst(ordered, last, outcomes, scan)
   }
   const orderedForRequest = (req: TitleRef & { season?: number | null; episode?: number | null }): Provider[] =>
     automaticOrderFor(req).providers
@@ -2151,6 +2196,7 @@ export async function createBridge(): Promise<WtaApi> {
         candidateShownAt: now,
         candidateReported: false,
         candidateMeasured: false,
+        filmFirst: null,
         writtenAt: now,
         namedEpisode: null,
       }
@@ -2307,12 +2353,15 @@ export async function createBridge(): Promise<WtaApi> {
         await segmentStore?.settled(key, PLAN_WAITS_FOR_SAVE_MS)
         const doc = store.read()
         const resume = resumeOfferFor(doc.resumePoints, req)
+        // The window kept for this episode, from whichever source it came: it
+        // plays whatever source the preview then takes over from.
+        const keptSource = segmentStore?.keptSource(episodeWhere(req), resume?.seconds ?? 0) ?? null
         const choice = planPreview({
           providers: automaticOrderFor(req).providers,
           scan: titleResults(testResults.sources(), key, episodeOf(req), 'phone').scan,
           req,
           resume,
-          keptSource: segmentStore?.keptSource(episodeWhere(req), resume?.seconds ?? 0) ?? null,
+          keptSource,
         })
         if (choice === null) return null
         return {
@@ -2321,13 +2370,13 @@ export async function createBridge(): Promise<WtaApi> {
           providerId: choice.provider.id,
           providerName: choice.provider.name,
           startSeconds: choice.startSeconds,
-          cached: segmentStore?.find(windowWhere(req, choice.provider.id), choice.startSeconds) ?? null,
+          cached: keptSource === null ? null : (segmentStore?.find(windowWhere(req, keptSource), choice.startSeconds) ?? null),
         }
       },
       record: async (req: PlayRequest, providerId: string, streamedMs: number, filmSeconds = 0): Promise<void> => {
         const where = { device: testResults.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
         const result = previewResult(where, streamedMs, Date.now())
-        if (result) testResults.record([result])
+        if (result) testResults.record([warmStarts.measure(where.titleKey, providerId, result)])
         // The preview's film is playing: note its playlist while the capture still has it.
         void segmentStore?.notePlaylist(windowWhere(req, providerId), capture.list().catch(() => []), filmSeconds, req.runtimeMinutes ?? null)
       },

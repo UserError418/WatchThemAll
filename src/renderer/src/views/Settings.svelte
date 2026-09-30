@@ -215,6 +215,23 @@
             </li>
           {/each}
         </ol>
+
+        <!--
+          The owner, 2026-09-30: resuming on the last source kept picking one
+          another device was best on. Now it is this device's last source, and
+          this switch turns it off.
+        -->
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={library.settings.resumeSource === 'last'}
+            onchange={(e) => library.setResumeSource(e.currentTarget.checked ? 'last' : 'best')}
+          />
+          Resume on the source last played on this device
+        </label>
+        <p class="hint">
+          While it still works. Off, a title you are part-way through starts on the best available source, as a new one does.
+        </p>
       </section>
 
       <section class="card">
@@ -257,20 +274,6 @@
           Skip buttons for intros, recaps and credits
         </label>
 
-        <!--
-          Spelled out rather than hidden behind the label, because this is the only
-          switch in the app that changes who learns what you are watching.
-          Everything else here is either local or already visible to TMDB. It moved
-          out of the provider sidebar together with its checkbox — a privacy note
-          that ends up somewhere other than the control it describes is worse than
-          none at all.
-        -->
-        <p class="privacy">
-          Asks two community databases — <strong>IntroDB</strong> and <strong>SkipDB</strong>, plus
-          <strong>AniSkip</strong> for anime on the desktop — where the intro, the recap and the credits
-          are, by IMDB id and episode number. They
-          learn what you are watching. Nothing else is sent, and turning this off stops it at once.
-        </p>
       </section>
     </div>
 
@@ -444,17 +447,11 @@
     font-weight: var(--weight-emphasis);
   }
 
-  .hint,
-  .privacy {
+  .hint {
     margin: 0;
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: var(--leading-normal);
-  }
-
-  .privacy {
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
   }
 
   .row {

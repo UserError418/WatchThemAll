@@ -240,6 +240,45 @@ export type PlayMeasurement =
       reason: ScanReason
     }
 
+/** A start of a source on a title within this long of another on the same device is a warm one. */
+export const WARM_START_MS = 30 * 60_000
+
+/**
+ * Tells a cold start of a source from a warm one, on this device.
+ *
+ * A play or a preview files how long its source took to start, and the
+ * source lists show the median. A start soon after the same source played
+ * the same title here is warm: its page, player and first segments come from
+ * the HTTP cache, most of all on the phone, where the preview and the player
+ * share one WebView — Resume carrying the preview over, or the preview coming
+ * back after the player. Such a start can take well under a second and says
+ * nothing about the source (the owner, 2026-09-30: sources that "load in
+ * under 1 s"). A warm start still counts as a success; it files no time.
+ */
+export class WarmStarts {
+  private readonly starts = new Map<string, number[]>()
+
+  /** Whether the start at `at` is warm. Asking again for the same start (a play re-filed with its quality) answers the same. */
+  isWarm(titleKey: string, providerId: string, at: number): boolean {
+    const key = `${titleKey}\u0000${providerId}`
+    const before = (this.starts.get(key) ?? []).filter((t) => at - t < WARM_START_MS)
+    const warm = before.some((t) => t < at)
+    if (!before.includes(at)) before.push(at)
+    this.starts.set(key, before.slice(-8))
+    return warm
+  }
+
+  /** `seen` without its time when the start was warm. */
+  measure<T extends { at: number; ms?: number }>(titleKey: string, providerId: string, seen: T): T {
+    // Noted whether or not it carries a time: it warms the next start either way.
+    const warm = this.isWarm(titleKey, providerId, seen.at)
+    if (!warm || seen.ms === undefined) return seen
+    const untimed = { ...seen }
+    delete untimed.ms
+    return untimed
+  }
+}
+
 /** A play's or a preview's measurement as a result: weaker than a test when it failed, see `sourceresults.ts`. */
 export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: PlayMeasurement): SourceResult {
   if (!seen.streamed) {
@@ -438,6 +477,25 @@ export interface AutomaticOrder {
   providers: Provider[]
   /** Null when there is nothing to resume on, or it is no longer green. */
   resume: ResumeSource | null
+}
+
+/**
+ * The source this title last played on, on *this device*: its newest play
+ * that streamed in the results history. Null when this device never played it.
+ *
+ * Per device, not the library's `streamOutcomes`, which sync and carry no
+ * device: a title watched on the phone last resumed on the PC on the
+ * phone's source, which may be the phone's best and not the PC's (the owner,
+ * 2026-09-30: "I find myself manually switching the provider too often").
+ */
+export function lastPlayedHere(sources: ResultSources, key: string): string | null {
+  let best: SourceResult | null = null
+  for (const result of sources.history) {
+    if (result.titleKey !== key || result.deviceId !== sources.doc.deviceId) continue
+    if (result.origin !== 'play' || result.verdict !== 'stream') continue
+    if (!best || result.at > best.at) best = result
+  }
+  return best?.providerId ?? null
 }
 
 /**

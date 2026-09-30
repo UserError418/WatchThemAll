@@ -137,20 +137,25 @@ describe('choosePreview', () => {
 
 /** 2026-09-30: a phone whose titles were tested on the PC kept windows it never showed. */
 describe('planPreview', () => {
-  it('previews from the kept window\'s source when no test here qualifies', () => {
-    const choice = planPreview({ providers, scan: null, req: episode, resume: { seconds: 600, duration: 2700 }, keptSource: 'slow' })
+  it('with a kept copy and no test here, previews from the source Resume uses', () => {
+    const choice = planPreview({ providers, scan: null, req: episode, resume: { seconds: 600, duration: 2700 }, keptSource: 'faster' })
+    // `slow` is first in Automatic's order: Resume plays it, and the copy covers its start.
     expect(choice?.provider.id).toBe('slow')
     expect(choice?.startSeconds).toBe(600)
     expect(choice?.streamMs).toBeNull()
   })
 
-  it('keeps a tested source that qualifies ahead of the kept one', () => {
+  /** The owner, 2026-09-30: the copy plays whatever source was chosen. */
+  it('takes a source picked by hand over the kept copy\'s own', () => {
+    expect(planPreview({ providers, scan: null, req: { ...episode, providerId: 'fast' }, resume: null, keptSource: 'slow' })?.provider.id).toBe('fast')
+  })
+
+  it('keeps a tested source that qualifies ahead of anything else', () => {
     const tested = scan({ fast: 'stream' }, { fast: 2_000 })
     expect(planPreview({ providers, scan: tested, req: episode, resume: null, keptSource: 'slow' })?.provider.id).toBe('fast')
   })
 
-  it('leaves a source picked by hand alone, and has nothing without a kept window', () => {
-    expect(planPreview({ providers, scan: null, req: { ...episode, providerId: 'fast' }, resume: null, keptSource: 'slow' })).toBeNull()
+  it('has nothing without a qualifying test or a kept copy', () => {
     expect(planPreview({ providers, scan: null, req: episode, resume: null, keptSource: null })).toBeNull()
   })
 })

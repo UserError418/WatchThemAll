@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   automaticOrder,
   defaultProviderOrder,
-  lastWorkingForTitle,
   MAX_OUTCOMES,
   mediaKey,
   outcomesForTitle,
@@ -34,12 +33,6 @@ function provider(id: string, group?: string): Provider {
   }
 }
 
-const NOW = 1_800_000_000_000
-const recently = NOW - 60_000
-
-function outcome(providerId: string, key: string, result: 'stream' | 'failed', at = recently): StreamOutcome {
-  return { providerId, mediaKey: key, outcome: result, at }
-}
 
 describe('identifying what was played', () => {
   it('keys an episode down to the episode', () => {
@@ -181,50 +174,6 @@ describe('outcomesForTitle', () => {
     ]
 
     expect(outcomesForTitle(log, 'tv:tt0137523')['vidlux']).toBeUndefined()
-  })
-})
-
-describe('lastWorkingForTitle', () => {
-  const title = 'tv:tt0903747'
-
-  it('finds the most recent provider that streamed any episode of it', () => {
-    const log = [
-      outcome('alpha', `${title}:1:1`, 'stream', 100),
-      outcome('bravo', `${title}:1:2`, 'stream', 200),
-    ]
-
-    expect(lastWorkingForTitle(log, title)).toBe('bravo')
-  })
-
-  it('ignores providers that only failed', () => {
-    // Being opened proves nothing; the point is that it played.
-    const log = [
-      outcome('alpha', `${title}:1:1`, 'stream', 100),
-      outcome('bravo', `${title}:1:2`, 'failed', 200),
-    ]
-
-    expect(lastWorkingForTitle(log, title)).toBe('alpha')
-  })
-
-  it('ignores other titles', () => {
-    const log = [outcome('alpha', 'tv:tt9999999:1:1', 'stream', 500)]
-
-    expect(lastWorkingForTitle(log, title)).toBeNull()
-  })
-
-  it('does not confuse an id that is a prefix of another', () => {
-    // `tt09037` must not match `tt0903747`; the separator is what stops it.
-    const log = [outcome('alpha', 'tv:tt09037:1:1', 'stream', 500)]
-
-    expect(lastWorkingForTitle(log, title)).toBeNull()
-  })
-
-  it('matches a film, whose title key and media key are the same string', () => {
-    expect(lastWorkingForTitle([outcome('alpha', 'movie:tt1', 'stream')], 'movie:tt1')).toBe('alpha')
-  })
-
-  it('is null when nothing has ever played', () => {
-    expect(lastWorkingForTitle([], title)).toBeNull()
   })
 })
 

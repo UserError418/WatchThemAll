@@ -47,6 +47,7 @@ import {
   titleResults,
   type AutomaticOrder,
   type ResultsAccess,
+  type WarmStarts,
 } from './providerscan'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
@@ -195,6 +196,8 @@ export interface IpcDeps {
    * exist.
    */
   scan: ScanService
+  /** Starts of sources on titles here, so a warm one files no time (`WarmStarts`). */
+  warmStarts: WarmStarts
   /** A scan was filed: keep the preview's first seconds from it (`cacheAfterTest`). */
   scanFiled: (media: TitleRef, episode: { season: number; episode: number } | null) => void
   /** The watchlist tester's state, for Settings. */
@@ -372,8 +375,9 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.previewCacheStatus, () => deps.preview.cacheStatus())
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
-    const result = previewResult(where, Number(streamedMs), Date.now())
-    if (result) deps.results.record([result])
+    const at = Date.now()
+    const result = previewResult(where, Number(streamedMs), at)
+    if (result) deps.results.record([deps.warmStarts.measure(where.titleKey, providerId, result)])
     if (typeof providerId === 'string') deps.preview.started(req, providerId, Number(filmSeconds) || 0)
   })
 

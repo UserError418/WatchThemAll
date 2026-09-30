@@ -741,6 +741,14 @@ describe('the source order setting', () => {
   })
 })
 
+describe('the resume source setting', () => {
+  it('defaults to the last source, as before it existed, and repairs nonsense', () => {
+    expect(migrate({ ...emptyStore(), settings: {} }).settings.resumeSource).toBe('last')
+    expect(migrate({ ...emptyStore(), settings: { resumeSource: 'best' } }).settings.resumeSource).toBe('best')
+    expect(migrate({ ...emptyStore(), settings: { resumeSource: 'sometimes' } }).settings.resumeSource).toBe('last')
+  })
+})
+
 describe('stored scan qualities', () => {
   const scanned = (scan: Record<string, unknown>) =>
     migrate({ ...emptyStore(), providerScans: [{ titleKey: 'movie:tt1', at: 1_000, ...scan }] })

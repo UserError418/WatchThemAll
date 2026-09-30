@@ -921,7 +921,15 @@ export interface Settings {
    * a say; it is always there so the order is never left to chance.
    */
   sourceOrder: SourceSortKey[]
+  /**
+   * Where Automatic starts a title already watched: `last`, the source it
+   * last played on *this device* while still green (`resumeFirst`); `best`,
+   * the ordinary order, as for a title never watched. The owner, 2026-09-30.
+   */
+  resumeSource: ResumeSourceRule
 }
+
+export type ResumeSourceRule = 'last' | 'best'
 
 /** Re-exported so callers can type a patch without reaching into `store/`. */
 export type { StorePatch } from './store/document'

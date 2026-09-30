@@ -806,6 +806,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * This is what makes "Automatic" learn instead of guess.
    */
   contents.on('media-started-playing', () => {
+    // The page being left, playing again before the new one took over.
+    if (!committed) return
     const candidate = currentCandidate()
     if (candidate) reportOutcome(candidate.provider.id, 'stream')
     if (candidate) noteStreamed(candidate.provider.id)
@@ -1084,6 +1086,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // one reading than the rest of the session's.
     void readPosition()
       .then((found) => {
+        // The page being left: its place is not the new load's.
+        if (!committed) return
         // Before the early return, because a reading that is *missing* while
         // playback is under way is the strongest stall evidence there is: the
         // element has gone, which is what a torn-down player looks like.
@@ -1239,6 +1243,17 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   /** When the current load began; reset by `beginLoad`. */
   let loadStartedAt = Date.now()
+  /**
+   * The page this load asked for has replaced the one before it.
+   *
+   * Until it has (`did-navigate`), the page being left is still alive: its
+   * video can start again after a stall, and its position can still be read.
+   * Until 2.0.9 both counted for the new load, so a switch to a source that
+   * then failed could be filed as streaming a fraction of a second after it
+   * was asked for (the owner, 2026-09-30: sources that "load in under 1 s"),
+   * and the old episode's place written under the new one.
+   */
+  let committed = true
   /**
    * What this load has told the test results: a success, improved as the
    * picture does, or a failure the source's servers declared. Once per load,
@@ -1398,6 +1413,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     backendFailure = null
     backendStatus = null
     loadStartedAt = Date.now()
+    committed = false
     measured = null
     lastActivityAt = Date.now()
     idleSinceCheck = false
@@ -1496,6 +1512,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * of a handled failure: nothing was watching the status code.
    */
   contents.on('did-navigate', (_event, navigatedUrl, httpResponseCode, httpStatusText) => {
+    committed = true
     if (httpResponseCode < 400) return
     const reason = `HTTP ${httpResponseCode} ${httpStatusText}`.trim()
     console.error(`[player] ${navigatedUrl} returned ${reason}`)

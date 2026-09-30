@@ -325,8 +325,9 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
 
   const wakeLock = createWakeLock()
 
-  const ensure = (): HTMLIFrameElement => {
-    if (frame) return frame
+  /** The host the frames go in, made on first use. */
+  const ensure = (): void => {
+    if (host) return
 
     host = document.createElement('div')
     host.id = 'wta-player-surface'
@@ -341,31 +342,50 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
       'overflow: hidden',
     ].join(';')
 
-    frame = document.createElement('iframe')
-    frame.setAttribute('allow', ALLOW)
-    frame.setAttribute('allowfullscreen', 'true')
-    frame.setAttribute('referrerpolicy', 'origin')
-    frame.style.cssText = 'width: 100%; height: 100%; border: 0; display: block; background: #000'
-
-    host.appendChild(frame)
     document.body.appendChild(host)
     applyConcealed()
 
     wakeLock.acquire()
     stopFollowingFullscreen = followFullscreen()
+  }
+
+  /**
+   * A new iframe for every page loaded, listened to afresh.
+   *
+   * The sender check (`listenForReadings`) compares windows, and an iframe
+   * keeps its window when its `src` changes. Until 2.0.9 it was kept, so what
+   * the page being left still posted — its last position, a relay report in
+   * flight — passed as the new page's: a film-length reading arriving 0.3 s
+   * after a switch credited the new source with streaming that fast, however
+   * it went on (the owner, 2026-09-30: sources "load in under 1 s"). A new
+   * element has a new window, and the old page goes with the old element.
+   */
+  const freshFrame = (): HTMLIFrameElement => {
+    const next = document.createElement('iframe')
+    next.setAttribute('allow', ALLOW)
+    next.setAttribute('allowfullscreen', 'true')
+    next.setAttribute('referrerpolicy', 'origin')
+    next.style.cssText = 'width: 100%; height: 100%; border: 0; display: block; background: #000'
+    if (frame) frame.replaceWith(next)
+    else host!.appendChild(next)
+    frame = next
+
+    stopListening?.()
+    stopListening = null
     if (options.onReading || options.onMediaState || options.onFilmTime) {
       const onReading = options.onReading?.bind(options) ?? (() => {})
       const expects = options.expects?.bind(options) ?? (() => null)
       const onMediaState = options.onMediaState?.bind(options) ?? (() => {})
       const onFilmTime = options.onFilmTime?.bind(options) ?? (() => {})
-      stopListening = listenForReadings(frame, onReading, expects, onMediaState, onFilmTime)
+      stopListening = listenForReadings(next, onReading, expects, onMediaState, onFilmTime)
     }
-    return frame
+    return next
   }
 
   return {
     show(candidate) {
-      const el = ensure()
+      ensure()
+      const el = freshFrame()
       // Anything shown is meant to be seen, including the first episode loaded
       // after a blank — stepping to another episode while casting comes back
       // through here, not through `restore`.
@@ -394,10 +414,9 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
     reload(url) {
       if (!frame || !current) return
       current = url ?? current
-      options.onFrameLoad?.(frame)
-      // Re-assigning the same `src` is a no-op in Chromium, so blank it first.
-      frame.src = 'about:blank'
-      frame.src = current
+      const el = freshFrame()
+      options.onFrameLoad?.(el)
+      el.src = current
     },
 
     blank() {
@@ -410,17 +429,19 @@ export function createPlayerSurface(options: PlayerSurfaceOptions = {}): PlayerS
        * the host, and while casting that white rectangle *is* the whole
        * screen. It is what "the player becomes white" was.
        */
-      frame.style.visibility = 'hidden'
-      frame.src = 'about:blank'
+      const el = freshFrame()
+      el.style.visibility = 'hidden'
+      el.src = 'about:blank'
       options.onFrameLoad?.(null)
     },
 
     restore(url) {
       if (!frame || !current) return
       current = url ?? current
-      frame.style.visibility = 'visible'
-      options.onFrameLoad?.(frame)
-      frame.src = current
+      const el = freshFrame()
+      el.style.visibility = 'visible'
+      options.onFrameLoad?.(el)
+      el.src = current
     },
 
     setConcealed(next) {

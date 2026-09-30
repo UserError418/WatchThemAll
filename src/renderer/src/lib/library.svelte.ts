@@ -25,7 +25,7 @@ import type {
   WatchedEntry,
   WatchlistEntry,
 } from '@shared/types'
-import { resumeKey, type SourceSortKey } from '@shared/types'
+import { resumeKey, type ResumeSourceRule, type SourceSortKey } from '@shared/types'
 import { isListed } from '@shared/listed'
 import { indexRatings, legacyRatingOf, ratingScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
@@ -1215,6 +1215,11 @@ class Library {
    */
   setSkipIntro(on: boolean): void {
     this.settings = { ...this.settings, skipIntro: on }
+    void this.persist({ settings: this.settings })
+  }
+
+  setResumeSource(rule: ResumeSourceRule): void {
+    this.settings = { ...this.settings, resumeSource: rule }
     void this.persist({ settings: this.settings })
   }
 

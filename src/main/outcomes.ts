@@ -130,32 +130,6 @@ export function outcomesForTitle(
 }
 
 /**
- * The provider that most recently *streamed* this title, at any episode.
- *
- * Title-level on purpose. `mediaKey` is episode-level because coverage is —
- * a provider routinely carries a series' first season and not its fourth — but
- * "carry on with the source I was just watching this show on" is a question
- * about the show. Keying it per episode would forget the answer at every
- * episode boundary, which is exactly where continuing matters most.
- *
- * Only `stream` outcomes count. A provider that was merely *opened* proves
- * nothing; the whole point is that this one is known to have played.
- */
-export function lastWorkingForTitle(log: StreamOutcome[], key: string): string | null {
-  // Same prefix rule as `outcomesForTitle`: the separator keeps `tt09037` from
-  // matching `tt0903747`.
-  const prefix = `${key}:`
-
-  let best: StreamOutcome | null = null
-  for (const entry of log) {
-    if (entry.outcome !== 'stream') continue
-    if (entry.mediaKey !== key && !entry.mediaKey.startsWith(prefix)) continue
-    if (!best || entry.at > best.at) best = entry
-  }
-  return best?.providerId ?? null
-}
-
-/**
  * When each provider last actually streamed this title, at any episode.
  *
  * For `freshScan`, which lets a real play overrule an older red or amber test
