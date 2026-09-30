@@ -131,6 +131,33 @@ const LEAKY_HINTS = [
 ]
 
 /**
+ * Make one outgoing request's headers say Chrome, all of them.
+ *
+ * The User-Agent is set here as well as by `session.setUserAgent`, because
+ * that call reaches only what the browser itself sends — navigations. A
+ * `fetch` or XHR from the page's own script carries the renderer's UA, which
+ * is Electron's, and `applyProviderReferer` replaces `applyBrowserIdentity`'s
+ * handler on the sessions that load sources (a session has one), so nothing
+ * corrected it. One session then spoke with two voices: the document as
+ * Chrome 138, the player's API calls as `watchthemall/… Electron/…` under
+ * client hints still claiming Chrome 138.
+ *
+ * Videm (2Embed's server) showed what that costs: its tokens are bound to the
+ * client that loaded the page, and every API call from the scan answered 403
+ * (2026-09-30), so a source that plays was reported dead.
+ */
+export function presentAsChrome(headers: Record<string, string>): void {
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === 'user-agent') delete headers[name]
+  }
+  headers['User-Agent'] = CHROME_UA
+  for (const [name, value] of Object.entries(CLIENT_HINTS)) headers[name] = value
+  for (const name of LEAKY_HINTS) delete headers[name]
+  // Electron sets this on some requests and Chrome never does.
+  delete headers['X-DevTools-Emulate-Network-Conditions-Client-Id']
+}
+
+/**
  * Headers for `fetch()` calls made from the main process.
  *
  * Node's fetch does not go through an Electron `Session`, so it is untouched by
@@ -157,13 +184,7 @@ export function applyBrowserIdentity(session: Session): void {
     { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
       const headers = { ...details.requestHeaders }
-
-      for (const [name, value] of Object.entries(CLIENT_HINTS)) headers[name] = value
-      for (const name of LEAKY_HINTS) delete headers[name]
-
-      // Electron sets this on some requests and Chrome never does.
-      delete headers['X-DevTools-Emulate-Network-Conditions-Client-Id']
-
+      presentAsChrome(headers)
       callback({ requestHeaders: headers })
     },
   )
@@ -195,9 +216,7 @@ export function applyProviderReferer(session: Session, rootUrl: string): void {
     { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
       const headers = { ...details.requestHeaders }
-
-      for (const [name, value] of Object.entries(CLIENT_HINTS)) headers[name] = value
-      for (const name of LEAKY_HINTS) delete headers[name]
+      presentAsChrome(headers)
 
       // Only for the provider's own origin. Attaching its referrer to a request
       // for some third-party CDN would tell that CDN where the user came from —
