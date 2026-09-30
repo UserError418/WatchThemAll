@@ -20,6 +20,7 @@ import type {
   GenreRowRequest,
   PlayRequest,
   CarryReport,
+  PreviewCacheStatus,
   PreviewPlan,
   RowRequest,
   ForYouPlanRequest,
@@ -130,6 +131,7 @@ export interface IpcDeps {
     carry: (report: CarryReport) => void
     /** The preview stopped standing in; see `InlinePlayer.carryEnd`. */
     carryEnd: () => void
+    cacheStatus: () => PreviewCacheStatus | null
   }
   /** Move the inline player's video to the rectangle the renderer reserved. */
   setPlayerBounds: (bounds: PlayerBounds) => void
@@ -367,6 +369,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     if (isCarryReport(report)) deps.preview.carry(report)
   })
   ipcMain.handle(CH.previewCarryEnd, () => deps.preview.carryEnd())
+  ipcMain.handle(CH.previewCacheStatus, () => deps.preview.cacheStatus())
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const result = previewResult(where, Number(streamedMs), Date.now())

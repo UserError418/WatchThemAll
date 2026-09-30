@@ -11,7 +11,8 @@
  * points at.
  */
 
-import { admitWindow, readIndex, windowFor, windowId, writeIndex, type CachedWindow } from './segmentcache'
+import type { PreviewCacheStatus } from '@shared/ipc'
+import { admitWindow, readIndex, windowFor, windowId, windowOfTitle, writeIndex, type CachedWindow } from './segmentcache'
 import {
   findStreamPlaylist,
   saveStreamWindow,
@@ -54,6 +55,14 @@ export interface KeptWindow {
 export interface SegmentStore {
   /** The kept window for this preview, and what it covers; null when there is none. */
   find(where: WindowWhere, seconds: number): KeptWindow | null
+  /**
+   * The source of the window kept for this episode, if it covers `seconds`.
+   * A title keeps one window, so there is at most one. For a preview no
+   * test here qualified for: that source streamed on this device.
+   */
+  keptSource(where: Omit<WindowWhere, 'providerId'>, seconds: number): string | null
+  /** How many titles and bytes are kept, and what the last save did. */
+  status(): PreviewCacheStatus
   /**
    * Keep a window of what the page fetched, from `from.seconds`. Saves run one
    * at a time, in order; the promise settles when this one is done. The
@@ -107,6 +116,13 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
   const playlists = new Map<string, CapturedRequest>()
   const playlistKey = (where: WindowWhere): string => `${where.titleKey}|${where.season}|${where.episode}|${where.providerId}`
 
+  /** The last save's outcome, for `status`. */
+  let last: string | null = null
+  const report = (outcome: string): void => {
+    last = outcome
+    log(`[cache] ${outcome}`)
+  }
+
   const saveNow = async (
     where: WindowWhere,
     requests: readonly CapturedRequest[] | Promise<readonly CapturedRequest[]>,
@@ -121,7 +137,7 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
     const outcome = await saveStreamWindow([...(noted ? [noted] : []), ...(await requests)], from, expectedMinutes, io)
     if (!outcome.ok) {
       await files.removeWindow(part)
-      log(`[cache] not kept: ${outcome.reason} (${where.titleKey} ${where.providerId})`)
+      report(`not kept: ${outcome.reason} (${where.titleKey} ${where.providerId})`)
       return outcome
     }
     await files.renameWindow(part, id)
@@ -137,8 +153,8 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
     index = admitted.index
     await files.writeIndex(writeIndex(index))
     for (const dropped of admitted.drop) await files.removeWindow(dropped.id)
-    log(
-      `[cache] kept ${Math.round(outcome.endSeconds - outcome.startSeconds)} s from ${Math.round(outcome.startSeconds)} s, ` +
+    report(
+      `kept ${Math.round(outcome.endSeconds - outcome.startSeconds)} s from ${Math.round(outcome.startSeconds)} s, ` +
         `${(outcome.bytes / 1e6).toFixed(1)} MB (${where.titleKey} ${where.providerId})`,
     )
     return outcome
@@ -155,6 +171,14 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
           filmSeconds: found.filmSeconds,
         }
       )
+    },
+    status() {
+      return { titles: index.length, bytes: index.reduce((sum, w) => sum + w.bytes, 0), last }
+    },
+    keptSource(where, seconds) {
+      const title = windowOfTitle(index, where.titleKey)
+      if (title === null || title.season !== where.season || title.episode !== where.episode) return null
+      return windowFor(index, { ...where, providerId: title.providerId }, seconds) === null ? null : title.providerId
     },
     save(where, requests, from, expectedMinutes) {
       const run = queue.then(() => saveNow(where, requests, from, expectedMinutes))

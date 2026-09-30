@@ -106,4 +106,13 @@ describe('createSegmentStore', () => {
     // Another title does not wait at all.
     await expect(store.settled('movie:tt0137523', 5_000)).resolves.toBeUndefined()
   })
+  it('names the source of the window kept for an episode, for a preview no test qualified for', async () => {
+    const { files } = memoryFiles()
+    const store = await createSegmentStore(files, quiet)
+    await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42)
+    const episode = { titleKey: WHERE.titleKey, season: WHERE.season, episode: WHERE.episode }
+    expect(store.keptSource(episode, 602)).toBe('vidsrc-me')
+    expect(store.keptSource({ ...episode, episode: 2 }, 602)).toBeNull()
+    expect(store.keptSource(episode, 2000)).toBeNull()
+  })
 })

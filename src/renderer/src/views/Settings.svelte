@@ -32,7 +32,7 @@
   import MalImportDialog from '../components/MalImportDialog.svelte'
   import PageHeader from '../components/PageHeader.svelte'
   import { library } from '../lib/library.svelte'
-  import type { MalPreview, WatchlistTestStatus } from '@shared/ipc'
+  import type { MalPreview, PreviewCacheStatus, WatchlistTestStatus } from '@shared/ipc'
   import type { SourceSortKey } from '@shared/types'
 
   let note = $state<string | null>(null)
@@ -116,6 +116,27 @@
     })
   })
 
+  /**
+   * What the preview cache holds, and what its last save did: one line, so
+   * that "the preview never shows" on a phone comes with its reason. Asked
+   * each time Settings opens.
+   */
+  let cacheStatus = $state<PreviewCacheStatus | null>(null)
+  $effect(() => {
+    void window.wta.preview
+      .cacheStatus()
+      .then((status) => (cacheStatus = status))
+      .catch(() => {})
+  })
+
+  function describeCache(status: PreviewCacheStatus): string {
+    const held =
+      status.titles === 0
+        ? 'Preview cache: empty.'
+        : `Preview cache: ${status.titles} ${status.titles === 1 ? 'title' : 'titles'}, ${(status.bytes / 1e6).toFixed(0)} MB.`
+    return status.last === null ? held : `${held} Last: ${status.last}.`
+  }
+
   /** The status in words. See `watchlisttester.ts` for what each state means. */
   function describeTesting(status: WatchlistTestStatus): string {
     const progress = `${status.done} of ${status.total} watchlist sources up to date`
@@ -162,6 +183,9 @@
         {#if testStatus}
           <!-- The watchlist is tested in the background, so its lists are ready before you open them. -->
           <p class="hint testing">{describeTesting(testStatus)}</p>
+        {/if}
+        {#if cacheStatus}
+          <p class="hint testing">{describeCache(cacheStatus)}</p>
         {/if}
 
         <ol class="sort-keys">

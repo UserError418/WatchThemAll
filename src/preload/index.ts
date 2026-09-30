@@ -86,6 +86,7 @@ const api: WtaApi = {
       ipcRenderer.invoke(CH.previewRecord, req, providerId, streamedMs, filmSeconds ?? 0),
     carry: (report: CarryReport) => ipcRenderer.invoke(CH.previewCarry, report),
     carryEnd: () => ipcRenderer.invoke(CH.previewCarryEnd),
+    cacheStatus: () => ipcRenderer.invoke(CH.previewCacheStatus),
   },
   data: {
     export: () => ipcRenderer.invoke(CH.dataExport),

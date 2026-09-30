@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Provider, ProviderScan } from '@shared/types'
-import { PREVIEW_MAX_START_MS, choosePreview } from './previewplan'
+import { PREVIEW_MAX_START_MS, choosePreview, planPreview } from './previewplan'
 
 const provider = (id: string, extra: Partial<Provider> = {}): Provider => ({
   id,
@@ -132,5 +132,25 @@ describe('choosePreview', () => {
       resume: null,
     })
     expect(choice?.url).toBe('https://fast.test/movie/tt0137523')
+  })
+})
+
+/** 2026-09-30: a phone whose titles were tested on the PC kept windows it never showed. */
+describe('planPreview', () => {
+  it('previews from the kept window\'s source when no test here qualifies', () => {
+    const choice = planPreview({ providers, scan: null, req: episode, resume: { seconds: 600, duration: 2700 }, keptSource: 'slow' })
+    expect(choice?.provider.id).toBe('slow')
+    expect(choice?.startSeconds).toBe(600)
+    expect(choice?.streamMs).toBeNull()
+  })
+
+  it('keeps a tested source that qualifies ahead of the kept one', () => {
+    const tested = scan({ fast: 'stream' }, { fast: 2_000 })
+    expect(planPreview({ providers, scan: tested, req: episode, resume: null, keptSource: 'slow' })?.provider.id).toBe('fast')
+  })
+
+  it('leaves a source picked by hand alone, and has nothing without a kept window', () => {
+    expect(planPreview({ providers, scan: null, req: { ...episode, providerId: 'fast' }, resume: null, keptSource: 'slow' })).toBeNull()
+    expect(planPreview({ providers, scan: null, req: episode, resume: null, keptSource: null })).toBeNull()
   })
 })

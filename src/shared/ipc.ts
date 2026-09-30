@@ -140,6 +140,7 @@ export const CH = {
   /** Resume carried over from the preview: where it is, and that it is over. See `shared/carryover.ts`. */
   previewCarry: 'preview:carry',
   previewCarryEnd: 'preview:carry-end',
+  previewCacheStatus: 'preview:cache-status',
 
   /**
    * Cross-device sync.
@@ -847,6 +848,14 @@ export interface SkipOffer {
  * ordinary iframe in the app's page, driven from the page itself (the relay
  * is installed in every frame of the WebView).
  */
+/** What the preview cache holds, and what its last save did: a line in Settings, so a phone can say why nothing showed. */
+export interface PreviewCacheStatus {
+  titles: number
+  bytes: number
+  /** The last save's outcome as the log says it ("kept 25 s from 0 s …", "not kept: no-playlist …"); null before any. */
+  last: string | null
+}
+
 export interface PreviewPlan {
   surface: 'webview' | 'iframe'
   /** The shell's preview URL (webview), or the provider's own URL (iframe). */
@@ -963,6 +972,8 @@ export interface WtaApi {
     carry(report: CarryReport): Promise<void>
     /** The preview stopped standing in (gone, or tapped): show the player now. */
     carryEnd(): Promise<void>
+    /** What the preview cache holds, for a line in Settings; null where there is none. */
+    cacheStatus(): Promise<PreviewCacheStatus | null>
   }
   providers: {
     list(): Promise<Provider[]>

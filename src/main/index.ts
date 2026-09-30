@@ -28,7 +28,7 @@ import { applyBrowserIdentity } from './identity'
 import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
 import { createSegmentStore, type SegmentStore, type WindowWhere } from './segmentstore'
 import { nodeCacheFiles } from './segmentfiles'
-import { choosePreview } from './previewplan'
+import { choosePreview, planPreview } from './previewplan'
 import { allowStreamPreviews, previewRequests } from './previewview'
 import { isProbeRun, probeAndQuit } from './probecli'
 import type { PlayCandidate } from './providers'
@@ -824,8 +824,9 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
 /**
  * The detail view's stream preview for one episode or film, or null.
  *
- * The rule is `choosePreview`'s: this device's own fresh test results, the
- * enabled sources in Automatic's order for the ties. Without the local server
+ * The rule is `planPreview`'s: this device's own fresh test results, the
+ * enabled sources in Automatic's order for the ties, else the source of a
+ * window kept for this episode. Without the local server
  * (a dev build on Vite) there is no shell to preview in, so none.
  */
 async function previewPlanFor(req: PlayRequest): Promise<PreviewPlan | null> {
@@ -834,11 +835,13 @@ async function previewPlanFor(req: PlayRequest): Promise<PreviewPlan | null> {
   await segmentStore?.settled(titleKey(req), PLAN_WAITS_FOR_SAVE_MS)
   const doc = store.read()
   const key = titleKey(req)
-  const choice = choosePreview({
+  const resume = resumeOfferFor(doc.resumePoints, req)
+  const choice = planPreview({
     providers: automaticOrderFor(req).providers,
     scan: titleResults(testResults.sources(), key, episodeOf(req), 'desktop').scan,
     req,
-    resume: resumeOfferFor(doc.resumePoints, req),
+    resume,
+    keptSource: segmentStore?.keptSource(episodeWhere(req), resume?.seconds ?? 0) ?? null,
   })
   if (choice === null) return null
   const kept = segmentStore?.find(windowWhere(req, choice.provider.id), choice.startSeconds) ?? null
@@ -874,9 +877,14 @@ function notePlayerPlaylist(): void {
 }
 
 /** Which window of the preview cache a request and source are. */
-function windowWhere(req: PlayRequest, providerId: string): WindowWhere {
+/** Which episode a kept window is of. */
+function episodeWhere(req: PlayRequest): Omit<WindowWhere, 'providerId'> {
   const episode = episodeOf(req)
-  return { titleKey: titleKey(req), season: episode?.season ?? null, episode: episode?.episode ?? null, providerId }
+  return { titleKey: titleKey(req), season: episode?.season ?? null, episode: episode?.episode ?? null }
+}
+
+function windowWhere(req: PlayRequest, providerId: string): WindowWhere {
+  return { ...episodeWhere(req), providerId }
 }
 
 /**
@@ -1459,6 +1467,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
         // Nothing held to show (the player closed, or never opened): the page
         // is told the carry is over all the same, or it would stand in forever.
         carryEnd: () => (player?.held() ? player.carryEnd() : send(EV.carryReleased, null)),
+        cacheStatus: () => segmentStore?.status() ?? null,
       },
       scan,
       scanFiled: cacheAfterTest,

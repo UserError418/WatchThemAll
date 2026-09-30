@@ -39,8 +39,8 @@ export interface PreviewChoice {
   url: string
   /** Where the preview should be: the saved position, or 0. */
   startSeconds: number
-  /** How long the test took to see this source's stream start. */
-  streamMs: number
+  /** How long the test took to see this source's stream start; null for `keptPreview`. */
+  streamMs: number | null
 }
 
 /**
@@ -52,6 +52,22 @@ export interface PreviewChoice {
  * device's fresh row for the title (`freshScan`), so aged-out and overtaken
  * results are already gone.
  */
+/**
+ * The preview from the source of a window kept on this device, when no test
+ * here qualified (`SegmentStore.keptSource`). That source streamed here, the
+ * copy is on screen at once, and it covers a start slower than the tests'
+ * 8 s. Without this, a phone whose titles were tested on the PC kept windows
+ * it never showed (2026-09-30): the plan gave up before looking for one.
+ */
+export function keptPreview(
+  provider: Provider,
+  req: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+  resume: ResumeOffer | null,
+): PreviewChoice | null {
+  const url = renderTemplate(provider, req, resume)
+  return url === null ? null : { provider, url, startSeconds: resume?.seconds ?? 0, streamMs: null }
+}
+
 export function choosePreview(input: {
   providers: readonly Provider[]
   scan: ProviderScan | null
@@ -92,4 +108,18 @@ export function choosePreview(input: {
     if (url !== null) return { provider, url, startSeconds: resume?.seconds ?? 0, streamMs: ms }
   }
   return null
+}
+
+/**
+ * What the detail view previews: `choosePreview`'s answer, else the source of
+ * the window kept for this episode (`keptSource`, null when none), else
+ * nothing. A source picked by hand is still the only one, as in
+ * `choosePreview`.
+ */
+export function planPreview(input: Parameters<typeof choosePreview>[0] & { keptSource: string | null }): PreviewChoice | null {
+  const tested = choosePreview(input)
+  if (tested !== null || input.keptSource === null) return tested
+  if (input.req.providerId && input.req.providerId !== input.keptSource) return null
+  const provider = input.providers.find((p) => p.id === input.keptSource)
+  return provider === undefined ? null : keptPreview(provider, input.req, input.resume)
 }

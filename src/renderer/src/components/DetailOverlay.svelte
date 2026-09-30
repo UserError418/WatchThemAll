@@ -866,29 +866,24 @@
     return () => clearTimeout(timer)
   })
   /**
-   * Whether the title has any test results. The trailer is for titles that
-   * have none (the owner, 2026-09-29): a tested title shows its own stream,
-   * from the preview cache at once or from its source within seconds, and
-   * the still meanwhile. Null until known, and no trailer until then.
+   * Whether this device has no stream preview to show: its plan said none (no
+   * source tested here that starts fast enough, and no kept copy), or the
+   * preview gave up with no copy on screen. That is what the trailer is for.
+   *
+   * The owner's rule (2026-09-29) was the trailer only for titles "that have
+   * no tested source list". Read as "any test results, from any device", it
+   * left a phone with nothing but the still for every title tested only on
+   * the PC (2026-09-30): those have a source list there, and no preview the
+   * phone can play. The trailer's purpose was to be the fallback where the
+   * preview cannot play, so that is the test now.
    */
-  let tested = $state<boolean | null>(null)
-  $effect(() => {
-    const media = { type: subject.type, imdbId: detail?.imdbId ?? subject.imdbId ?? null, tmdbId: subject.tmdbId }
-    let current = true
-    void window.wta.providers
-      .outcomes(media, null)
-      .then((state) => {
-        if (current) tested = state.scan !== null
-      })
-      .catch(() => {
-        if (current) tested = false
-      })
-    return () => {
-      current = false
-    }
-  })
+  const noPreview = $derived(
+    stream !== null &&
+      stream.key === previewKey &&
+      (stream.plan === null || (streamStop === 'failed' && !copyShown)),
+  )
   const showTrailer = $derived(
-    showHeroTrailer && tested === false && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
+    showHeroTrailer && noPreview && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
   )
   /**
    * The source Resume uses while a preview is on: the preview's own. Only
