@@ -943,8 +943,8 @@ export interface WtaApi {
     /** How this episode or film would preview, or null when it does not. */
     plan(req: PlayRequest): Promise<PreviewPlan | null>
     /**
-     * Settle the preview like a play: where it was last heard is the place to
-     * resume from, and `playedMs` (heard, not just seen) goes into the history,
+     * Settle the preview like a play: where it last played is the place to
+     * resume from, and `playedMs` (muted or not) goes into the history,
      * which also marks it watched if it reached the credits. See `PreviewWatch`.
      */
     keep(

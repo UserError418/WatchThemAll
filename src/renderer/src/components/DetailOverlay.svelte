@@ -586,7 +586,7 @@
    * or the real player took over (`leavePreview`). Null while it may play.
    */
   let streamStop = $state<'failed' | 'player' | null>(null)
-  let heard = new PreviewWatch()
+  let watching = new PreviewWatch()
 
   /**
    * Asked once Resume knows its episode: before the anchor's season list has
@@ -618,7 +618,7 @@
     endHandover()
     stream = { key, req, plan: undefined }
     streamStop = null
-    heard = new PreviewWatch()
+    watching = new PreviewWatch()
     kept = false
     recordedKey = null
     dropCopy()
@@ -641,7 +641,7 @@
    * at the copy's second: the handover is `CarryOver`'s, as for Resume, with
    * the copy as the place and the source's film as the one being moved
    * there. Until then the copy is what is on screen, so it is what the
-   * preview's heard time, the carry and Resume read. If the source never comes, the
+   * preview's watched time, the carry and Resume read. If the source never comes, the
    * copy plays to its end, holds its last frame for as long as the source
    * may still come, and then gives way to the still.
    */
@@ -708,7 +708,7 @@
       streamedMs: null,
     }
     lastReport = report
-    heard.feed(report)
+    watching.feed(report)
     sendCarry()
     // Nothing is coming to take over: back to the still.
     if (state.ended && streamStop === 'failed' && !carrying.active) dropCopy()
@@ -913,19 +913,19 @@
 
   let kept = false
   /**
-   * Settle the preview, once, if any of it was heard: where it got to and how
-   * long it was heard (`PreviewWatch`). `cache`: the preview is being left
+   * Settle the preview, once, if any of it played: where it got to and how
+   * long it played, sound or not (`PreviewWatch`). `cache`: the preview is being left
    * for good (the detail view closed, another episode chosen), so its stream
    * is kept from there too; not when the player takes over, which keeps its
    * own on closing.
    */
   async function keepPreviewPlace(req: PlayRequest, cache = false): Promise<void> {
-    const place = heard.kept()
+    const place = watching.kept()
     if (place === null || kept) return
     kept = true
     const cacheSource = cache ? (stream?.plan?.providerId ?? undefined) : undefined
     try {
-      await window.wta.preview.keep(req, place.seconds, place.duration, { cacheSource, playedMs: place.heardMs })
+      await window.wta.preview.keep(req, place.seconds, place.duration, { cacheSource, playedMs: place.playedMs })
     } catch {
       // Not keeping it only means resuming from the place saved before.
     }
@@ -1014,7 +1014,7 @@
             }
             if (state.started) streamStarted = true
             lastReport = state
-            heard.feed(state)
+            watching.feed(state)
             sendCarry()
           }}
           onfail={() => {

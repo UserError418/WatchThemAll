@@ -956,7 +956,7 @@ function cacheAfterTest(ref: TitleRef, episode: { season: number; episode: numbe
 
 /**
  * The preview settles like a play (the owner, 2026-09-29: watching counts
- * wherever it happened): the place, the heard time into the history, and
+ * wherever it happened): the place, the time played into the history, and
  * "watched" if it reached the credits. See `PreviewWatch`.
  */
 function keepPreviewPosition(
