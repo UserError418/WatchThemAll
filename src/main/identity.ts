@@ -60,10 +60,17 @@ export function reducedChromeUA(chromeVersion: string, platform: NodeJS.Platform
 }
 
 /**
- * This app's identity. `process.versions.chrome` is Electron's own Chromium;
- * the fallback is for plain Node (the tests), which has no Chromium.
+ * This app's identity. `process.versions.chrome` is Electron's own Chromium.
+ *
+ * `process` is looked up rather than assumed: this module reaches the phone
+ * too, through `tmdb.ts`, `imdb.ts` and `catalog.ts`, and a WebView has no
+ * `process` at all — read unguarded, it stopped the phone app at startup
+ * with an empty screen. Plain Node (the tests) has a `process` but no
+ * Chromium. Either way the fallback stands in; the phone's own requests carry
+ * its WebView's identity regardless.
  */
-export const CHROME_UA = reducedChromeUA(process.versions.chrome ?? '148.0.0.0', process.platform)
+const host = typeof process === 'undefined' ? undefined : process
+export const CHROME_UA = reducedChromeUA(host?.versions?.chrome ?? '148.0.0.0', host?.platform ?? 'linux')
 
 /**
  * Fetch metadata describing an **embedded player**, not a typed-in address.

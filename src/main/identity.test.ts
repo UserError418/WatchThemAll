@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CHROME_UA, presentAsChrome, reducedChromeUA } from './identity'
 
 describe('presentAsChrome', () => {
@@ -40,5 +40,23 @@ describe('reducedChromeUA', () => {
 
   it('never names the app or Electron', () => {
     expect(CHROME_UA).not.toMatch(/electron|watchthemall/i)
+  })
+})
+
+describe('on the phone', () => {
+  it('loads where there is no `process`, as in a WebView', async () => {
+    // tmdb.ts carries this module into the phone's bundle; read unguarded,
+    // `process` stopped the phone app at startup with an empty screen.
+    vi.resetModules()
+    const saved = globalThis.process
+    const { CHROME_UA: tmdbIdentity } = await (async () => {
+      Reflect.deleteProperty(globalThis, 'process')
+      try {
+        return await import('./identity')
+      } finally {
+        globalThis.process = saved
+      }
+    })()
+    expect(tmdbIdentity).toMatch(/Chrome\/\d+\.0\.0\.0/)
   })
 })
