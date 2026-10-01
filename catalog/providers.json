@@ -105,7 +105,7 @@
         "urlTemplate": "{rootUrl}embed/movie/{tmdb}?autostart=true"
       },
       "tier": "extras",
-      "note": "2Embed's own page (2embed.cc) is a wrapper: a play poster behind ad overlays that loads this server, Videm, which is what plays. Its backend has gaps: on 2026-09-30 it streamed Oppenheimer (2.8 s) and Breaking Bad S01E01, and answered 'unavailable' for Fight Club and The Office. autostart=true starts it without a click. Its tokens are bound to the client, so it passes the test only from 2.0.10 (one User-Agent per session)."
+      "note": "2Embed's own page (2embed.cc) is a wrapper: a play poster behind ad overlays that loads this server, Videm, which is what plays. Its backend has gaps: on 2026-09-30 it streamed Oppenheimer (2.8 s) and Breaking Bad S01E01, and answered 'unavailable' for Fight Club and The Office. autostart=true starts it without a click. It refuses a page whose identity contradicts itself and any Android WebView, so it passes the test from 2.0.10 on the desktop and plays on the phone from 2.0.11 (which presents as Chrome on Android)."
     },
     {
       "id": "vidsrc-me",
