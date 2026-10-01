@@ -163,7 +163,8 @@ export function isMediaResponse(contentType: string, body: string): boolean {
  */
 export type MediaKind = 'playlist' | 'segment' | 'file'
 
-const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)|\/manifest(\/|\?|$)/i
+/** A playlist (HLS or DASH) by its name. */
+export const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)|\/manifest(\/|\?|$)/i
 const PLAYLIST_MIME = /^application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)/i
 
 export function mediaKind(

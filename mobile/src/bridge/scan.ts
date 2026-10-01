@@ -49,7 +49,7 @@ import { wholeFileDelivery } from '@shared/castability'
 import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
-import { isMediaRequest, isMediaResponse, WHOLE_FILE_URL } from '@main/mediarequest'
+import { isMediaRequest, isMediaResponse, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import { capture, PEEK_LIMIT_BYTES, type Candidate } from './cast'
 import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
@@ -134,8 +134,6 @@ const QUALITY_FETCHES = 8
  */
 const QUALITY_WAIT_MS = 4_000
 
-/** A playlist by its URL. */
-const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)/i
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
 
@@ -397,6 +395,43 @@ async function confirmWholeFiles(
 }
 
 /**
+ * The earliest playlist named in the session's log that really is one.
+ *
+ * A playlist's name is a request, not an answer. The phone sees no response
+ * statuses, and counted on the name alone a player that asked for
+ * `master.m3u8` at 0.3 s and was refused was filed as working in 0.3 s — the
+ * owner's "under 1 s, which I am confident is an error" (2026-09-30). Players
+ * also try their dead servers' playlists first. So a playlist counts once one
+ * fetch of it answers with a playlist, and is timed by its own request, which
+ * is when the player had it.
+ *
+ * Oldest first, a few per poll and a few per provider, as `peekForMedia`.
+ */
+export async function confirmPlaylists(
+  named: Candidate[],
+  peeked: Set<string>,
+  bodies: Map<string, string>,
+): Promise<Candidate | null> {
+  const allowance = Math.max(0, Math.min(PEEKS_PER_POLL, PEEKS_PER_PROVIDER - peeked.size))
+  const playlists = named
+    .filter((candidate) => PLAYLIST_URL.test(candidate.url) && !peeked.has(candidate.url))
+    .sort((a, b) => a.atMs - b.atMs)
+    .slice(0, allowance)
+  for (const candidate of playlists) {
+    peeked.add(candidate.url)
+    try {
+      const response = await capture.peek(candidate)
+      const ok = response.status === 200 || response.status === 206
+      if (ok) bodies.set(candidate.url, response.body)
+      if (ok && isPlaylistBody(response.body)) return candidate
+    } catch {
+      // Refused or expired: the next one may still be the server that plays.
+    }
+  }
+  return null
+}
+
+/**
  * Fetch a few of the session's requests and ask what they turned out to be.
  *
  * The URL test is free and covers most providers; this covers the ones that
@@ -489,18 +524,21 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   /**
    * When the stream was proven, or null if it has not been yet.
    *
-   * Cheapest evidence first: a playlist or segment named as one, then the
-   * page's report that a video started, and only then the checks that cost a
-   * fetch — a whole file that must prove it is one, an opaque request that
-   * answers as media. Timed from the session's own clock where the evidence
-   * carries a time, so a stream is dated by the request that proved it, not
-   * by the poll that noticed.
+   * Cheapest evidence first: a segment named as one — a player asks for
+   * segments only once its playlist has answered — then the page's report
+   * that a video started, and only then the checks that cost a fetch: a
+   * playlist that must prove it is one (`confirmPlaylists`), a whole file
+   * likewise, an opaque request that answers as media. Timed from the
+   * session's own clock where the evidence carries a time, so a stream is
+   * dated by the request that proved it, not by the poll that noticed.
    */
   const streamProven = async (playingAtMs: number | null): Promise<{ at: number; delivery: StreamDelivery } | null> => {
     const named = requests.filter((request) => isMediaRequest(request.url))
-    const firstNamed = named.find((request) => !WHOLE_FILE_URL.test(request.url))
-    if (firstNamed) return { at: firstNamed.atMs, delivery: 'segmented' }
+    const firstSegment = named.find((request) => !WHOLE_FILE_URL.test(request.url) && !PLAYLIST_URL.test(request.url))
+    if (firstSegment) return { at: firstSegment.atMs, delivery: 'segmented' }
     if (playingAtMs !== null) return { at: playingAtMs, delivery: 'unknown' }
+    const playlist = await confirmPlaylists(named, peeked, bodies)
+    if (playlist !== null) return { at: playlist.atMs, delivery: 'segmented' }
     const fileType = await confirmWholeFiles(named, peeked, bodies)
     if (fileType !== null) return { at: Date.now(), delivery: wholeFileDelivery(fileType) }
     const opaque = await peekForMedia(candidates(), peeked, bodies)
