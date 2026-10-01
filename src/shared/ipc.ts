@@ -852,8 +852,24 @@ export interface SkipOffer {
 export interface PreviewCacheStatus {
   titles: number
   bytes: number
-  /** The last save's outcome as the log says it ("kept 25 s from 0 s …", "not kept: no-playlist …"); null before any. */
-  last: string | null
+  /** What the last save did; null before any. */
+  last: PreviewCacheSave | null
+}
+
+/**
+ * One save of the preview cache, for the Settings line. Names rather than
+ * keys: the line is read by a person ("kept 30 s of Fight Club on VidSrc"),
+ * where it used to read `movie:tt0137523 vidsrc-me`.
+ */
+export interface PreviewCacheSave {
+  title: string
+  season: number | null
+  episode: number | null
+  source: string
+  /** What was kept, or null when nothing was. */
+  kept: { seconds: number; fromSeconds: number; bytes: number } | null
+  /** Why nothing was kept, in the cache's own terms (`no-playlist`, `segments-unreachable` …); null when kept. */
+  reason: string | null
 }
 
 export interface PreviewPlan {

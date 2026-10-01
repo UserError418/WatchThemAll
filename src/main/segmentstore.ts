@@ -11,7 +11,7 @@
  * points at.
  */
 
-import type { PreviewCacheStatus } from '@shared/ipc'
+import type { PreviewCacheSave, PreviewCacheStatus } from '@shared/ipc'
 import { admitWindow, readIndex, windowFor, windowId, windowOfTitle, writeIndex, type CachedWindow } from './segmentcache'
 import {
   findStreamPlaylist,
@@ -52,6 +52,12 @@ export interface KeptWindow {
   filmSeconds: number
 }
 
+/** What a save is of, by name, for the status line: the keys in `WindowWhere` are not for reading. */
+export interface SaveNames {
+  title: string
+  source: string
+}
+
 export interface SegmentStore {
   /** The kept window for this preview, and what it covers; null when there is none. */
   find(where: WindowWhere, seconds: number): KeptWindow | null
@@ -74,6 +80,7 @@ export interface SegmentStore {
     requests: readonly CapturedRequest[] | Promise<readonly CapturedRequest[]>,
     from: { seconds: number; duration: number },
     expectedMinutes: number | null,
+    names: SaveNames,
   ): Promise<SaveOutcome>
   /**
    * Settles when a save for this title that is under way has finished, or
@@ -117,10 +124,14 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
   const playlistKey = (where: WindowWhere): string => `${where.titleKey}|${where.season}|${where.episode}|${where.providerId}`
 
   /** The last save's outcome, for `status`. */
-  let last: string | null = null
-  const report = (outcome: string): void => {
-    last = outcome
-    log(`[cache] ${outcome}`)
+  let last: PreviewCacheSave | null = null
+  const report = (save: PreviewCacheSave, where: WindowWhere): void => {
+    last = save
+    // The log keeps the keys: it is read next to the requests they explain.
+    const what = save.kept
+      ? `kept ${save.kept.seconds} s from ${save.kept.fromSeconds} s, ${(save.kept.bytes / 1e6).toFixed(1)} MB`
+      : `not kept: ${save.reason}`
+    log(`[cache] ${what} (${where.titleKey} ${where.providerId})`)
   }
 
   const saveNow = async (
@@ -128,7 +139,9 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
     requests: readonly CapturedRequest[] | Promise<readonly CapturedRequest[]>,
     from: { seconds: number; duration: number },
     expectedMinutes: number | null,
+    names: SaveNames,
   ): Promise<SaveOutcome> => {
+    const about = { title: names.title, source: names.source, season: where.season, episode: where.episode }
     const now = Date.now()
     const id = windowId(where, now)
     const part = `${id}.part`
@@ -137,7 +150,7 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
     const outcome = await saveStreamWindow([...(noted ? [noted] : []), ...(await requests)], from, expectedMinutes, io)
     if (!outcome.ok) {
       await files.removeWindow(part)
-      report(`not kept: ${outcome.reason} (${where.titleKey} ${where.providerId})`)
+      report({ ...about, kept: null, reason: outcome.reason }, where)
       return outcome
     }
     await files.renameWindow(part, id)
@@ -154,8 +167,16 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
     await files.writeIndex(writeIndex(index))
     for (const dropped of admitted.drop) await files.removeWindow(dropped.id)
     report(
-      `kept ${Math.round(outcome.endSeconds - outcome.startSeconds)} s from ${Math.round(outcome.startSeconds)} s, ` +
-        `${(outcome.bytes / 1e6).toFixed(1)} MB (${where.titleKey} ${where.providerId})`,
+      {
+        ...about,
+        kept: {
+          seconds: Math.round(outcome.endSeconds - outcome.startSeconds),
+          fromSeconds: Math.round(outcome.startSeconds),
+          bytes: outcome.bytes,
+        },
+        reason: null,
+      },
+      where,
     )
     return outcome
   }
@@ -180,8 +201,8 @@ export async function createSegmentStore(files: CacheFiles, log: (line: string) 
       if (title === null || title.season !== where.season || title.episode !== where.episode) return null
       return windowFor(index, { ...where, providerId: title.providerId }, seconds) === null ? null : title.providerId
     },
-    save(where, requests, from, expectedMinutes) {
-      const run = queue.then(() => saveNow(where, requests, from, expectedMinutes))
+    save(where, requests, from, expectedMinutes, names) {
+      const run = queue.then(() => saveNow(where, requests, from, expectedMinutes, names))
       queue = run.catch(() => {})
       const settled = run.catch((error: unknown) => ({ ok: false as const, reason: String(error) }))
       pending.set(where.titleKey, settled)

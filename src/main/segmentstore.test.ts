@@ -64,6 +64,7 @@ function memoryFiles(existing: string[] = [], index: string | null = null) {
 
 const WHERE = { titleKey: 'tv:tt0386676', season: 4, episode: 1, providerId: 'vidsrc-me' }
 const REQUESTS = [{ url: 'https://cdn.example/ep/index.m3u8', headers: {} }]
+const NAMES = { title: 'The Office', source: 'VidSrc' }
 const quiet = (): void => {}
 
 describe('createSegmentStore', () => {
@@ -76,7 +77,7 @@ describe('createSegmentStore', () => {
   it('keeps a window, then finds it for the same source and a place inside it', async () => {
     const { files, dirs, index } = memoryFiles()
     const store = await createSegmentStore(files, quiet)
-    const outcome = await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42)
+    const outcome = await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42, NAMES)
     expect(outcome.ok).toBe(true)
     const kept = store.find(WHERE, 602)
     expect(kept?.src).toMatch(/^\/__cache\/[a-z0-9-]+\/index\.m3u8$/)
@@ -89,9 +90,26 @@ describe('createSegmentStore', () => {
   it('leaves nothing behind when a save finds no stream', async () => {
     const { files, dirs } = memoryFiles()
     const store = await createSegmentStore(files, quiet)
-    const outcome = await store.save(WHERE, [{ url: 'https://ads.example/x.js', headers: {} }], { seconds: 600, duration: 2520 }, 42)
+    const outcome = await store.save(WHERE, [{ url: 'https://ads.example/x.js', headers: {} }], { seconds: 600, duration: 2520 }, 42, NAMES)
     expect(outcome).toEqual({ ok: false, reason: 'no-playlist' })
     expect(dirs.size).toBe(0)
+  })
+
+  it('reports the last save by name, for a person to read', async () => {
+    const { files } = memoryFiles()
+    const store = await createSegmentStore(files, quiet)
+    expect(store.status().last).toBeNull()
+    await store.save(WHERE, [{ url: 'https://ads.example/x.js', headers: {} }], { seconds: 600, duration: 2520 }, 42, NAMES)
+    expect(store.status().last).toEqual({
+      title: 'The Office',
+      season: 4,
+      episode: 1,
+      source: 'VidSrc',
+      kept: null,
+      reason: 'no-playlist',
+    })
+    await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42, NAMES)
+    expect(store.status().last).toMatchObject({ title: 'The Office', source: 'VidSrc', reason: null, kept: { fromSeconds: expect.any(Number) } })
   })
 
   it('lets a plan wait for a save of the same title that is under way', async () => {
@@ -99,7 +117,7 @@ describe('createSegmentStore', () => {
     const store = await createSegmentStore(files, quiet)
     let release!: () => void
     slow(new Promise<void>((resolve) => (release = resolve)))
-    void store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42)
+    void store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42, NAMES)
     const waited = store.settled(WHERE.titleKey, 5_000).then(() => store.find(WHERE, 602))
     release()
     expect(await waited).not.toBeNull()
@@ -109,7 +127,7 @@ describe('createSegmentStore', () => {
   it('names the source of the window kept for an episode, for a preview no test qualified for', async () => {
     const { files } = memoryFiles()
     const store = await createSegmentStore(files, quiet)
-    await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42)
+    await store.save(WHERE, REQUESTS, { seconds: 600, duration: 2520 }, 42, NAMES)
     const episode = { titleKey: WHERE.titleKey, season: WHERE.season, episode: WHERE.episode }
     expect(store.keptSource(episode, 602)).toBe('vidsrc-me')
     expect(store.keptSource({ ...episode, episode: 2 }, 602)).toBeNull()

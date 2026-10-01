@@ -33,6 +33,7 @@
   import PageHeader from '../components/PageHeader.svelte'
   import { library } from '../lib/library.svelte'
   import type { MalPreview, PreviewCacheStatus, WatchlistTestStatus } from '@shared/ipc'
+  import { clock, episodeCode } from '../lib/format'
   import type { SourceSortKey } from '@shared/types'
 
   let note = $state<string | null>(null)
@@ -134,7 +135,12 @@
       status.titles === 0
         ? 'Preview cache: empty.'
         : `Preview cache: ${status.titles} ${status.titles === 1 ? 'title' : 'titles'}, ${(status.bytes / 1e6).toFixed(0)} MB.`
-    return status.last === null ? held : `${held} Last: ${status.last}.`
+    const last = status.last
+    if (last === null) return held
+    const what = last.season !== null && last.episode !== null ? `${last.title} ${episodeCode(last.season, last.episode)}` : last.title
+    return last.kept
+      ? `${held} Last kept ${last.kept.seconds} s of ${what} on ${last.source}, from ${clock(last.kept.fromSeconds)} (${(last.kept.bytes / 1e6).toFixed(1)} MB).`
+      : `${held} Last: nothing kept of ${what} on ${last.source} (${last.reason?.replaceAll('-', ' ')}).`
   }
 
   /** The status in words. See `watchlisttester.ts` for what each state means. */

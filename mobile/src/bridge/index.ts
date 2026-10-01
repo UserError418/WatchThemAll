@@ -117,7 +117,7 @@ import {
   WrittenPositions,
 } from '@main/resume'
 import { capture, createCastBridge, type Candidate } from './cast'
-import { createSegmentStore, type SegmentStore, type WindowWhere } from '@main/segmentstore'
+import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
 import { App as CapacitorApp } from '@capacitor/app'
 import { ScreenOrientation } from '@capacitor/screen-orientation'
@@ -903,12 +903,17 @@ export async function createBridge(): Promise<WtaApi> {
     return { titleKey: titleKey(req), season: episode?.season ?? null, episode: episode?.episode ?? null }
   }
   const windowWhere = (req: PlayRequest, providerId: string): WindowWhere => ({ ...episodeWhere(req), providerId })
+  /** What a kept window is of, in words, for the Settings line (`SaveNames`). A test's request has no title. */
+  const saveNames = (req: PlayRequest, providerId: string): SaveNames => ({
+    title: req.title || 'a tested title',
+    source: allProviders().find((p) => p.id === providerId)?.name ?? providerId,
+  })
 
   /** In the background, one at a time; nothing waits for it. The frames' requests are one buffer, newest first. */
   const keepStreamWindow = (req: PlayRequest, providerId: string | null, from: { seconds: number; duration: number }): void => {
     const store = segmentStore
     if (store === null || providerId === null) return
-    void store.save(windowWhere(req, providerId), capture.list().catch(() => []), from, req.runtimeMinutes ?? null)
+    void store.save(windowWhere(req, providerId), capture.list().catch(() => []), from, req.runtimeMinutes ?? null, saveNames(req, providerId))
   }
   /**
    * Whether the picture is on the television, so the phone's is blanked.
@@ -1897,7 +1902,13 @@ export async function createBridge(): Promise<WtaApi> {
       return
     }
     if (cache.find(windowWhere(req, choice.provider.id), choice.startSeconds) !== null) return
-    void cache.save(windowWhere(req, choice.provider.id), requests, { seconds: choice.startSeconds, duration: 0 }, runtimeMinutes)
+    void cache.save(
+      windowWhere(req, choice.provider.id),
+      requests,
+      { seconds: choice.startSeconds, duration: 0 },
+      runtimeMinutes,
+      saveNames(req, choice.provider.id),
+    )
   }
 
   /**

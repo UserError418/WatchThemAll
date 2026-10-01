@@ -26,7 +26,7 @@ import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
 import { applyBrowserIdentity, CHROME_UA } from './identity'
 import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
-import { createSegmentStore, type SegmentStore, type WindowWhere } from './segmentstore'
+import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from './segmentstore'
 import { nodeCacheFiles } from './segmentfiles'
 import { choosePreview, planPreview } from './previewplan'
 import { allowStreamPreviews, previewRequests } from './previewview'
@@ -899,6 +899,14 @@ function windowWhere(req: PlayRequest, providerId: string): WindowWhere {
   return { ...episodeWhere(req), providerId }
 }
 
+/** What a kept window is of, in words, for the Settings line (`SaveNames`). */
+function saveNames(req: PlayRequest, providerId: string): SaveNames {
+  return {
+    title: req.title || 'a tested title',
+    source: allProviders().find((p) => p.id === providerId)?.name ?? providerId,
+  }
+}
+
 /**
  * Keep a window of the stream a page was playing, from where it stopped: the
  * player on closing, the preview on being left. In the background, one save
@@ -911,7 +919,7 @@ function keepStreamWindow(
   requests: readonly { url: string; headers: Record<string, string> }[],
 ): void {
   if (segmentStore === null || providerId === null || position === null || requests.length === 0) return
-  void segmentStore.save(windowWhere(req, providerId), requests, position, req.runtimeMinutes ?? null)
+  void segmentStore.save(windowWhere(req, providerId), requests, position, req.runtimeMinutes ?? null, saveNames(req, providerId))
 }
 
 /** Starts of sources on titles on this device: a warm one files no start time (`WarmStarts`). */
@@ -973,7 +981,13 @@ function cacheAfterTest(ref: TitleRef, episode: { season: number; episode: numbe
       return
     }
     if (cache.find(windowWhere(req, choice.provider.id), choice.startSeconds) !== null) return
-    await cache.save(windowWhere(req, choice.provider.id), requests, { seconds: choice.startSeconds, duration: 0 }, req.runtimeMinutes)
+    await cache.save(
+      windowWhere(req, choice.provider.id),
+      requests,
+      { seconds: choice.startSeconds, duration: 0 },
+      req.runtimeMinutes,
+      saveNames(req, choice.provider.id),
+    )
   })()
 }
 
