@@ -65,6 +65,10 @@ public class MainActivity extends BridgeActivity {
         WebSettings settings = getBridge().getWebView().getSettings();
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
 
+        // Chrome on Android rather than a WebView, to the sources the player
+        // and the preview frame: see `BrowserIdentity`.
+        BrowserIdentity.apply(settings);
+
         // The other half of the same job: popups are blocked above, and
         // redirects are refused in `PlayerNavigationClient`. Either one alone
         // still lets an embed's advertising take the user out of the app.

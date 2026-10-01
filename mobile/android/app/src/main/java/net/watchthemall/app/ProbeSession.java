@@ -200,8 +200,9 @@ final class ProbeSession {
         // for the same reason. A probe must not open windows either.
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setSupportMultipleWindows(false);
-        // Look like the app's player to the provider, not like a second client.
-        settings.setUserAgentString(appWebView.getSettings().getUserAgentString());
+        // Look like the app's player to the provider, not like a second client:
+        // the same identity, User-Agent and client hints both (`BrowserIdentity`).
+        BrowserIdentity.apply(settings);
         // The provider is a third party inside the shell, as it is inside the
         // app, and the app's WebView accepts third-party cookies (Capacitor's
         // cookie manager turns it on). A provider whose player needs its own
