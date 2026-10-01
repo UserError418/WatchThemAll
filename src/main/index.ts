@@ -24,7 +24,7 @@ import { buildMenu, createTray, type MenuDeps } from './menu'
 import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
-import { applyBrowserIdentity } from './identity'
+import { applyBrowserIdentity, CHROME_UA } from './identity'
 import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
 import { createSegmentStore, type SegmentStore, type WindowWhere } from './segmentstore'
 import { nodeCacheFiles } from './segmentfiles'
@@ -90,6 +90,14 @@ const dirname = fileURLToPath(new URL('.', import.meta.url))
  * unreachable or has been published broken.
  */
 const BUNDLED_PROVIDERS = (bundledCatalog as ProviderCatalog).providers
+
+/**
+ * The browser identity every frame and request carries (`identity.ts`). Set
+ * before any window exists, because it is a fallback: it reaches every page's
+ * `navigator.userAgent` as well as its requests, which a header handler alone
+ * cannot.
+ */
+app.userAgentFallback = CHROME_UA
 
 /**
  * Chromium flags. Must be set before `app.whenReady`.

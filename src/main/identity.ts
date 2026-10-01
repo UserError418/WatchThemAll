@@ -7,43 +7,63 @@
  * that every one of them can afford. Cycle 1 dropped the original app's
  * spoofing and playback regressed.
  *
- * The original's comment is the part worth preserving, because it is the
- * non-obvious half:
+ * ## One identity, the engine's own
  *
- *   > Real Chrome always sends Sec-CH-UA — missing headers are MORE suspicious
- *   > than Electron-branded ones.
+ * What a page can see has to agree with what its requests say, because the
+ * providers that check compare the two. The identity is therefore the browser
+ * this really is — Chromium at Electron's own version, on the machine's own
+ * platform — with only the two tokens that name the app removed (`Electron/…`
+ * and `watchthemall/…`), in the reduced form Chrome itself sends
+ * (`Chrome/148.0.0.0`). It is installed as the app-wide fallback
+ * (`app.userAgentFallback`), so `navigator.userAgent` in every frame and the
+ * header on every request carry the same string.
  *
- * So client hints are **replaced**, not stripped. A request with a Chrome UA
- * and no `Sec-CH-UA` is a more distinctive fingerprint than one that never
- * pretended at all.
+ * Until 2.0.11 the app claimed a fixed Chrome 138 on Windows instead, with
+ * hand-written client hints to match. Headers can be rewritten; JavaScript
+ * cannot, and it kept reporting the truth: `navigator.userAgentData` said
+ * Chromium 148 on Linux under a header saying Chrome 138 on Windows, and in a
+ * source's own frames `navigator.userAgent` still said Electron. VidFast
+ * builds its API path in the page from what the page sees and answered 500 on
+ * every title (2026-10-01); Videm refused a page whose requests changed voice
+ * mid-session (2026-09-30, `presentAsChrome`).
  *
- * Scope: this makes requests look like Chrome. It does not patch the DOM,
- * `navigator`, WebGL or canvas — a provider running real fingerprinting will
- * still see Electron, and that is a deliberate limit rather than an oversight.
+ * The client hints (`Sec-CH-UA*`) are left to Chromium for the same reason:
+ * it derives them from the same brand list it shows to JavaScript, so they
+ * agree by construction. The brand list says Chromium rather than Google
+ * Chrome; that is true, and a Chromium user is an ordinary visitor, where a
+ * browser contradicting itself is not.
+ *
+ * Scope: this makes the browser consistent, not invisible. It does not patch
+ * WebGL, canvas or fonts.
  */
 
 import type { Session } from 'electron'
 import { isSameOrigin } from './sameorigin'
 
-/**
- * The Chrome build we claim to be.
- *
- * Kept slightly behind current stable on purpose: a version number from the
- * future is itself a signal, and providers update their allowlists slowly.
- * When bumping this, bump `CHROME_MAJOR` with it — a UA and client hints that
- * disagree about the version are worse than either alone.
- */
-const CHROME_MAJOR = '138'
-export const CHROME_UA =
-  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ` +
-  `Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`
-
-/** Client hints matching `CHROME_UA`, in Chrome's own formatting. */
-const CLIENT_HINTS: Record<string, string> = {
-  'Sec-CH-UA': `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not?A_Brand";v="99"`,
-  'Sec-CH-UA-Platform': '"Windows"',
-  'Sec-CH-UA-Mobile': '?0',
+/** The platform part of Chrome's reduced User-Agent, which is fixed per platform. */
+const PLATFORM_TOKEN: Partial<Record<NodeJS.Platform, string>> = {
+  linux: 'X11; Linux x86_64',
+  win32: 'Windows NT 10.0; Win64; x64',
+  darwin: 'Macintosh; Intel Mac OS X 10_15_7',
 }
+
+/**
+ * The User-Agent Chrome would send on this platform at this engine version.
+ *
+ * Chrome's reduced UA keeps only the major version (`148.0.0.0`) and a frozen
+ * platform string, so this is exact rather than an approximation of one.
+ */
+export function reducedChromeUA(chromeVersion: string, platform: NodeJS.Platform): string {
+  const major = chromeVersion.split('.')[0]
+  const system = PLATFORM_TOKEN[platform] ?? PLATFORM_TOKEN.linux
+  return `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+}
+
+/**
+ * This app's identity. `process.versions.chrome` is Electron's own Chromium;
+ * the fallback is for plain Node (the tests), which has no Chromium.
+ */
+export const CHROME_UA = reducedChromeUA(process.versions.chrome ?? '148.0.0.0', process.platform)
 
 /**
  * Fetch metadata describing an **embedded player**, not a typed-in address.
@@ -117,42 +137,23 @@ function applyEmbeddedFetchMetadata(
 }
 
 /**
- * Hints Chrome only sends when a site asks for them via `Accept-CH`. Electron
- * volunteers some of them, and the values leak the real platform, so they are
- * removed rather than faked.
- */
-const LEAKY_HINTS = [
-  'Sec-CH-UA-Arch',
-  'Sec-CH-UA-Bitness',
-  'Sec-CH-UA-Full-Version',
-  'Sec-CH-UA-Full-Version-List',
-  'Sec-CH-UA-Model',
-  'Sec-CH-UA-Platform-Version',
-]
-
-/**
- * Make one outgoing request's headers say Chrome, all of them.
+ * Make one outgoing request's headers carry the app's identity, all of them.
  *
- * The User-Agent is set here as well as by `session.setUserAgent`, because
- * that call reaches only what the browser itself sends — navigations. A
- * `fetch` or XHR from the page's own script carries the renderer's UA, which
- * is Electron's, and `applyProviderReferer` replaces `applyBrowserIdentity`'s
- * handler on the sessions that load sources (a session has one), so nothing
- * corrected it. One session then spoke with two voices: the document as
- * Chrome 138, the player's API calls as `watchthemall/… Electron/…` under
- * client hints still claiming Chrome 138.
+ * The User-Agent is set here as well as by `app.userAgentFallback` and
+ * `session.setUserAgent`, because a session's header handler sees requests
+ * those have not reached — and `applyProviderReferer` replaces
+ * `applyBrowserIdentity`'s handler on the sessions that load sources (a
+ * session has one). Before 2.0.10 nothing corrected them and one session
+ * spoke with two voices; Videm refuses such a page outright.
  *
- * Videm (2Embed's server) showed what that costs: its tokens are bound to the
- * client that loaded the page, and every API call from the scan answered 403
- * (2026-09-30), so a source that plays was reported dead.
+ * Client hints are not written here: Chromium's own agree with the page's
+ * `navigator.userAgentData`, and anything written by hand would not.
  */
 export function presentAsChrome(headers: Record<string, string>): void {
   for (const name of Object.keys(headers)) {
     if (name.toLowerCase() === 'user-agent') delete headers[name]
   }
   headers['User-Agent'] = CHROME_UA
-  for (const [name, value] of Object.entries(CLIENT_HINTS)) headers[name] = value
-  for (const name of LEAKY_HINTS) delete headers[name]
   // Electron sets this on some requests and Chrome never does.
   delete headers['X-DevTools-Emulate-Network-Conditions-Client-Id']
 }
@@ -211,6 +212,7 @@ export function applyProviderReferer(session: Session, rootUrl: string): void {
     // A malformed custom provider must not take down playback entirely.
     return
   }
+  session.setUserAgent(CHROME_UA)
 
   session.webRequest.onBeforeSendHeaders(
     { urls: ['http://*/*', 'https://*/*'] },
