@@ -263,6 +263,23 @@
     }),
   )
 
+  /**
+   * Forget the live run: it was of another episode. Main sends this document
+   * only runs about what is playing, but a step to another episode keeps the
+   * document, and results are per episode.
+   */
+  function clearLiveScan(): void {
+    scanVerdicts = {}
+    scanTimings = {}
+    scanQualities = {}
+    scanReasons = {}
+    scanDelivery = {}
+    scanning = false
+    scanDone = 0
+    scanTotal = 0
+    scanTesting = []
+  }
+
   /** Live run first, falling back to whatever was stored for this title. */
   const verdicts = $derived<Record<string, ProbeVerdict>>(
     Object.keys(scanVerdicts).length > 0 ? scanVerdicts : (sourceState.scan?.verdicts ?? {}),
@@ -774,6 +791,10 @@
 
   $effect(() =>
     api?.onContext((next) => {
+      const moved =
+        context !== null &&
+        (context.tmdbId !== next.tmdbId || context.season !== next.season || context.episode !== next.episode)
+      if (moved) clearLiveScan()
       context = next
     }),
   )

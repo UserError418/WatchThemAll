@@ -571,6 +571,13 @@ export interface ScanInFlight {
 export interface ProviderScanProgress {
   titleKey: string
   /**
+   * The episode under test, or null for a film. Absent where the sender does
+   * not say (the phone's bridge): "this title, episode unknown". Results are
+   * per episode, so the player's source list shows a run only for the
+   * episode it is playing (`progressIsAbout`).
+   */
+  episode?: { season: number; episode: number } | null
+  /**
    * Every provider being measured right now, in the order they started.
    *
    * A list because a scan is parallel — three at a time on the desktop, two on

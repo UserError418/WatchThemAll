@@ -163,6 +163,25 @@ export interface ScanService {
   busy(): boolean
 }
 
+/**
+ * Whether a scan's progress is about what a player is showing: the same
+ * title, and the same episode where the progress names one.
+ *
+ * Main used to forward every run to the player's chrome, which painted its
+ * source list from whichever run spoke last: a test started in another
+ * title's detail view, or the first-watch test of the episode before a step,
+ * showed as this episode's dots, timings and cast list.
+ */
+export function progressIsAbout(
+  progress: Pick<ProviderScanProgress, 'titleKey' | 'episode'>,
+  titleKey: string,
+  episode: { season: number; episode: number } | null,
+): boolean {
+  if (progress.titleKey !== titleKey) return false
+  if (progress.episode === undefined) return true
+  return progress.episode?.season === episode?.season && progress.episode?.episode === episode?.episode
+}
+
 export function createScanService(options: ScanServiceOptions): ScanService {
   /**
    * Twenty seconds for a first test, twenty-five for a second.
@@ -286,6 +305,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const publish = (finished: boolean): void => {
         options.onProgress({
           titleKey,
+          episode:
+            subject.season !== undefined && subject.episode !== undefined
+              ? { season: subject.season, episode: subject.episode }
+              : null,
           testing: [...inFlight.values()].map((job) => ({
             providerId: job.provider.id,
             providerName: job.provider.name,

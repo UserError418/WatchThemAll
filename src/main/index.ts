@@ -61,7 +61,7 @@ import {
 } from './providerscan'
 import { ResultStore } from '@shared/store/results'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
-import { createScanService } from './scanservice'
+import { createScanService, progressIsAbout } from './scanservice'
 import { createWatchlistTester, episodeToTest } from './watchlisttester'
 import { AUTO_TEST_TICK_MS, AutoTester } from './autotest'
 import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
@@ -292,8 +292,11 @@ const scan = createScanService({
     send(EV.providerScan, progress)
     // The player chrome is a separate document with its own preload, so the
     // app window's `send` does not reach it. Both surfaces can start a scan
-    // and both draw its dots, so both have to be told.
-    player?.notifyChrome(EV.providerScan, progress)
+    // and both draw its dots, so both have to be told; the chrome only of a
+    // run about what it is playing (`progressIsAbout`).
+    if (player !== null && progressIsAbout(progress, titleKey(player.context), episodeOf(player.context))) {
+      player.notifyChrome(EV.providerScan, progress)
+    }
   },
 })
 
