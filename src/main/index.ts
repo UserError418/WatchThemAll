@@ -668,7 +668,9 @@ function openPlayer(
       same results the source pickers show.
     */
     testedWorking: (providerId) =>
-      titleResults(testResults.sources(), titleKey(context), episodeOf(context), 'desktop').scan?.verdicts[
+      // The episode showing now: results are per episode, and this view
+      // outlives the one it opened on.
+      titleResults(testResults.sources(), titleKey(showing()), episodeOf(showing()), 'desktop').scan?.verdicts[
         providerId
       ] === 'stream',
     // Where this was left last time; the view only acts on it if the provider
