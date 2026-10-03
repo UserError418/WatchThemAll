@@ -33,9 +33,10 @@ import com.getcapacitor.BridgeWebViewClient;
  *   Returning `true` says "handled" and then does nothing, so the WebView goes
  *   nowhere and no intent is fired. The app is still there.
  *
- * Non-http schemes keep Capacitor's handling: `mailto:`, `tel:` and a plugin's
- * own `shouldOverrideLoad` hook all belong to it, and none of them is how an
- * embed advertises.
+ * Every other scheme is refused, apart from the documents a WebView shows by
+ * itself (`data:`, `blob:`, `about:`). Handed on to Capacitor, it became an
+ * `ACTION_VIEW` intent, which is exactly how an advert opens the Play Store or
+ * another app over the film.
  */
 public class PlayerNavigationClient extends BridgeWebViewClient {
 
@@ -52,7 +53,15 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
         String scheme = url.getScheme();
 
         if (!"http".equals(scheme) && !"https".equals(scheme)) {
-            return super.shouldOverrideUrlLoading(view, request);
+            // Documents the WebView shows itself, which frames use all the time.
+            if ("data".equals(scheme) || "blob".equals(scheme) || "about".equals(scheme)) return false;
+            // Refused from any frame, whatever started it. Capacitor's
+            // `launchIntent` fires ACTION_VIEW for these, so an advert in the
+            // player's frame naming `market://` or another app's scheme put
+            // that app over the film. A tap does not tell the user's own
+            // navigation from an advert's, and the app never navigates to such
+            // a scheme itself: external links go through the Browser plugin.
+            return true;
         }
 
         // The app's own document, served from the Capacitor scheme host.
