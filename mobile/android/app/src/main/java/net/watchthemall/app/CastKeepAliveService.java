@@ -8,10 +8,13 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.net.wifi.WifiManager;
+
+import com.google.android.gms.cast.framework.CastContext;
 
 /**
  * Keeps the phone serving while the film plays on the television.
@@ -83,6 +86,7 @@ public class CastKeepAliveService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            stopCasting();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -97,11 +101,22 @@ public class CastKeepAliveService extends Service {
             ? new Notification.Builder(this, CHANNEL_ID)
             : new Notification.Builder(this);
 
+        // The way out from the shade, for a phone that is in a pocket rather
+        // than in the app. It came to this service as ACTION_STOP, and nothing
+        // ever sent it until this action did.
+        Intent stop = new Intent(this, CastKeepAliveService.class).setAction(ACTION_STOP);
+        PendingIntent stopCast = PendingIntent.getService(
+            this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
+
         Notification notification = builder
             .setContentTitle("Casting to your TV")
             .setContentText("WatchThemAll is streaming from this phone")
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentIntent(openApp)
+            .addAction(new Notification.Action.Builder(
+                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel), "Stop casting", stopCast
+            ).build())
             .setOngoing(true)
             .build();
 
@@ -120,6 +135,21 @@ public class CastKeepAliveService extends Service {
         // stream URLs are likely expired. Silently restarting would reconnect to
         // nothing.
         return START_NOT_STICKY;
+    }
+
+    /**
+     * End the cast itself, not only this service. Ending the session is what
+     * stops the television, and the plugin's session listener then gives the
+     * phone its picture back. The proxy is stopped here as well, because with
+     * the app swiped away there may be no plugin left to hear the session end.
+     */
+    private void stopCasting() {
+        try {
+            CastContext.getSharedInstance(this).getSessionManager().endCurrentSession(true);
+        } catch (Exception unavailable) {
+            // No Cast framework here, so no session to end.
+        }
+        CastPlugin.stopServing();
     }
 
     @Override

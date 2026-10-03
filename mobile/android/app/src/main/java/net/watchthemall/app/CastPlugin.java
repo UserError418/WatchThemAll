@@ -90,6 +90,11 @@ public class CastPlugin extends Plugin {
      */
     private static final CastProxyServer PROXY = new CastProxyServer();
 
+    /** For the notification's Stop, which may come with no plugin instance left to stop the server. */
+    static void stopServing() {
+        PROXY.stop();
+    }
+
     /**
      * Where `fetchText` does its blocking work.
      *
