@@ -27,6 +27,7 @@ import type {
 } from '@shared/types'
 import { resumeKey, type ResumeSourceRule, type SourceSortKey } from '@shared/types'
 import { isListed } from '@shared/listed'
+import { NOTHING_AIRED_YET } from '@shared/aired'
 import { indexRatings, legacyRatingOf, ratingScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 import { DEFAULT_SETTINGS } from '@shared/store/core'
@@ -552,8 +553,9 @@ class Library {
       status: 'status' in media ? media.status : 'Unknown',
       nextEpisode: 'nextEpisode' in media ? media.nextEpisode : null,
       // Seed the baseline from what has already aired, so adding a tracker
-      // does not immediately announce last week's episode.
-      lastNotified: 'lastEpisode' in media ? media.lastEpisode : null,
+      // does not immediately announce last week's episode — and when nothing
+      // has aired, say so, or the premiere would be taken as the baseline.
+      lastNotified: 'lastEpisode' in media ? (media.lastEpisode ?? { ...NOTHING_AIRED_YET }) : null,
       addedAt: Date.now(),
       lastChecked: 'lastEpisode' in media ? Date.now() : 0,
     }

@@ -34,6 +34,7 @@ export interface SweepableStore {
   }
 }
 import * as tmdb from './tmdb'
+import { isNothingAiredYet, NOTHING_AIRED_YET } from '@shared/aired'
 
 /** Spacing between TMDB calls, so a large tracker list does not burst. */
 const REQUEST_SPACING_MS = 250
@@ -157,13 +158,22 @@ export async function checkTracker(tracker: ReleaseTracker): Promise<ReleaseNoti
   }
 
   const latest = detail.lastEpisode
-  if (!latest) return null
+  if (!latest) {
+    // Checked, and nothing has aired: recorded as such, so that the premiere
+    // is news when it comes rather than the bookmark. See `NOTHING_AIRED_YET`.
+    tracker.lastNotified ??= { ...NOTHING_AIRED_YET }
+    return null
+  }
 
   // First sighting: record the baseline, announce nothing.
   if (!tracker.lastNotified) {
     tracker.lastNotified = latest
     return null
   }
+
+  // A special filed ahead of the premiere (a preview, a making-of) is not the
+  // series starting; the bookmark waits for season 1.
+  if (isNothingAiredYet(tracker.lastNotified) && latest.season < 1) return null
 
   if (detail.status === 'Ended' || detail.status === 'Canceled') return null
   if (!isNewerThan(latest, tracker.lastNotified)) return null

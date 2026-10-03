@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Episode, ReleaseTracker, StoreShape } from '@shared/types'
-import { checkAll, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
+import { checkAll, checkTracker, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
+import { NOTHING_AIRED_YET } from '@shared/aired'
 import * as tmdb from './tmdb'
 
 vi.mock('./tmdb', () => ({ detail: vi.fn(), season: vi.fn(), search: vi.fn() }))
@@ -103,6 +104,69 @@ describe('needsSchedule', () => {
   it('fetches when the stored entries carry no usable dates', () => {
     const stored = { schedule: [{ season: 2, episode: 7, name: '', airDate: null }] }
     expect(needsSchedule(stored, 2, NOW)).toBe(true)
+  })
+})
+
+describe('checkTracker', () => {
+  const tracked = (over: Partial<ReleaseTracker> = {}): ReleaseTracker => ({
+    id: 't',
+    tmdbId: 7,
+    title: 'An upcoming series',
+    posterPath: null,
+    status: 'In Production',
+    nextEpisode: { season: 1, episode: 1, name: 'Episode 1', airDate: '2026-10-20' },
+    lastNotified: null,
+    addedAt: 1,
+    lastChecked: 1,
+    ...over,
+  })
+
+  /** What TMDB answers for the series this time round. */
+  function tmdbSays(over: Record<string, unknown>): void {
+    vi.mocked(tmdb.detail).mockResolvedValue({
+      status: 'Returning Series',
+      nextEpisode: null,
+      lastEpisode: null,
+      posterPath: null,
+      title: 'An upcoming series',
+      ...over,
+    } as unknown as Awaited<ReturnType<typeof tmdb.detail>>)
+    vi.mocked(tmdb.season).mockResolvedValue({ season: 1, name: '', episodes: [] })
+  }
+
+  /**
+   * The bug: a series tracked before its premiere had nothing to compare the
+   * premiere with, so the first episode any check saw became the bookmark,
+   * silently — the one announcement the tracker existed for.
+   */
+  it('announces the premiere of a series tracked before it aired', async () => {
+    const tracker = tracked()
+    tmdbSays({ status: 'In Production' })
+    expect(await checkTracker(tracker)).toBeNull()
+    expect(tracker.lastNotified).toEqual(NOTHING_AIRED_YET)
+
+    // The whole season dropped at once.
+    tmdbSays({ lastEpisode: { season: 1, episode: 10, name: 'Episode 10', airDate: '2026-10-20' } })
+    const notice = await checkTracker(tracker)
+
+    expect(notice).toMatchObject({ kind: 'new_season', episode: { season: 1, episode: 10 } })
+    expect(tracker.lastNotified).toMatchObject({ season: 1, episode: 10 })
+  })
+
+  it('still takes an aired series silently at its first check', async () => {
+    const tracker = tracked({ status: 'Returning Series' })
+    tmdbSays({ lastEpisode: { season: 3, episode: 4, name: 'Four', airDate: '2026-09-01' } })
+
+    expect(await checkTracker(tracker)).toBeNull()
+    expect(tracker.lastNotified).toMatchObject({ season: 3, episode: 4 })
+  })
+
+  it('does not take a special filed before the premiere as the series starting', async () => {
+    const tracker = tracked({ lastNotified: { ...NOTHING_AIRED_YET } })
+    tmdbSays({ lastEpisode: { season: 0, episode: 1, name: 'First look', airDate: '2026-10-01' } })
+
+    expect(await checkTracker(tracker)).toBeNull()
+    expect(tracker.lastNotified).toEqual(NOTHING_AIRED_YET)
   })
 })
 

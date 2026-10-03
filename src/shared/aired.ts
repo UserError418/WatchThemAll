@@ -41,6 +41,28 @@ export function localMidnight(date: string): number {
 }
 
 /**
+ * A release tracker's bookmark for "checked, and nothing has aired yet".
+ *
+ * `ReleaseTracker.lastNotified` null means "never checked", and the first
+ * check then takes whatever has aired as the bookmark without a word, so that
+ * tracking a series does not announce last week's episode. A series tracked
+ * before its premiere needs the other answer. Without it the premiere was the
+ * first thing any check ever saw, and was taken silently as the bookmark: the
+ * one episode a user tracks an upcoming series for was the one never
+ * announced (found 2026-10-03, with a real library tracking a season that
+ * drops all at once later in the month).
+ *
+ * Season 0, episode 0 comes before every real episode, which is how the
+ * sweep's comparison and the sync merge's `laterEpisode` already order it,
+ * and the ReelVault export already writes an unknown position as 0/0.
+ */
+export const NOTHING_AIRED_YET: Readonly<EpisodeStub> = Object.freeze({ season: 0, episode: 0, name: '', airDate: null })
+
+export function isNothingAiredYet(stub: Pick<EpisodeStub, 'season' | 'episode'> | null | undefined): boolean {
+  return stub !== null && stub !== undefined && stub.season === 0 && stub.episode === 0
+}
+
+/**
  * The episode to test: the one wanted, or the last aired one when the wanted
  * one comes after it.
  *
