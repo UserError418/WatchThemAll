@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Everything the phone needs to put a provider's stream on a Chromecast.
@@ -77,7 +78,17 @@ public class CastPlugin extends Plugin {
     /** How long a television gets to finish connecting before we say so. */
     private static final long CONNECT_TIMEOUT_MS = 20_000L;
 
-    private final CastProxyServer proxy = new CastProxyServer();
+    /**
+     * The proxy is the process's, not this plugin instance's.
+     *
+     * With the keep-alive service up, the process outlives the activity: the
+     * task swiped away mid-cast, or the activity rebuilt after its WebView's
+     * renderer died. The television is still fetching from the server then,
+     * and the rebuilt activity gets a new plugin. With a server per instance,
+     * that new one reported no proxy for a cast in progress and never started
+     * the progress ticker, so the television's position stopped being saved.
+     */
+    private static final CastProxyServer PROXY = new CastProxyServer();
 
     /**
      * Where `fetchText` does its blocking work.
@@ -121,6 +132,8 @@ public class CastPlugin extends Plugin {
                     .build();
 
                 castContext.getSessionManager().addSessionManagerListener(sessionListener, CastSession.class);
+                // A cast the previous activity started is still being served.
+                if (PROXY.isRunning()) startProgress();
             } catch (Exception error) {
                 // Play Services missing or too old. Every method below reports
                 // this as "unavailable" rather than crashing the app: casting is
@@ -129,6 +142,35 @@ public class CastPlugin extends Plugin {
                 castContext = null;
             }
         });
+    }
+
+    /**
+     * The activity is going. The cast is not, so only what is this
+     * instance's is let go: its session listener (or a rebuilt activity's
+     * plugin and this one would both act on a session ending), its discovery
+     * callback, its ticker, a connect still waiting, and its fetch threads.
+     */
+    @Override
+    protected void handleOnDestroy() {
+        stopProgress();
+        if (castContext != null) {
+            castContext.getSessionManager().removeSessionManagerListener(sessionListener, CastSession.class);
+        }
+        if (mediaRouter != null && routeCallback != null) mediaRouter.removeCallback(routeCallback);
+        if (pendingConnect != null) {
+            pendingConnect.reject("the app was closed");
+            pendingConnect = null;
+        }
+        fetchPool.shutdown();
+    }
+
+    /** Run `work` on the fetch threads; after `handleOnDestroy` there are none, and the call says so. */
+    private void offThread(PluginCall call, Runnable work) {
+        try {
+            fetchPool.execute(work);
+        } catch (RejectedExecutionException closed) {
+            call.reject("the app was closed");
+        }
     }
 
     /* ── Captured stream candidates ─────────────────────────────────────── */
@@ -189,7 +231,7 @@ public class CastPlugin extends Plugin {
         JSObject headers = call.getObject("headers", new JSObject());
         int limit = call.getInt("limitBytes", 4 * 1024 * 1024);
         boolean binary = "base64".equals(call.getString("encoding", "text"));
-        fetchPool.execute(() -> fetchTextNow(call, url, headers, limit, binary));
+        offThread(call, () -> fetchTextNow(call, url, headers, limit, binary));
     }
 
     /**
@@ -224,7 +266,7 @@ public class CastPlugin extends Plugin {
             return;
         }
         JSObject headers = call.getObject("headers", new JSObject());
-        fetchPool.execute(() -> downloadNow(call, url, headers, target));
+        offThread(call, () -> downloadNow(call, url, headers, target));
     }
 
     /** `downloadToFile`'s request, on `fetchPool`. */
@@ -362,7 +404,7 @@ public class CastPlugin extends Plugin {
         // Android refuses on the main thread. Hence the two hops.
         getActivity().runOnUiThread(() -> {
             InetAddress receiver = receiverAddress();
-            fetchPool.execute(() -> startProxyNow(call, receiver));
+            offThread(call, () -> startProxyNow(call, receiver));
         });
     }
 
@@ -378,8 +420,8 @@ public class CastPlugin extends Plugin {
                 return;
             }
 
-            int port = proxy.start(address);
-            proxy.load(toMap(playlistsIn), toMap(targetsIn), toMap(headersIn));
+            int port = PROXY.start(address);
+            PROXY.load(toMap(playlistsIn), toMap(targetsIn), toMap(headersIn));
             CastKeepAliveService.start(getContext());
             startProgress();
 
@@ -400,7 +442,7 @@ public class CastPlugin extends Plugin {
 
     @PluginMethod
     public void stopProxy(PluginCall call) {
-        proxy.stop();
+        PROXY.stop();
         CastKeepAliveService.stop(getContext());
         stopProgress();
         call.resolve();
@@ -555,7 +597,7 @@ public class CastPlugin extends Plugin {
     public void disconnect(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (castContext != null) castContext.getSessionManager().endCurrentSession(true);
-            proxy.stop();
+            PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
             call.resolve();
@@ -707,7 +749,7 @@ public class CastPlugin extends Plugin {
                 "deviceName",
                 session != null && session.getCastDevice() != null ? session.getCastDevice().getFriendlyName() : ""
             );
-            result.put("proxyRunning", proxy.isRunning());
+            result.put("proxyRunning", PROXY.isRunning());
 
             // Device volume, and it survives having nothing to play: a
             // connected receiver has a volume before and after a stream.
@@ -817,7 +859,7 @@ public class CastPlugin extends Plugin {
 
         @Override
         public void onSessionEnded(CastSession session, int error) {
-            proxy.stop();
+            PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
             notifyListeners("castSession", statusObject("ended", session));
@@ -826,7 +868,7 @@ public class CastPlugin extends Plugin {
         @Override
         public void onSessionStartFailed(CastSession session, int error) {
             settleConnect(false, "the TV refused the connection (code " + error + ")");
-            proxy.stop();
+            PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
             JSObject payload = statusObject("failed", session);
@@ -845,7 +887,7 @@ public class CastPlugin extends Plugin {
             // reached when the system tries on its own behalf. Treated exactly
             // like a failed start: tear the proxy down rather than leave a
             // server running for a session that does not exist.
-            proxy.stop();
+            PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
             JSObject payload = statusObject("failed", session);
