@@ -127,6 +127,8 @@ import { createPlayerSurface } from './playersurface'
 import { installFilmRelay, setPageMuted, type RelayTime } from './mediarelay'
 import { TV_HANDOVER, TvHandover } from './tvhandover'
 import { createVisibleGate } from './visiblegate'
+import { routePlayerAction, type PlayerActionHandlers } from './playeraction'
+import type { TransportAction } from '@shared/playerkeys'
 import { createOverlayHub } from './overlayhub'
 import { createOverlayHost } from './overlayhost'
 import { createPhoneFullscreen } from './phonefullscreen'
@@ -547,6 +549,16 @@ export async function createBridge(): Promise<WtaApi> {
     if (settings.subtitleLanguage !== code) store.applyPatch({ settings: { ...settings, subtitleLanguage: code } })
   }
 
+  /** The transport actions, for our overlay to carry out; see `routePlayerAction`. */
+  const transport = new Signal<TransportAction>()
+  const playerActions: PlayerActionHandlers = {
+    transport: (action) => transport.emit(action),
+    fullscreen: () => phoneFullscreen.toggle(),
+    openPanel: (panel) => overlayHub.openPanel(panel),
+    shrink: () => setMini(true),
+    reload: () => void playerReload(),
+  }
+
   const playerApi: WtaPlayerApi = {
     onConfig: (cb) => {
       cb(currentOverlayConfig())
@@ -559,30 +571,10 @@ export async function createBridge(): Promise<WtaApi> {
       })
     },
     onBarState: (cb) => overlayHub.onBarState(cb),
-    // No keyboard to press them with; the overlay performs its own taps.
-    onTransport: () => () => {},
+    // From a keyboard, a remote or DeX, through `routePlayerAction`.
+    onTransport: (cb) => transport.subscribe(cb),
     onProviderChanged: () => () => {},
-    action: (action) => {
-      switch (action) {
-        case 'fullscreen':
-          phoneFullscreen.toggle()
-          return
-        case 'episodes':
-        case 'sources':
-        case 'cast':
-          overlayHub.openPanel(action)
-          return
-        case 'back':
-        case 'escape':
-          setMini(true)
-          return
-        case 'reload':
-          void playerReload()
-          return
-        default:
-          return
-      }
-    },
+    action: (action) => routePlayerAction(action, 'overlay', playerActions),
     activity: (hold) => overlayHub.activity(hold),
     pressPlay: () => surface.press(),
     owned: (owned) => overlayHub.owned(owned),
@@ -2315,8 +2307,8 @@ export async function createBridge(): Promise<WtaApi> {
       reload: playerReload,
       setMini: async (next) => setMini(next),
       setPaused: async (paused) => surface.setPaused(paused),
-      // Player keys are v2's, desktop-only until the phone port.
-      action: async () => {},
+      // The keys `PlayerFrame` takes off the page.
+      action: async (action) => routePlayerAction(action, 'keys', playerActions),
     },
 
     cast: {
