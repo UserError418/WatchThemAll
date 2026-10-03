@@ -339,17 +339,16 @@ public final class CastProxyServer {
              * well-formed response. Above it, streaming is still the only
              * option and the old behaviour stands.
              */
-            byte[] buffered = null;
+            Buffered buffered = null;
             if (body != null && length < 0) {
                 buffered = readAtMost(body, BUFFERABLE_BYTES);
-                if (buffered != null) length = buffered.length;
+                if (buffered.complete) length = buffered.bytes.size();
             }
 
             writeHead(out, status, status == 206 ? "Partial Content" : "OK", contentType, length, contentRange);
 
-            if (buffered != null) {
-                out.write(buffered);
-            } else if (body != null) {
+            if (buffered != null) buffered.bytes.writeTo(out);
+            if (body != null && (buffered == null || !buffered.complete)) {
                 byte[] buffer = new byte[BUFFER_BYTES];
                 int read;
                 while ((read = body.read(buffer)) != -1) out.write(buffer, 0, read);
@@ -363,23 +362,35 @@ public final class CastProxyServer {
         }
     }
 
+    /** What `readAtMost` read, and whether that was the whole body. */
+    private static final class Buffered {
+        final java.io.ByteArrayOutputStream bytes;
+        final boolean complete;
+
+        Buffered(java.io.ByteArrayOutputStream bytes, boolean complete) {
+            this.bytes = bytes;
+            this.complete = complete;
+        }
+    }
+
     /**
-     * Read a whole response, or give up and let the caller stream it.
+     * Read a whole response, or as much of it as the cap allows.
      *
-     * Returns null past the cap, having consumed nothing the caller can no
-     * longer use — the stream is positioned partway through, so the buffered
-     * prefix is handed back as the start of it. In practice the cap is only
-     * reached by a progressive file, which is streamed.
+     * Past the cap the body is still arriving, and what was read is its start:
+     * the caller sends that first and streams the rest after it. In practice
+     * the cap is only reached by a progressive file. Until this kept the
+     * prefix, a whole film served without a length reached the receiver as a
+     * 200 with its first 24 MB missing.
      */
-    private static byte[] readAtMost(InputStream body, int cap) throws IOException {
+    private static Buffered readAtMost(InputStream body, int cap) throws IOException {
         java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream(BUFFER_BYTES);
         byte[] buffer = new byte[BUFFER_BYTES];
         int read;
         while ((read = body.read(buffer)) != -1) {
             collected.write(buffer, 0, read);
-            if (collected.size() > cap) return null;
+            if (collected.size() > cap) return new Buffered(collected, false);
         }
-        return collected.toByteArray();
+        return new Buffered(collected, true);
     }
 
     /**

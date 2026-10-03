@@ -52,6 +52,15 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    /*
+     * The JVM tests (`src/test`) run the app's own classes against the SDK's
+     * stub `android.jar`, whose every method throws. `CastProxyServer` logs
+     * through `android.util.Log`, and a log line is not what is under test, so
+     * the stubs answer with defaults instead.
+     */
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
 }
 
 repositories {
