@@ -14,7 +14,7 @@ const { library } = await import('./library.svelte')
 
 const show = { tmdbId: 1396, title: 'Breaking Bad', posterPath: null, type: 'tv' as const }
 const settle = (playedMs: number, watched = false) =>
-  library.notePlayback({ tmdbId: 1396, season: 1, episode: 2, playedMs, seconds: 600, duration: 2880, watched })
+  library.notePlayback({ tmdbId: 1396, type: 'tv', season: 1, episode: 2, playedMs, seconds: 600, duration: 2880, watched })
 
 beforeEach(() => {
   library.history = []

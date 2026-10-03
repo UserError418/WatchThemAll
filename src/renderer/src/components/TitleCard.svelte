@@ -117,8 +117,8 @@
   function wantFacts(): void {
     if (!showsPoster && media.tmdbId) titleFacts.want(media.type, media.tmdbId)
   }
-  const saved = $derived(library.isInWatchlist(media.tmdbId))
-  const tracked = $derived(library.isTracked(media.tmdbId))
+  const saved = $derived(library.isInWatchlist(media))
+  const tracked = $derived(library.isTracked(media))
   const label = $derived(subtitle ?? year(media.releaseDate))
 
   function clearTimers(): void {
@@ -231,7 +231,7 @@
 
   function toggleSaved(event: MouseEvent): void {
     stop(event)
-    if (saved) library.removeFromWatchlist(media.tmdbId)
+    if (saved) library.removeFromWatchlist(media)
     else library.addToWatchlist(media)
   }
 

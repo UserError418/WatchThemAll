@@ -68,8 +68,8 @@ describe('rate', () => {
     library.rate(media, 9)
     library.rate(media, 3, 2)
 
-    expect(library.ratingFor(1396)).toBe(9)
-    expect(library.ratingFor(1396, 2)).toBe(3)
+    expect(library.ratingFor(media)).toBe(9)
+    expect(library.ratingFor(media, 2)).toBe(3)
     expect(library.ratings.find((r) => r.season === 2)?.key).toBe('tv:tt0903747:s2')
   })
 
@@ -78,14 +78,14 @@ describe('rate', () => {
     library.rate(media, 4)
 
     expect(library.ratings).toHaveLength(1)
-    expect(library.ratingFor(1396)).toBe(4)
+    expect(library.ratingFor(media)).toBe(4)
   })
 
   it('clears a chosen rating when the same value is tapped again', () => {
     library.rate(media, 7)
     library.rate(media, 7)
 
-    expect(library.ratingFor(1396)).toBeNull()
+    expect(library.ratingFor(media)).toBeNull()
   })
 
   /** The exception, and the reason for this file. */
@@ -94,11 +94,11 @@ describe('rate', () => {
 
     library.rate(media, 8)
 
-    expect(library.ratingFor(1396)).toBe(8)
-    expect(library.isCoarse(1396)).toBe(false)
+    expect(library.ratingFor(media)).toBe(8)
+    expect(library.isCoarse(media)).toBe(false)
     // And from then on it is an ordinary rating, which the next tap clears.
     library.rate(media, 8)
-    expect(library.ratingFor(1396)).toBeNull()
+    expect(library.ratingFor(media)).toBeNull()
   })
 
   it('refines a converted value to whatever else is tapped', () => {
@@ -118,8 +118,8 @@ describe('clearRating', () => {
 
     library.clearRating(media, 2)
 
-    expect(library.ratingFor(1396)).toBe(9)
-    expect(library.ratingFor(1396, 2)).toBeNull()
+    expect(library.ratingFor(media)).toBe(9)
+    expect(library.ratingFor(media, 2)).toBeNull()
   })
 
   it('writes nothing when there was nothing to clear', () => {
@@ -139,22 +139,22 @@ describe('ratingForEntry', () => {
    */
   it('uses the entry own scope, so a rated season is not listed as unrated', () => {
     library.ratings = [converted, seasonFour]
-    expect(library.ratingForEntry({ tmdbId: 1396, season: 4 })).toBe(7)
+    expect(library.ratingForEntry({ type: 'tv', tmdbId: 1396, season: 4 })).toBe(7)
   })
 
   it('uses the whole title for a film', () => {
     library.ratings = [converted, seasonFour]
-    expect(library.ratingForEntry({ tmdbId: 1396, season: null })).toBe(8)
+    expect(library.ratingForEntry({ type: 'tv', tmdbId: 1396, season: null })).toBe(8)
   })
 
   it('reports no opinion for a season nobody has rated', () => {
     library.ratings = [converted, seasonFour]
-    expect(library.ratingForEntry({ tmdbId: 1396, season: 9 })).toBeNull()
+    expect(library.ratingForEntry({ type: 'tv', tmdbId: 1396, season: 9 })).toBeNull()
   })
 
   /** The index follows the list: a rating made after the last read is found. */
   it('sees a rating made through `rate`', () => {
     library.rate(media, 6, 2)
-    expect(library.ratingForEntry({ tmdbId: 1396, season: 2 })).toBe(6)
+    expect(library.ratingForEntry({ type: 'tv', tmdbId: 1396, season: 2 })).toBe(6)
   })
 })

@@ -80,7 +80,7 @@
    */
   const visible = $derived.by(() => {
     const owned = hideOwned
-      ? items.filter((m) => !library.isInWatchlist(m.tmdbId) && !library.isTracked(m.tmdbId))
+      ? items.filter((m) => !library.isInWatchlist(m) && !library.isTracked(m))
       : items
     return shown.claim(title, owned)
   })

@@ -76,6 +76,18 @@ describe('groupWatched', () => {
     expect(new Set(groups.map((g) => g.key)).size).toBe(2)
   })
 
+  /** TMDB numbers films and series separately: one number can be both. */
+  it('does not file a film as a season of a series with the same TMDB number', () => {
+    const groups = groupWatched(
+      [
+        entry({ tmdbId: 1399, type: 'tv', title: 'A series', season: 1 }),
+        entry({ tmdbId: 1399, type: 'movie', title: 'An unrelated film', season: null }),
+      ],
+      none,
+    )
+    expect(groups.map((g) => g.title).sort()).toEqual(['A series', 'An unrelated film'])
+  })
+
   it('marks a film as flat, with nothing to expand', () => {
     const groups = groupWatched([entry({ type: 'movie', season: null })], none)
     expect(groups[0]?.flat).toBe(true)

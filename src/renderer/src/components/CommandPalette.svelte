@@ -118,7 +118,7 @@
     })),
     ...library.trackers
       // A tracked series that is also in the watchlist would appear twice.
-      .filter((t) => !library.isInWatchlist(t.tmdbId))
+      .filter((t) => !library.isInWatchlist({ type: 'tv', tmdbId: t.tmdbId }))
       .map((t) => ({
         id: `t-${t.id}`,
         label: t.title,

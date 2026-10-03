@@ -60,6 +60,21 @@ const newId = (): string => crypto.randomUUID()
 export const episodeKey = (season: number, episode: number): string => `${season}:${episode}`
 
 /**
+ * Which title a lookup is about: its type as well as its TMDB number.
+ *
+ * TMDB numbers films and series in separate spaces, so the number alone names
+ * two titles. Every lookup here used to match on it alone, so a film read as
+ * "in the watchlist" because a series with its number was, and rating or
+ * removing the film deleted the series' rating or entry.
+ */
+export type TitleRef = Pick<MediaSummary, 'type' | 'tmdbId'>
+
+/** Whether a stored record is about this title. */
+function isTitle(record: TitleRef, title: TitleRef): boolean {
+  return record.tmdbId === title.tmdbId && record.type === title.type
+}
+
+/**
  * A history list in the order a timeline needs, newest first.
  *
  * Applied on every read from the store, because the stored order is not the
@@ -213,14 +228,16 @@ class Library {
     if (missing.length === 0) return
 
     // One request per distinct title, even when it is both tracked and saved.
-    const seen: number[] = []
+    // Trackers are series only, so they carry no type of their own.
+    const seen: string[] = []
     let repaired = false
 
     for (const entry of missing) {
-      if (seen.includes(entry.tmdbId)) continue
-      seen.push(entry.tmdbId)
-
       const type = 'type' in entry ? entry.type : 'tv'
+      const title: TitleRef = { type, tmdbId: entry.tmdbId }
+      if (seen.includes(`${type}:${entry.tmdbId}`)) continue
+      seen.push(`${type}:${entry.tmdbId}`)
+
       let posterPath: string | null
       try {
         posterPath = (await window.wta.tmdb.detail(entry.tmdbId, type))?.posterPath ?? null
@@ -232,8 +249,8 @@ class Library {
       }
       if (!posterPath) continue
 
-      for (const w of this.watchlist) if (w.tmdbId === entry.tmdbId) w.posterPath = posterPath
-      for (const t of this.trackers) if (t.tmdbId === entry.tmdbId) t.posterPath = posterPath
+      for (const w of this.watchlist) if (isTitle(w, title)) w.posterPath = posterPath
+      if (type === 'tv') for (const t of this.trackers) if (t.tmdbId === entry.tmdbId) t.posterPath = posterPath
       repaired = true
     }
 
@@ -347,13 +364,13 @@ class Library {
     return this.watchlist.filter(isListed)
   }
 
-  isInWatchlist(tmdbId: number): boolean {
-    return this.watchlist.some((w) => w.tmdbId === tmdbId && isListed(w))
+  isInWatchlist(title: TitleRef): boolean {
+    return this.watchlist.some((w) => isTitle(w, title) && isListed(w))
   }
 
   /** The title's entry, listed or not — where its ticks, position and source live. */
-  watchlistEntry(tmdbId: number): WatchlistEntry | undefined {
-    return this.watchlist.find((w) => w.tmdbId === tmdbId)
+  watchlistEntry(title: TitleRef): WatchlistEntry | undefined {
+    return this.watchlist.find((w) => isTitle(w, title))
   }
 
   /**
@@ -365,7 +382,7 @@ class Library {
    * addition as the one to get to first.
    */
   addToWatchlist(media: MediaSummary | MediaDetail): WatchlistEntry {
-    const existing = this.watchlistEntry(media.tmdbId)
+    const existing = this.watchlistEntry(media)
     if (!existing) return this.createEntry(media, true)
     if (isListed(existing)) return existing
 
@@ -384,7 +401,7 @@ class Library {
    * its season watched first) filled the watchlist with things already seen.
    */
   entryFor(media: MediaSummary | MediaDetail): WatchlistEntry {
-    return this.watchlistEntry(media.tmdbId) ?? this.createEntry(media, false)
+    return this.watchlistEntry(media) ?? this.createEntry(media, false)
   }
 
   private createEntry(media: MediaSummary | MediaDetail, listed: boolean): WatchlistEntry {
@@ -427,15 +444,15 @@ class Library {
     return this.watchlist[0]!
   }
 
-  removeFromWatchlist(tmdbId: number): void {
-    this.watchlist = this.watchlist.filter((w) => w.tmdbId !== tmdbId)
+  removeFromWatchlist(title: TitleRef): void {
+    this.watchlist = this.watchlist.filter((w) => !isTitle(w, title))
     void this.persist({ watchlist: this.watchlist })
   }
 
   /** Record the IMDB id once the detail view has resolved it. */
-  attachImdbId(tmdbId: number, imdbId: string | null): void {
+  attachImdbId(title: TitleRef, imdbId: string | null): void {
     if (!imdbId) return
-    const entry = this.watchlistEntry(tmdbId)
+    const entry = this.watchlistEntry(title)
     if (!entry || entry.imdbId === imdbId) return
     entry.imdbId = imdbId
     void this.persist({ watchlist: this.watchlist })
@@ -450,11 +467,11 @@ class Library {
    * its player preload guessed the episode from the URL, got `Number(null)`
    * back as 0 on path-style providers, and wrote S00E00 over a real position.
    */
-  setPosition(tmdbId: number, season: number, episode: number): void {
+  setPosition(title: TitleRef, season: number, episode: number): void {
     if (!Number.isInteger(season) || !Number.isInteger(episode)) return
     if (season < 1 || episode < 1) return
 
-    const entry = this.watchlistEntry(tmdbId)
+    const entry = this.watchlistEntry(title)
     if (!entry) return
 
     /*
@@ -481,9 +498,9 @@ class Library {
     void this.persist({ watchlist: this.watchlist })
   }
 
-  isWatched(tmdbId: number, season: number, episode: number): boolean {
+  isWatched(title: TitleRef, season: number, episode: number): boolean {
     return (
-      this.watchlistEntry(tmdbId)?.watchedEpisodes.includes(episodeKey(season, episode)) ?? false
+      this.watchlistEntry(title)?.watchedEpisodes.includes(episodeKey(season, episode)) ?? false
     )
   }
 
@@ -524,21 +541,21 @@ class Library {
     return true
   }
 
-  setWatched(tmdbId: number, season: number, episode: number, watched: boolean): void {
+  setWatched(title: TitleRef, season: number, episode: number, watched: boolean): void {
     // Same 1-based guarantee as setPosition: a "0:0" key would be permanent
     // junk in the watched set, counted forever in the progress figure.
     if (!Number.isInteger(season) || !Number.isInteger(episode)) return
     if (season < 1 || episode < 1) return
 
-    const entry = this.watchlistEntry(tmdbId)
+    const entry = this.watchlistEntry(title)
     if (!entry) return
     if (!this.markEpisodes(entry, [episodeKey(season, episode)], watched)) return
     void this.persist({ watchlist: this.watchlist })
   }
 
   /** Mark or clear a whole season at once. */
-  setSeasonWatched(tmdbId: number, season: number, episodes: number[], watched: boolean): void {
-    const entry = this.watchlistEntry(tmdbId)
+  setSeasonWatched(title: TitleRef, season: number, episodes: number[], watched: boolean): void {
+    const entry = this.watchlistEntry(title)
     if (!entry) return
 
     const keys = episodes.map((episode) => episodeKey(season, episode))
@@ -546,18 +563,19 @@ class Library {
     void this.persist({ watchlist: this.watchlist })
   }
 
-  watchedCount(tmdbId: number): number {
-    return this.watchlistEntry(tmdbId)?.watchedEpisodes.length ?? 0
+  watchedCount(title: TitleRef): number {
+    return this.watchlistEntry(title)?.watchedEpisodes.length ?? 0
   }
 
   /* ── Release trackers ───────────────────────────────────────────────── */
 
-  isTracked(tmdbId: number): boolean {
-    return this.trackers.some((t) => t.tmdbId === tmdbId)
+  /** Trackers are for series only, and carry no type: a film is never tracked. */
+  isTracked(title: TitleRef): boolean {
+    return title.type === 'tv' && this.trackers.some((t) => t.tmdbId === title.tmdbId)
   }
 
   addTracker(media: MediaSummary | MediaDetail): void {
-    if (this.isTracked(media.tmdbId)) return
+    if (this.isTracked(media)) return
     const tracker: ReleaseTracker = {
       id: newId(),
       tmdbId: media.tmdbId,
@@ -592,7 +610,8 @@ class Library {
     episode: number | null,
   ): void {
     // Replaying the same episode moves it to the top rather than duplicating.
-    const same = (h: HistoryEntry): boolean => h.tmdbId === media.tmdbId && h.season === season && h.episode === episode
+    const same = (h: HistoryEntry): boolean =>
+      isTitle(h, media) && h.season === season && h.episode === episode
     const earlier = this.history.find(same)
     const withoutDuplicate = this.history.filter((h) => !same(h))
 
@@ -624,7 +643,7 @@ class Library {
      * opening a title and backing out mark it watched.
      */
     if (media.type === 'tv' && season != null && episode != null) {
-      const watchlistEntry = this.watchlistEntry(media.tmdbId)
+      const watchlistEntry = this.watchlistEntry(media)
       if (watchlistEntry) {
         watchlistEntry.lastSeason = season
         watchlistEntry.lastEpisode = episode
@@ -653,6 +672,7 @@ class Library {
    */
   notePlayback(settled: {
     tmdbId: number
+    type: MediaType
     season: number | null
     episode: number | null
     playedMs: number
@@ -661,8 +681,7 @@ class Library {
     watched: boolean
   }): void {
     const at = this.history.findIndex(
-      (h) =>
-        h.tmdbId === settled.tmdbId && h.season === settled.season && h.episode === settled.episode,
+      (h) => isTitle(h, settled) && h.season === settled.season && h.episode === settled.episode,
     )
     const existing = at === -1 ? this.openRow(settled) : this.history[at]
     if (!existing) return
@@ -698,11 +717,11 @@ class Library {
    * watchlist. If neither knows it, there is nothing worth putting on a
    * timeline and the settle is dropped.
    */
-  private openRow(settled: { tmdbId: number; season: number | null; episode: number | null }):
+  private openRow(settled: TitleRef & { season: number | null; episode: number | null }):
     | HistoryEntry
     | undefined {
-    const sibling = this.history.find((h) => h.tmdbId === settled.tmdbId)
-    const tracked = this.watchlistEntry(settled.tmdbId)
+    const sibling = this.history.find((h) => isTitle(h, settled))
+    const tracked = this.watchlistEntry(settled)
     const source = sibling ?? tracked
     if (source === undefined) return undefined
 
@@ -908,8 +927,8 @@ class Library {
    * thing at two levels of granularity is how a caller ends up asking about a
    * series and getting an answer about episode one.
    */
-  hasSeen(tmdbId: number): boolean {
-    return tmdbId !== 0 && this.watched.some((w) => w.tmdbId === tmdbId)
+  hasSeen(title: TitleRef): boolean {
+    return title.tmdbId !== 0 && this.watched.some((w) => isTitle(w, title))
   }
 
   /**
@@ -921,17 +940,17 @@ class Library {
    * legacy entry with no season still answers yes for every season, which is
    * what it has always meant.
    */
-  hasSeenSeason(tmdbId: number, season: number): boolean {
-    if (tmdbId === 0) return false
+  hasSeenSeason(title: TitleRef, season: number): boolean {
+    if (title.tmdbId === 0) return false
     return this.watched.some(
-      (w) => w.tmdbId === tmdbId && (w.season === null || w.season === season),
+      (w) => isTitle(w, title) && (w.season === null || w.season === season),
     )
   }
 
   /** Every season of this title that is in the watched list, ascending. */
-  seasonsSeen(tmdbId: number): number[] {
+  seasonsSeen(title: TitleRef): number[] {
     return this.watched
-      .filter((w) => w.tmdbId === tmdbId && w.season !== null)
+      .filter((w) => isTitle(w, title) && w.season !== null)
       .map((w) => w.season as number)
       .sort((a, b) => a - b)
   }
@@ -951,7 +970,7 @@ class Library {
     season: number | null = null,
   ): WatchedEntry {
     const existing = this.watched.find(
-      (w) => w.tmdbId === media.tmdbId && media.tmdbId !== 0 && (w.season ?? null) === season,
+      (w) => isTitle(w, media) && media.tmdbId !== 0 && (w.season ?? null) === season,
     )
     if (existing) return existing
 
@@ -990,10 +1009,10 @@ class Library {
    * to remove, so filing it here would make that pass run forever against a
    * library the app keeps re-corrupting.
    */
-  markTitleSeen(tmdbId: number): void {
-    if (tmdbId === 0 || this.hasSeen(tmdbId)) return
-    const entry = this.watchlistEntry(tmdbId)
-    if (!entry || entry.type !== 'movie') return
+  markTitleSeen(title: TitleRef): void {
+    if (title.tmdbId === 0 || title.type !== 'movie' || this.hasSeen(title)) return
+    const entry = this.watchlistEntry(title)
+    if (!entry) return
 
     this.watched = [
       {
@@ -1023,9 +1042,9 @@ class Library {
    * Watched tab's remove button means for a film and what "I have not seen this
    * after all" means for a series. Passing one removes that season only.
    */
-  removeFromWatched(tmdbId: number, season: number | null | undefined = undefined): void {
+  removeFromWatched(title: TitleRef, season: number | null | undefined = undefined): void {
     this.watched = this.watched.filter((w) => {
-      if (w.tmdbId !== tmdbId) return true
+      if (!isTitle(w, title)) return true
       return season === undefined ? false : (w.season ?? null) !== season
     })
     void this.persist({ watched: this.watched })
@@ -1040,8 +1059,8 @@ class Library {
    * question from "what did you think of season 3" and is stored separately —
    * a show can be worth watching while one season of it is not.
    */
-  ratingFor(tmdbId: number, season: number | null = null): RatingValue | null {
-    return this.ratingRecord(tmdbId, season)?.value ?? null
+  ratingFor(title: TitleRef, season: number | null = null): RatingValue | null {
+    return this.ratingRecord(title, season)?.value ?? null
   }
 
   /**
@@ -1049,8 +1068,8 @@ class Library {
    * rather than chosen on the 1–10 scale — so the control can invite the user
    * to refine it. False when there is no rating at all.
    */
-  isCoarse(tmdbId: number, season: number | null = null): boolean {
-    return this.ratingRecord(tmdbId, season)?.coarse ?? false
+  isCoarse(title: TitleRef, season: number | null = null): boolean {
+    return this.ratingRecord(title, season)?.coarse ?? false
   }
 
   /**
@@ -1060,8 +1079,8 @@ class Library {
    * already knows its own season and passing one separately is how the Watched
    * tab came to list seasons the user had just rated under "Unrated".
    */
-  ratingForEntry(entry: Pick<WatchedEntry, 'tmdbId' | 'season'>): RatingValue | null {
-    return this.ratingFor(entry.tmdbId, entry.season ?? null)
+  ratingForEntry(entry: Pick<WatchedEntry, 'type' | 'tmdbId' | 'season'>): RatingValue | null {
+    return this.ratingFor(entry, entry.season ?? null)
   }
 
   /**
@@ -1081,7 +1100,7 @@ class Library {
    * Anything set here is chosen on the scale, so it is never `coarse`.
    */
   rate(media: MediaSummary | MediaDetail, value: RatingValue, season: number | null = null): void {
-    const current = this.ratingRecord(media.tmdbId, season)
+    const current = this.ratingRecord(media, season)
     if (current?.value === value && !current.coarse) {
       this.clearRating(media, season)
       return
@@ -1106,27 +1125,27 @@ class Library {
         genreIds: media.genreIds,
         at: Date.now(),
       },
-      ...this.ratingsExcept(media.tmdbId, season),
+      ...this.ratingsExcept(media, season),
     ]
     void this.persist({ ratings: this.ratings })
   }
 
   /** Remove the rating at exactly this scope, if there is one. */
-  clearRating(media: Pick<MediaSummary, 'tmdbId'>, season: number | null = null): void {
-    const rest = this.ratingsExcept(media.tmdbId, season)
+  clearRating(title: TitleRef, season: number | null = null): void {
+    const rest = this.ratingsExcept(title, season)
     if (rest.length === this.ratings.length) return
     this.ratings = rest
     void this.persist({ ratings: this.ratings })
   }
 
   /** The stored record at exactly this scope; see `indexRatings` for why never a fallback. */
-  private ratingRecord(tmdbId: number, season: number | null): TitleRating | undefined {
-    return this.ratingIndex.get(ratingScope(tmdbId, season))
+  private ratingRecord(title: TitleRef, season: number | null): TitleRating | undefined {
+    return this.ratingIndex.get(ratingScope(title.type, title.tmdbId, season))
   }
 
   /** Every rating except the one at exactly this scope. */
-  private ratingsExcept(tmdbId: number, season: number | null): TitleRating[] {
-    return this.ratings.filter((r) => !(r.tmdbId === tmdbId && (r.season ?? null) === season))
+  private ratingsExcept(title: TitleRef, season: number | null): TitleRating[] {
+    return this.ratings.filter((r) => !(isTitle(r, title) && (r.season ?? null) === season))
   }
 
   /** How many rated titles still have no opinion, for the Watched tab's prompt. */
@@ -1143,8 +1162,8 @@ class Library {
    * calls this whenever it loads a series, and most of those are not in the
    * watchlist.
    */
-  setEpisodeCount(tmdbId: number, count: number): void {
-    const entry = this.watchlistEntry(tmdbId)
+  setEpisodeCount(title: TitleRef, count: number): void {
+    const entry = this.watchlistEntry(title)
     if (!entry || count <= 0 || entry.episodeCount === count) return
     entry.episodeCount = count
     void this.persist({ watchlist: this.watchlist })
@@ -1164,11 +1183,11 @@ class Library {
    * line from `rate` and `clearRating` while writing TMDB's number instead of
    * the user's — the naming trap `scoreFor` below describes.
    */
-  setScore(tmdbId: number, score: number): void {
-    if (tmdbId === 0 || !(score > 0)) return
+  setScore(title: TitleRef, score: number): void {
+    if (title.tmdbId === 0 || !(score > 0)) return
 
-    const entry = this.watchlistEntry(tmdbId)
-    const seen = this.watched.find((w) => w.tmdbId === tmdbId)
+    const entry = this.watchlistEntry(title)
+    const seen = this.watched.find((w) => isTitle(w, title))
     const stale = (entry && entry.rating !== score) || (seen && seen.rating !== score)
     if (!stale) return
 
@@ -1190,11 +1209,11 @@ class Library {
    * the user's own 1–10 verdict, which `ratingFor` returns. Naming both the
    * same thing is how one gets drawn where the other was meant.
    */
-  scoreFor(tmdbId: number): number {
-    if (tmdbId === 0) return 0
+  scoreFor(title: TitleRef): number {
+    if (title.tmdbId === 0) return 0
     return (
-      this.watchlistEntry(tmdbId)?.rating ||
-      this.watched.find((w) => w.tmdbId === tmdbId)?.rating ||
+      this.watchlistEntry(title)?.rating ||
+      this.watched.find((w) => isTitle(w, title))?.rating ||
       0
     )
   }

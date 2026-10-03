@@ -236,17 +236,18 @@
          * controls still lands in the library, while opening a title and
          * backing straight out no longer does.
          */
-        if (!library.isInWatchlist(tmdbId)) return
+        const title = { type, tmdbId }
+        if (!library.isInWatchlist(title)) return
 
         // A film has no position to record; finishing one means the title
         // itself is watched.
         if (type === 'movie' || season == null || episode == null) {
-          library.markTitleSeen(tmdbId)
+          library.markTitleSeen(title)
           return
         }
 
-        library.setPosition(tmdbId, season, episode)
-        library.setWatched(tmdbId, season, episode, true)
+        library.setPosition(title, season, episode)
+        library.setWatched(title, season, episode, true)
       }),
       window.wta.on.playbackSettled((settled) => {
         /**

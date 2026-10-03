@@ -90,8 +90,8 @@
   let manualSeason = $state(1)
   let manualEpisode = $state(1)
 
-  const inWatchlist = $derived(library.isInWatchlist(subject.tmdbId))
-  const tracked = $derived(library.isTracked(subject.tmdbId))
+  const inWatchlist = $derived(library.isInWatchlist(subject))
+  const tracked = $derived(library.isTracked(subject))
   /**
    * Whether the thing the button is about has been watched.
    *
@@ -101,10 +101,10 @@
    */
   const seen = $derived(
     subject.type === 'movie'
-      ? library.hasSeen(subject.tmdbId)
-      : library.hasSeenSeason(subject.tmdbId, selectedSeason),
+      ? library.hasSeen(subject)
+      : library.hasSeenSeason(subject, selectedSeason),
   )
-  const entry = $derived(library.watchlistEntry(subject.tmdbId))
+  const entry = $derived(library.watchlistEntry(subject))
   const backdrop = $derived(backdropUrl(detail?.backdropPath ?? subject.backdropPath))
   const poster = $derived(posterUrl(detail?.posterPath ?? subject.posterPath, 'w342'))
 
@@ -115,7 +115,7 @@
 
   const progress = $derived.by(() => {
     if (!detail || detail.type !== 'tv' || !detail.episodeCount) return 0
-    return Math.min(100, Math.round((library.watchedCount(subject.tmdbId) / detail.episodeCount) * 100))
+    return Math.min(100, Math.round((library.watchedCount(subject) / detail.episodeCount) * 100))
   })
 
   $effect(() => {
@@ -193,10 +193,10 @@
       detail = result
       // Persist the IMDB id: providers key off it, and re-resolving it on
       // every play is a wasted round trip.
-      library.attachImdbId(tmdbId, result.imdbId)
+      library.attachImdbId({ type, tmdbId }, result.imdbId)
       // Lets the watchlist draw a real progress bar without a request per tile.
-      if (type === 'tv') library.setEpisodeCount(tmdbId, result.episodeCount)
-      library.setScore(tmdbId, result.rating)
+      if (type === 'tv') library.setEpisodeCount({ type, tmdbId }, result.episodeCount)
+      library.setScore({ type, tmdbId }, result.rating)
 
       if (type === 'tv' && result.seasonCount > 0) {
         // Open where the user is rather than always at season one: first the
@@ -269,14 +269,14 @@
   $effect(() => {
     const loaded = season
     if (!loaded || subject.type !== 'tv') return
-    if (!library.hasSeenSeason(subject.tmdbId, loaded.season)) return
+    if (!library.hasSeenSeason(subject, loaded.season)) return
 
-    const key = `${subject.tmdbId}:${loaded.season}`
+    const key = `${subject.type}:${subject.tmdbId}:${loaded.season}`
     if (reconciled[key]) return
     reconciled[key] = true
 
     const missing = loaded.episodes
-      .filter((e) => !library.isWatched(subject.tmdbId, e.season, e.episode))
+      .filter((e) => !library.isWatched(subject, e.season, e.episode))
       .map((e) => e.episode)
     if (missing.length === 0) return
 
@@ -284,7 +284,7 @@
     // Watched without ever being in the watchlist needs one to write into —
     // an unlisted one, since opening a title is not adding it.
     library.entryFor(detail ?? subject)
-    library.setSeasonWatched(subject.tmdbId, loaded.season, missing, true)
+    library.setSeasonWatched(subject, loaded.season, missing, true)
   })
 
   /**
@@ -404,7 +404,7 @@
       lastSeason: anchor.season,
       lastEpisode: anchor.episode,
       seasonCount: detail?.seasonCount ?? 1,
-      isWatched: (s, e) => library.isWatched(subject.tmdbId, s, e),
+      isWatched: (s, e) => library.isWatched(subject, s, e),
     }),
   )
 
@@ -480,13 +480,13 @@
   function toggleSeen(): void {
     const media = detail ?? subject
     if (subject.type === 'movie') {
-      if (seen) library.removeFromWatched(subject.tmdbId)
+      if (seen) library.removeFromWatched(subject)
       else library.addToWatched(media)
       return
     }
 
     if (seen) {
-      library.removeFromWatched(subject.tmdbId, selectedSeason)
+      library.removeFromWatched(subject, selectedSeason)
       return
     }
 
@@ -500,7 +500,7 @@
     // gets rated — records what was watched, it is not adding to the list.
     library.entryFor(detail ?? subject)
     library.setSeasonWatched(
-      subject.tmdbId,
+      subject,
       selectedSeason,
       season.episodes.map((e) => e.episode),
       watched,
@@ -1088,7 +1088,7 @@
                 class="secondary"
                 onclick={() =>
                   inWatchlist
-                    ? library.removeFromWatchlist(subject.tmdbId)
+                    ? library.removeFromWatchlist(subject)
                     : library.addToWatchlist(detail ?? subject)}
               >
                 {inWatchlist ? '✓ In Watchlist' : '+ Watchlist'}
@@ -1198,7 +1198,7 @@
           {#if entry && detail.episodeCount}
             <div class="progress" aria-label="Watch progress">
               <div class="bar"><div class="fill" style:width="{progress}%"></div></div>
-              <span>{library.watchedCount(subject.tmdbId)} / {detail.episodeCount} episodes</span>
+              <span>{library.watchedCount(subject)} / {detail.episodeCount} episodes</span>
             </div>
           {/if}
 
@@ -1234,13 +1234,13 @@
                   {now}
                   next={episode.episode === nextUnaired}
                   progress={library.episodeProgress(subject.tmdbId, episode.season, episode.episode)}
-                  watched={library.isWatched(subject.tmdbId, episode.season, episode.episode)}
+                  watched={library.isWatched(subject, episode.season, episode.episode)}
                   current={resumeAt.season === episode.season &&
                     resumeAt.episode === episode.episode}
                   onplay={playEpisode}
                   ontoggleWatched={(e, watched) => {
                     library.entryFor(detail ?? subject)
-                    library.setWatched(subject.tmdbId, e.season, e.episode, watched)
+                    library.setWatched(subject, e.season, e.episode, watched)
                   }}
                 />
               {/each}

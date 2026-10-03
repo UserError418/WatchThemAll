@@ -85,7 +85,7 @@
   })
 
   const seen = (tmdbId: number, season: number, episode: number): boolean =>
-    library.isWatched(tmdbId, season, episode)
+    library.isWatched({ type: 'tv', tmdbId }, season, episode)
 
   /**
    * One tracker per series, whatever the store holds.
@@ -183,7 +183,7 @@
     season: number
     number: number
   }): Promise<void> {
-    const saved = library.watchlistEntry(episode.tmdbId)
+    const saved = library.watchlistEntry({ type: 'tv', tmdbId: episode.tmdbId })
     await window.wta.play({
       tmdbId: episode.tmdbId,
       imdbId: saved?.imdbId ?? null,
@@ -244,7 +244,7 @@
           <!-- Score only. The day marker on the left already carries the
                countdown, and it is the same value for every row under it. -->
           <span class="chips">
-            <Score rating={library.scoreFor(item.tmdbId)} />
+            <Score rating={library.scoreFor({ type: 'tv', tmdbId: item.tmdbId })} />
           </span>
         </span>
       </button>
@@ -308,7 +308,7 @@
               class="act ghost"
               onclick={() =>
                 library.setWatched(
-                  item.tmdbId,
+                  { type: 'tv', tmdbId: item.tmdbId },
                   item.episode.season,
                   item.episode.episode,
                   true,

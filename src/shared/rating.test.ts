@@ -12,9 +12,9 @@ import {
 import type { RatingValue } from './types'
 
 const RATINGS = [
-  { tmdbId: 1396, season: null, value: 9 as const },
-  { tmdbId: 2316, season: 3, value: 4 as const },
-  { tmdbId: 2316, season: 4, value: 7 as const },
+  { type: 'tv' as const, tmdbId: 1396, season: null, value: 9 as const },
+  { type: 'tv' as const, tmdbId: 2316, season: 3, value: 4 as const },
+  { type: 'tv' as const, tmdbId: 2316, season: 4, value: 7 as const },
 ]
 
 const EVERY_VALUE: RatingValue[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -77,9 +77,16 @@ describe('ratingBand', () => {
 })
 
 describe('indexRatings', () => {
-  type Rated = { tmdbId: number; season?: number | null; value: RatingValue }
-  const valueAt = (ratings: Rated[], tmdbId: number, season: number | null): RatingValue | null =>
-    indexRatings(ratings).get(ratingScope(tmdbId, season))?.value ?? null
+  type Rated = { type: 'tv' | 'movie'; tmdbId: number; season?: number | null; value: RatingValue }
+  const valueAt = (ratings: Rated[], tmdbId: number, season: number | null, type: Rated['type'] = 'tv'): RatingValue | null =>
+    indexRatings(ratings).get(ratingScope(type, tmdbId, season))?.value ?? null
+
+  /** TMDB numbers films and series separately: the same number is two titles. */
+  it('keeps a film and a series that share a TMDB number apart', () => {
+    const shared: Rated[] = [...RATINGS, { type: 'movie', tmdbId: 1396, season: null, value: 2 }]
+    expect(valueAt(shared, 1396, null, 'tv')).toBe(9)
+    expect(valueAt(shared, 1396, null, 'movie')).toBe(2)
+  })
 
   it('finds a whole-title opinion', () => {
     expect(valueAt(RATINGS, 1396, null)).toBe(9)
@@ -111,19 +118,19 @@ describe('indexRatings', () => {
    * either way, and refusing to read it back makes the buttons look broken.
    */
   it('reads back a rating on an unresolved title', () => {
-    expect(valueAt([{ tmdbId: 0, season: null, value: 8 }], 0, null)).toBe(8)
+    expect(valueAt([{ type: 'tv', tmdbId: 0, season: null, value: 8 }], 0, null)).toBe(8)
   })
 
   /** Ratings written before 1.5.7 have no season field at all. */
   it('treats a missing season as the whole title', () => {
-    expect(valueAt([{ tmdbId: 7, value: 8 }], 7, null)).toBe(8)
+    expect(valueAt([{ type: 'tv', tmdbId: 7, value: 8 }], 7, null)).toBe(8)
   })
 
   /** `rate` prepends, so the first of two records at one scope is the newer. */
   it('keeps the first record when two share a scope', () => {
     const twice: Rated[] = [
-      { tmdbId: 7, season: null, value: 9 },
-      { tmdbId: 7, season: null, value: 3 },
+      { type: 'tv', tmdbId: 7, season: null, value: 9 },
+      { type: 'tv', tmdbId: 7, season: null, value: 3 },
     ]
     expect(valueAt(twice, 7, null)).toBe(9)
   })

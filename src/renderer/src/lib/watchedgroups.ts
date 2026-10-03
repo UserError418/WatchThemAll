@@ -14,6 +14,10 @@
  * claiming to be one series with N seasons. They each get their own group,
  * keyed by record id instead.
  *
+ * Resolved titles are keyed by type as well as number, because TMDB numbers
+ * films and series separately: a film and a series with the same number are
+ * two rows, not one row claiming the film is a season of the series.
+ *
  * ## Why the summary is a mean now, and was a tally before
  *
  * Until the 1–10 scale a collapsed row showed `18 liked, 2 disliked`, and this
@@ -114,7 +118,7 @@ export function groupWatched(
   const sums = new Map<string, number>()
 
   for (const entry of entries) {
-    const key = entry.tmdbId ? `t${entry.tmdbId}` : `e${entry.id}`
+    const key = entry.tmdbId ? `${entry.type}:${entry.tmdbId}` : `e${entry.id}`
     const rating = ratingOf(entry)
 
     let group = groups.get(key)

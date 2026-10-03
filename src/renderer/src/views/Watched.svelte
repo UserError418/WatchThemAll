@@ -583,7 +583,7 @@
 
               <button
                 class="drop"
-                onclick={() => library.removeFromWatched(group.tmdbId || 0, undefined)}
+                onclick={() => library.removeFromWatched({ type: group.type, tmdbId: group.tmdbId || 0 }, undefined)}
                 aria-label="Remove {group.title} from watched"
                 title={group.flat ? 'Remove from watched' : 'Remove every season'}>✕</button
               >
@@ -606,7 +606,7 @@
                     <button
                       class="drop"
                       onclick={() =>
-                        library.removeFromWatched(season.entry.tmdbId, season.entry.season)}
+                        library.removeFromWatched(season.entry, season.entry.season)}
                       aria-label="Remove {group.title} season from watched"
                       title="Remove this season">✕</button
                     >

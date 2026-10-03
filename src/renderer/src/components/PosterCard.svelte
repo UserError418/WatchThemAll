@@ -30,13 +30,13 @@
 
   const src = $derived(posterUrl(media.posterPath))
   const srcset = $derived(posterSrcset(media.posterPath))
-  const saved = $derived(library.isInWatchlist(media.tmdbId))
+  const saved = $derived(library.isInWatchlist(media))
   const label = $derived(subtitle ?? year(media.releaseDate))
 
   function toggleSaved(event: MouseEvent): void {
     // The card itself opens the detail view; the quick action must not.
     event.stopPropagation()
-    if (saved) library.removeFromWatchlist(media.tmdbId)
+    if (saved) library.removeFromWatchlist(media)
     else library.addToWatchlist(media)
   }
 </script>

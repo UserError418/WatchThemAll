@@ -97,7 +97,7 @@
           // `resumeTarget` refuses to guess forward without the episode list
           // to prove the season is actually finished.
           seasonCount: anchor.season,
-          isWatched: (s, e) => library.isWatched(entry.tmdbId, s, e),
+          isWatched: (s, e) => library.isWatched(entry, s, e),
         })
       : { season: 0, episode: 0 },
   )
@@ -139,7 +139,7 @@
     if (!isSeries || episodes.length === 0 || episodes.length > PIP_LIMIT) return null
     return episodes.map((e) => ({
       key: `${e.season}:${e.episode}`,
-      watched: library.isWatched(entry.tmdbId, e.season, e.episode),
+      watched: library.isWatched(entry, e.season, e.episode),
       current: e.season === target.season && e.episode === target.episode,
     }))
   })
@@ -235,7 +235,7 @@
 
   function remove(event: MouseEvent): void {
     stop(event)
-    library.removeFromWatchlist(entry.tmdbId)
+    library.removeFromWatchlist(entry)
   }
 
   $effect(() => clearIntent)

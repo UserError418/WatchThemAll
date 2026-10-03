@@ -66,8 +66,8 @@
 
   const id = $props.id()
 
-  const value = $derived(library.ratingFor(media.tmdbId, season))
-  const coarse = $derived(library.isCoarse(media.tmdbId, season))
+  const value = $derived(library.ratingFor(media, season))
+  const coarse = $derived(library.isCoarse(media, season))
   const band = $derived(value === null ? null : ratingBand(value))
 
   /** Only meaningful for the compact form; the full strip is always shown. */

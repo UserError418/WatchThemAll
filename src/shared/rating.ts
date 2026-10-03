@@ -37,7 +37,7 @@
  * a smaller wrong than a control that silently ignores the user.
  */
 
-import type { LegacyRating, RatingValue, TitleRating } from './types'
+import type { LegacyRating, MediaType, RatingValue, TitleRating } from './types'
 
 /* ── The scale ──────────────────────────────────────────────────────────── */
 
@@ -119,11 +119,18 @@ export function ratingBand(value: RatingValue): RatingBand {
 /* ── Scope ──────────────────────────────────────────────────────────────── */
 
 /** Ratings carry `season: null` for a whole title; `undefined` is pre-1.5.7. */
-type Scoped = Pick<TitleRating, 'tmdbId'> & { season?: number | null }
+type Scoped = Pick<TitleRating, 'type' | 'tmdbId'> & { season?: number | null }
 
-/** One key per rating scope: a whole title, or one of its seasons. */
-export function ratingScope(tmdbId: number, season: number | null | undefined): string {
-  return `${tmdbId}:${season ?? null}`
+/**
+ * One key per rating scope: a whole title, or one of its seasons.
+ *
+ * The type is part of it because TMDB numbers films and series separately, so
+ * a film and a series can share a number; without it, rating one replaced the
+ * other's rating. This key only indexes ratings in memory. What is stored and
+ * synced is `TitleRating.key`, which always carried the type and is untouched.
+ */
+export function ratingScope(type: MediaType, tmdbId: number, season: number | null | undefined): string {
+  return `${type}:${tmdbId}:${season ?? null}`
 }
 
 /**
@@ -138,5 +145,5 @@ export function ratingScope(tmdbId: number, season: number | null | undefined): 
  * scope, the earlier one — the newer, since `rate` prepends — is the one kept.
  */
 export function indexRatings<T extends Scoped>(ratings: readonly T[]): ReadonlyMap<string, T> {
-  return new Map([...ratings].reverse().map((r) => [ratingScope(r.tmdbId, r.season), r]))
+  return new Map([...ratings].reverse().map((r) => [ratingScope(r.type, r.tmdbId, r.season), r]))
 }
