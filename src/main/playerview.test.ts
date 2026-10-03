@@ -25,7 +25,7 @@ vi.mock('./skiplookup', () => ({ findSegments: async () => [] }))
 
 import { createCastCapture } from './castcapture'
 import { createInlinePlayer, type InlinePlayerOptions } from './playerview'
-import { candidate, episodeRequest, fakeWindow, lastContents } from './playerview.fixture'
+import { candidate, emptyFrame, episodeRequest, fakeWindow, filmFrame, hangingFrame, lastContents } from './playerview.fixture'
 
 function options(overrides: Partial<InlinePlayerOptions> = {}): InlinePlayerOptions {
   return {
@@ -69,5 +69,78 @@ describe('a page still waiting on its backend at the silence deadline', () => {
     // Loading, not idle: an unanswered request is a page still working.
     expect(offers.filter((offer) => offer !== null)).toHaveLength(1)
     player.destroy()
+  })
+})
+
+describe('a reading that arrives after its page has gone', () => {
+  it('is never filed under the episode stepped to, nor settles its resume', async () => {
+    const filed: Array<{ episode: number | null; seconds: number }> = []
+    const player = createInlinePlayer(
+      options({
+        // S1E2 was left at 10:00; everything else starts from the top.
+        onNavigate: () => (player.context.episode === 2 ? 600 : 0),
+        onPosition: (position) => void filed.push({ episode: player.context.episode, seconds: position.seconds }),
+      }),
+    )
+    const contents = lastContents()
+    contents.commit()
+    let e3 = 1800
+    // An advert frame that never answers makes every poll wait out its 1.5 s timeout.
+    contents.frames = [filmFrame(() => ({ seconds: (e3 += 2.5), duration: 2700 })), hangingFrame()]
+    await vi.advanceTimersByTimeAsync(12_600) // the poll asked at 12.5 s is still out
+
+    // The viewer picks S1E2, as `navigatePlayer` does it; its shell commits at once.
+    player.context = episodeRequest(2)
+    player.load('https://a.example/tv/1/1/2')
+    contents.frames = [emptyFrame()]
+    contents.commit()
+    await vi.advanceTimersByTimeAsync(1_500) // the old poll's timeout: S1E3's reading arrives now
+
+    expect(filed.filter((entry) => entry.episode === 2)).toEqual([])
+    expect(player.position()).toBeNull()
+
+    // S1E2's own film, on a source that starts at zero: sent to 10:00.
+    const e2 = filmFrame(() => ({ seconds: 3, duration: 2650 }))
+    contents.frames = [e2]
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(e2.seeks).toContain(600)
+    player.destroy()
+  })
+
+  it('reports nothing once the player has closed', async () => {
+    const reports: string[] = []
+    let closed = false
+    const player = createInlinePlayer(
+      options({
+        onPosition: () => void reports.push(closed ? 'saved after close' : 'saved'),
+        onPositionRead: () => void reports.push(closed ? 'read after close' : 'read'),
+      }),
+    )
+    const contents = lastContents()
+    contents.commit()
+    let seconds = 4000
+    contents.frames = [filmFrame(() => ({ seconds: (seconds += 2.5), duration: 7200 })), hangingFrame()]
+    await vi.advanceTimersByTimeAsync(12_600) // a poll is out
+
+    player.destroy()
+    closed = true
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    // The host files these under the player current when they arrive: after a
+    // replace, that is the next title.
+    expect(reports.filter((report) => report.includes('after close'))).toEqual([])
+  })
+
+  it('leaves no timer running once a player held behind the preview has closed', async () => {
+    const player = createInlinePlayer(options({ held: true }))
+    const contents = lastContents()
+    contents.commit()
+    contents.frames = [filmFrame(() => ({ seconds: 30, duration: 2700 }))]
+    await vi.advanceTimersByTimeAsync(1_000) // the held poll has run
+
+    player.destroy()
+    // Past every per-frame answer timeout a poll left behind.
+    await vi.advanceTimersByTimeAsync(1_600)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

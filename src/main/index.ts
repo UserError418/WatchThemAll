@@ -576,7 +576,19 @@ function openPlayer(
    */
   cast.forget()
 
-  player = createInlinePlayer({
+  /*
+   * The player these callbacks belong to, set the moment it exists. Not the
+   * module's `player`, which is whichever player is current when a callback
+   * runs: a report from this one can arrive after it has been replaced, and
+   * was then filed under the title that replaced it.
+   */
+  let self: InlinePlayer | null = null
+  /** What this player is showing now; it moves with every episode step. */
+  const showing = (): PlayRequest => self?.context ?? context
+  /** Still the player on screen, so its readings are what the viewer is watching. */
+  const isCurrent = (): boolean => self !== null && player === self
+
+  self = createInlinePlayer({
     window: win,
     dirname,
     url,
@@ -609,6 +621,7 @@ function openPlayer(
     // that normally shows the offer is out of sight while it is small.
     onSuggest: (suggestion) => send(EV.playerSuggestion, suggestion),
     onPlayingChange: (playing) => {
+      if (!isCurrent()) return
       videoPlaying = playing
       if (playing) notePlayerPlaylist()
       if (playing) autoTester.tick()
@@ -675,13 +688,13 @@ function openPlayer(
     candidates,
     bounds: { x: 0, y: 0, width, height },
     reportOutcome: (providerId, outcome) =>
-      // `player.context` rather than the captured `context`: moving to another
-      // episode reuses this view, and an outcome recorded against the episode
-      // it opened on would credit the wrong key.
-      recordOutcome(player?.context ?? context, providerId, outcome),
+      // What it shows now rather than the captured `context`: moving to
+      // another episode reuses this view, and an outcome recorded against the
+      // episode it opened on would credit the wrong key.
+      recordOutcome(showing(), providerId, outcome),
     // A test result from watching, filed under the episode playing, as above.
     reportResult: (providerId, seen) => {
-      const playing = player?.context ?? context
+      const playing = showing()
       const where = { device: testResults.device(), titleKey: titleKey(playing), episode: episodeOf(playing), providerId }
       testResults.record([playResult(where, 'play', warmStarts.measure(where.titleKey, providerId, seen))])
     },
@@ -694,13 +707,14 @@ function openPlayer(
      */
     onPosition: (position) => {
       // While casting, the muted local copy is not what anyone is watching.
-      if (onTv) return
-      rememberPosition(player?.context ?? context, position)
+      if (onTv || !isCurrent()) return
+      rememberPosition(showing(), position)
     },
     onPositionRead: (position) => {
+      if (!isCurrent()) return
       noteFilmReading(position)
       if (onTv) return
-      const current = player?.context ?? context
+      const current = showing()
       const place = placeOf(current)
       if (place !== null) upNext.observe(place, position, current.runtimeMinutes, false)
     },
@@ -720,8 +734,8 @@ function openPlayer(
      * both settle — so deferring it here loses nothing.
      */
     onNavigate: (reason) => {
-      const current = player?.context ?? context
-      if (reason !== 'episode') rememberPosition(current, player?.position() ?? null)
+      const current = showing()
+      if (reason !== 'episode') rememberPosition(current, self?.position() ?? null)
       return savedPositionFor(current)
     },
     /*
@@ -734,6 +748,7 @@ function openPlayer(
       sendPlayerState()
     },
   })
+  player = self
 
   /*
    * Watch this embed's network for the stream, which is the only way the app

@@ -818,7 +818,12 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     playing = true
     if (playingSince === null) playingSince = Date.now()
     // Sooner than the next poll; the poll carries on from there.
-    setTimeout(() => void readPosition().then((found) => found && stepResume(found)), SEEK_SETTLE_MS)
+    setTimeout(() => {
+      const asked = loadAsked()
+      void readPosition().then((found) => {
+        if (found && stillOnScreen(asked)) stepResume(found)
+      })
+    }, SEEK_SETTLE_MS)
     // Nothing further can be recorded against this load: it demonstrably works.
     failureRecorded = true
     clearPendingVerdicts()
@@ -1082,13 +1087,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   }
 
   const positionTimer = setInterval(() => {
+    const asked = loadAsked()
     // The catch is load-bearing: an unhandled rejection here stops nothing in
     // Node, but it means `lastPosition` silently stops updating. Better to lose
     // one reading than the rest of the session's.
     void readPosition()
       .then((found) => {
-        // The page being left: its place is not the new load's.
-        if (!committed) return
+        // Asked of the page being left, or of a player since closed: its place
+        // is not the new load's, nor the next title's. See `loadNumber`.
+        if (!stillOnScreen(asked)) return
         // Before the early return, because a reading that is *missing* while
         // playback is under way is the strongest stall evidence there is: the
         // element has gone, which is what a torn-down player looks like.
@@ -1256,6 +1263,25 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    */
   let committed = true
   /**
+   * Which load the view is on: bumped by `beginLoad`, and noted by every
+   * reading when it is *asked for* (`loadAsked`).
+   *
+   * Checking `committed` when an answer arrived was not enough. A frame of a
+   * page being left never answers a pending `executeJavaScript` (measured on
+   * Electron 42.5.0), so a poll that straddles a navigation resolves only at
+   * its frames' 1.5 s timeout, and by then the next page has committed — the
+   * local shell commits within milliseconds. The episode being left was then
+   * filed as the one stepped to, and settled the new episode's resume as
+   * "already past it", so its own saved place was overwritten from zero. And
+   * a poll still out when the player closed reported after it was gone,
+   * which the host filed under whatever played next.
+   */
+  let loadNumber = 0
+  /** The load a reading asked now is of, or null when it can only be the page being left. */
+  const loadAsked = (): number | null => (committed && !closed ? loadNumber : null)
+  /** Whether a reading asked as `asked` is still about what is on screen. */
+  const stillOnScreen = (asked: number | null): boolean => asked !== null && asked === loadNumber && !closed
+  /**
    * What this load has told the test results: a success, improved as the
    * picture does, or a failure the source's servers declared. Once per load,
    * except that a load which plays after a declared failure is a success.
@@ -1415,6 +1441,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     backendStatus = null
     loadStartedAt = Date.now()
     committed = false
+    loadNumber += 1
     measured = null
     lastActivityAt = Date.now()
     idleSinceCheck = false
@@ -1884,6 +1911,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // playback began, so no position was ever stored and nothing ever reached
     // the watched threshold.
     clearInterval(positionTimer)
+    // Held when closed: its poll would go on reading a view that is gone
+    // until the carry gave up, half a minute later.
+    if (heldTimer !== null) clearInterval(heldTimer)
+    heldTimer = null
     stopCounting()
     announceSuggestion(null)
 
@@ -2277,8 +2308,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // The carry does the seeking, to where the preview is by then.
     resume = new ResumeSeek(0, player.context.runtimeMinutes)
     heldTimer = setInterval(() => {
+      const asked = loadAsked()
       void readPosition().then((found) => {
-        if (carry.done) return
+        if (carry.done || !stillOnScreen(asked)) return
         if (found) lastPosition = found
         const film = found && { seconds: found.seconds, duration: found.duration, playing: !found.paused }
         const move = carry.step(film, Date.now())
