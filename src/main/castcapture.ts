@@ -18,7 +18,9 @@
  * take a callback that decides the request's fate, and `playerview.ts` and
  * `identity.ts` already own those; adding a third opinion to a request's
  * lifetime would be a way to break playback for a feature that is meant to sit
- * beside it.
+ * beside it. And it observes through `webrequesthub.ts`, because the player
+ * watches the same session's `onSendHeaders`, and Electron keeps only the last
+ * listener registered: this one used to replace the player's.
  *
  * ## Why it does not decide what a stream is
  *
@@ -30,6 +32,7 @@
  */
 
 import type { Session } from 'electron'
+import { observeSendHeaders } from './webrequesthub'
 
 /**
  * How many candidates to keep.
@@ -108,7 +111,7 @@ export function createCastCapture(): CastCapture {
       if (watched.has(session)) return
       watched.add(session)
 
-      session.webRequest.onSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+      observeSendHeaders(session, (details) => {
         if (details.method !== 'GET') return
         if (!isWorthKeeping(details.url)) return
 

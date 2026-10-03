@@ -56,6 +56,7 @@ import { createPointerZoneWatcher } from './pointerzone'
 import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type OfferKind } from './switchoffer'
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
+import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
 import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, type PlayMeasurement } from './providerscan'
 import { CarryOver } from '@shared/carryover'
 import type { CarryAction, CarryReport } from '@shared/ipc'
@@ -1545,19 +1546,28 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    *
    * It *offers* rather than switches. A failed backend call is strong evidence
    * and nothing more: some of these pages retry the same endpoint and recover.
+   *
+   * All three through `webrequesthub.ts`, never `webRequest` itself. Casting
+   * watches this same session for the stream (`castcapture.ts`), and Electron
+   * keeps one listener per event per session: registered directly, casting's
+   * `onSendHeaders` replaced this one the moment the player opened, `inFlight`
+   * never held anything, and a page stuck waiting on its backend read as idle.
    */
-  contents.session.webRequest.onSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
-    // A socket is open by design for as long as the page lives, and a video
-    // holds its range request open while paused; neither is a load waiting on
-    // an answer. See `PageActivity.pendingRequests`.
-    if (details.resourceType === 'webSocket' || details.resourceType === 'media') return
-    inFlight.add(details.id)
-  })
-  contents.session.webRequest.onErrorOccurred({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
-    inFlight.delete(details.id)
-  })
+  const stopObserving = [
+    observeSendHeaders(contents.session, (details) => {
+      // A socket is open by design for as long as the page lives, and a video
+      // holds its range request open while paused; neither is a load waiting on
+      // an answer. See `PageActivity.pendingRequests`.
+      if (details.resourceType === 'webSocket' || details.resourceType === 'media') return
+      inFlight.add(details.id)
+    }),
+    observeErrors(contents.session, (details) => {
+      inFlight.delete(details.id)
+    }),
+    observeCompleted(contents.session, (details) => onRequestCompleted(details)),
+  ]
 
-  contents.session.webRequest.onCompleted({ urls: ['http://*/*', 'https://*/*'] }, (details) => {
+  function onRequestCompleted(details: Electron.OnCompletedListenerDetails): void {
     inFlight.delete(details.id)
     const candidate = currentCandidate()
 
@@ -1593,7 +1603,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // `isProviderFailure` for why an immediate offer was wrong.
     backendFailure ??= `${candidate.provider.name} API returned ${details.statusCode}`
     backendStatus ??= details.statusCode
-  })
+  }
 
   /**
    * The page finished a request. If it had gone idle, it is doing something
@@ -1876,6 +1886,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     clearInterval(positionTimer)
     stopCounting()
     announceSuggestion(null)
+
+    // The session outlives the view (casting keeps watching it), so this
+    // player's observers would otherwise go on counting a page that is gone.
+    for (const stop of stopObserving) stop()
 
     ipcMain.removeListener(EV.playerKey, onPlayerKey)
     ipcMain.removeListener(EV.playerActivity, onActivity)

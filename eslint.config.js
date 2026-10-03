@@ -30,6 +30,27 @@ export default [
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
   {
+    /*
+      Electron keeps one listener per webRequest event per session, so a
+      second `onSendHeaders` (or `onCompleted`, `onErrorOccurred`) on the same
+      session silently replaces the first. Casting did exactly that to the
+      player's count of unanswered requests. Observers go through
+      `src/main/webrequesthub.ts`, which shares one listener among them.
+    */
+    files: ['src/main/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.object.property.name='webRequest'][callee.property.name=/^on(SendHeaders|Completed|ErrorOccurred)$/]",
+          message:
+            'Observe requests through webrequesthub.ts: a second listener on the same session silently replaces the first. See eslint.config.js.',
+        },
+      ],
+    },
+  },
+  {
     // The phone bridge is browser code that imports the business layer.
     files: ['mobile/src/**/*.ts'],
     languageOptions: { globals: globals.browser },

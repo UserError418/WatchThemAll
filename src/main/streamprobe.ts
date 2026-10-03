@@ -33,6 +33,7 @@ import { renderTemplate } from './providers'
 import { isSameOrigin } from './sameorigin'
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { STILL_LOADING_WINDOW_MS, classify } from './streamverdict'
+import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
 export { streamReason } from './streamverdict'
 
 /** What the probe concluded, worst last so a sort puts good providers first. */
@@ -386,8 +387,6 @@ async function runProbe(
   /** When the page last finished a request, for telling "still loading" from "gave up". */
   let lastActivityAt = startedAt
 
-  const filter = { urls: ['http://*/*', 'https://*/*'] }
-
   /**
    * Request headers, kept until the matching response arrives.
    *
@@ -398,7 +397,7 @@ async function runProbe(
    */
   const sentHeaders = new Map<string, Record<string, string>>()
 
-  probeSession.webRequest.onSendHeaders(filter, (details) => {
+  observeSendHeaders(probeSession, (details) => {
     if (!onMedia && !onResponse) return
     const headers: Record<string, string> = {}
     for (const [name, value] of Object.entries(details.requestHeaders ?? {})) {
@@ -414,7 +413,7 @@ async function runProbe(
 
   let mediaReported = false
 
-  probeSession.webRequest.onCompleted(filter, (details) => {
+  observeCompleted(probeSession, (details) => {
     base.requestCount += 1
     lastActivityAt = Date.now()
 
@@ -481,7 +480,7 @@ async function runProbe(
     }
   })
 
-  probeSession.webRequest.onErrorOccurred(filter, (details) => {
+  observeErrors(probeSession, (details) => {
     base.requestCount += 1
     lastActivityAt = Date.now()
     if (verbose) console.error(`    ERR ${details.error} ${details.url.slice(0, 120)}`)
