@@ -566,6 +566,9 @@ function openPlayer(
   // videos in one window, which has no meaning.
   closePlayer(false)
   upNext.reset()
+  // A new session notes its own playlist: the last session's of the same
+  // episode and source may have expired since.
+  notedPlaylistFor = null
 
   const [width = 1280, height = 800] = win.getContentSize()
 
