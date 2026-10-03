@@ -66,9 +66,36 @@ export class CapacitorPersistence implements StorePersistence {
       // one was overwritten. Anything else is rethrown, and the store then
       // leaves the file alone for the session. (A file that reads but will
       // not parse is a different path, the one that reaches `quarantine`.)
-      if (isMissingFile(err)) return null
+      if (isMissingFile(err)) return this.recoverInterruptedWrite()
       throw err
     }
+  }
+
+  /**
+   * The library is missing, but the copy written for it may be waiting beside it.
+   *
+   * Android's `rename` is not one step: the plugin (`ionfilesystem`'s
+   * `renameFile`) deletes the destination and then renames the temporary file
+   * onto it. A process killed between the two leaves no library and a complete
+   * temporary file, complete because `write` renames only once it is written.
+   * Read as "missing", that started an empty library and saved it over
+   * everything. So the temporary file is taken, and the rename finished.
+   *
+   * One that does not parse was cut off while being written. The library
+   * itself still existed at that point, so with none here it is a first launch
+   * that never finished its first save, and empty is the right answer.
+   */
+  private async recoverInterruptedWrite(): Promise<string | null> {
+    let text: string
+    try {
+      const file = await Filesystem.readFile({ path: this.tempFile, directory: DIRECTORY, encoding: Encoding.UTF8 })
+      text = file.data as string
+      JSON.parse(text)
+    } catch {
+      return null
+    }
+    await Filesystem.rename({ from: this.tempFile, to: this.file, directory: DIRECTORY, toDirectory: DIRECTORY }).catch(() => {})
+    return text
   }
 
   /**
@@ -76,10 +103,10 @@ export class CapacitorPersistence implements StorePersistence {
    *
    * Written in place, a process killed mid-write (Android does that to
    * background apps) left a truncated library, which the next launch
-   * quarantined and replaced with an empty one. A rename either happens or
-   * does not, so the worst a kill can do now is leave a half-written temporary
-   * file that nothing reads. Checked on the emulator on 2026-09-27: the
-   * plugin's `rename` replaces an existing destination.
+   * quarantined and replaced with an empty one. Checked on the emulator on
+   * 2026-09-27: the plugin's `rename` replaces an existing destination. It does
+   * so by deleting it first, though, so a kill can still land between the two;
+   * `recoverInterruptedWrite` is what makes that window harmless.
    */
   async write(text: string): Promise<void> {
     await Filesystem.writeFile({
