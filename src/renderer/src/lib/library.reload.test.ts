@@ -15,7 +15,8 @@ let pendingReads: Array<(doc: StoreShape) => void> = []
 const read = vi.fn(() => new Promise<StoreShape>((resolve) => pendingReads.push(resolve)))
 const list = vi.fn(async (): Promise<Provider[]> => [{ id: 'fresh' } as Provider])
 const write = vi.fn(async () => {})
-vi.stubGlobal('window', { wta: { store: { read, write }, providers: { list } } })
+const seed = vi.fn(async () => {})
+vi.stubGlobal('window', { wta: { store: { read, write, seed }, providers: { list } } })
 
 const { library } = await import('./library.svelte')
 

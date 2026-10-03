@@ -22,6 +22,18 @@
  *
  * The distinction that makes (3) work is between *switched off* and *never
  * seen*. `active` alone renders both as absent.
+ *
+ * One rule holds across all three since 2.0.12: **the stored lists only
+ * grow.** Two devices can hold different catalogues for hours (each refreshes
+ * on its own clock, and a phone may run an older build). When this dropped
+ * the ids its catalogue lacked and rewrote `known` to exactly its own
+ * catalogue, the other device took that, saw a dropped core id as never
+ * offered and switched it back on: a provider the user had switched off came
+ * back, one they had switched on in the extras went away, and both devices
+ * rewrote the lists on every sync. Ids this catalogue lacks now stay stored;
+ * what cannot play here is left out where the list is used
+ * (`enabledProviders` on both platforms, the source pickers), and the core
+ * fallback of case (2) is for this device's eyes only.
  */
 
 import type { Provider } from '@shared/types'
@@ -43,11 +55,13 @@ export interface ActiveProviderInput {
 }
 
 export interface ActiveProviderDecision {
-  /** The ids to enable, in order. */
+  /** The ids to treat as enabled here, in order: the stored list, or the core tier when nothing in it is in this catalogue. */
   active: string[]
-  /** The ids to record as offered. */
+  /** The list to store: what was stored plus any core provider never offered, never losing an id. */
+  stored: string[]
+  /** The ids to record as offered: everything offered so far, here or on another device. */
   known: string[]
-  /** Whether either list differs from what was stored, and so needs writing. */
+  /** Whether `stored` or `known` differs from what was stored, and so needs writing. */
   changed: boolean
 }
 
@@ -56,22 +70,20 @@ export function chooseActiveProviders(input: ActiveProviderInput): ActiveProvide
   const available = new Set(catalogue.map((p) => p.id))
   const core = catalogue.filter((p) => p.tier === 'core').map((p) => p.id)
 
-  // Order is preserved: the stored list *is* the fallback order, and the user
-  // can rearrange it.
-  const surviving = stored.filter((id) => available.has(id))
-
   const known = input.known ?? []
   const seen = new Set(known)
-  const unseenCore = core.filter((id) => !seen.has(id) && !surviving.includes(id))
+  const unseenCore = core.filter((id) => !seen.has(id) && !stored.includes(id))
 
-  const active = surviving.length ? [...surviving, ...unseenCore] : core
-  const nextKnown = catalogue.map((p) => p.id)
+  // Order is preserved: the stored list *is* the fallback order, and the user
+  // can rearrange it. Ids this catalogue lacks stay in it; see the header.
+  const nextStored = [...stored, ...unseenCore]
+  const nextKnown = [...known, ...catalogue.map((p) => p.id).filter((id) => !seen.has(id))]
+  const active = nextStored.some((id) => available.has(id)) ? nextStored : core
 
-  const changed =
-    surviving.length !== stored.length ||
-    unseenCore.length > 0 ||
-    nextKnown.length !== known.length ||
-    nextKnown.some((id) => !seen.has(id))
-
-  return { active, known: nextKnown, changed }
+  return {
+    active,
+    stored: nextStored,
+    known: nextKnown,
+    changed: unseenCore.length > 0 || nextKnown.length !== known.length,
+  }
 }

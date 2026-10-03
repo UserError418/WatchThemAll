@@ -1280,7 +1280,8 @@ function providerOrder(): string[] {
   if (stored.length > 0) return stored
 
   const seeded = defaultProviderOrder(allProviders())
-  store.setPreference('providerOrder', seeded)
+  // Unstamped: a default, not a choice. See `StoreCore.seedPreference`.
+  store.seedPreference('providerOrder', seeded)
   return seeded
 }
 

@@ -38,6 +38,7 @@ const api: WtaApi = {
   store: {
     read: () => ipcRenderer.invoke(CH.storeRead),
     write: (patch: Partial<StoreShape>) => ipcRenderer.invoke(CH.storeWrite, patch),
+    seed: (patch: Partial<StoreShape>) => ipcRenderer.invoke(CH.storeSeed, patch),
   },
   tmdb: {
     row: (req: RowRequest | GenreRowRequest | DiscoverRequest) => ipcRenderer.invoke(CH.tmdbRow, req),

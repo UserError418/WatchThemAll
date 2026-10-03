@@ -539,6 +539,42 @@ export class StoreCore {
   }
 
   /**
+   * Set a preference the app worked out by itself, not one the user chose.
+   *
+   * For the provider order seeded on first use and the provider lists the
+   * renderer reconciles with the catalogue. Until 2.0.12 these were stamped
+   * like a choice, and last-write-wins only sees that today is later: a phone
+   * installed and opened today carried its defaults over the provider choices
+   * of every other device on its first sync.
+   *
+   * So a seed never creates a stamp: unstamped, it loses to a deliberate
+   * choice from any device (`mergePreferences`), and on a device nobody has
+   * configured it is simply what is there. Over a value that already has a
+   * stamp it moves that stamp on by one millisecond, which is just enough to
+   * win over the value it was worked out from and loses to anything the user
+   * did since. Left level instead, the two devices would each keep their own
+   * copy on every sync and push it again.
+   */
+  seedPreference<K extends PreferenceKey>(key: K, value: Preferences[K]): void {
+    if (deepEqual(this.doc[key], value)) return
+    ;(this.doc as unknown as Record<string, unknown>)[key] = value
+    const stamped = this.doc.preferenceUpdatedAt[key]
+    if (stamped !== undefined) {
+      this.doc.preferenceUpdatedAt = { ...this.doc.preferenceUpdatedAt, [key]: stamped + 1 }
+    }
+    this.changed(key)
+  }
+
+  /** `seedPreference` for each preference a patch names; anything else in it is ignored. */
+  seedPatch(patch: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(patch)) {
+      if ((PREFERENCE_KEYS as string[]).includes(key)) {
+        this.seedPreference(key as PreferenceKey, value as Preferences[PreferenceKey])
+      }
+    }
+  }
+
+  /**
    * Replace the entire document — after an import, or after a sync merge.
    *
    * Flushes immediately rather than on the debounce: the caller has just

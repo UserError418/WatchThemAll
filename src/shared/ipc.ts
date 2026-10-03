@@ -17,6 +17,7 @@ import type {
   MediaDetail,
   MediaSummary,
   MediaType,
+  PreferenceKey,
   ProbeVerdict,
   Provider,
   ProviderScan,
@@ -44,6 +45,7 @@ import type { LoadedSubtitles, SubtitleLanguage } from './subtitles'
 export const CH = {
   storeRead: 'store:read',
   storeWrite: 'store:write',
+  storeSeed: 'store:seed',
 
   tmdbRow: 'tmdb:row',
   tmdbDetail: 'tmdb:detail',
@@ -933,6 +935,12 @@ export interface WtaApi {
   store: {
     read(): Promise<StoreShape>
     write(patch: StorePatch): Promise<void>
+    /**
+     * Preferences the app worked out by itself (first-run defaults, the
+     * provider lists reconciled with the catalogue), written without a stamp
+     * of their own so they never outrank a choice made on another device.
+     */
+    seed(patch: Partial<Pick<StoreShape, PreferenceKey>>): Promise<void>
   }
   tmdb: {
     row(req: RowRequest | GenreRowRequest | DiscoverRequest): Promise<Paged<MediaSummary>>

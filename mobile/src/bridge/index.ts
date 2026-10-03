@@ -431,7 +431,8 @@ export async function createBridge(): Promise<WtaApi> {
     const stored = store.read().providerOrder
     if (stored.length > 0) return stored
     const seeded = defaultProviderOrder(allProviders())
-    store.setPreference('providerOrder', seeded)
+    // Unstamped: a default, not a choice. See `StoreCore.seedPreference`.
+    store.seedPreference('providerOrder', seeded)
     return seeded
   }
 
@@ -2175,6 +2176,9 @@ export async function createBridge(): Promise<WtaApi> {
       },
       write: async (patch: Partial<StoreShape>) => {
         store.applyPatch(patch)
+      },
+      seed: async (patch: Partial<StoreShape>) => {
+        store.seedPatch(patch)
       },
     },
 

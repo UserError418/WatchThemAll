@@ -234,6 +234,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     return store.read()
   })
   ipcMain.handle(CH.storeWrite, (_e, patch: Partial<StoreShape>) => store.applyPatch(patch))
+  ipcMain.handle(CH.storeSeed, (_e, patch: Partial<StoreShape>) => store.seedPatch(patch))
 
   ipcMain.handle(CH.tmdbRow, (_e, req: RowRequest | GenreRowRequest | DiscoverRequest) => tmdb.row(req))
   /**

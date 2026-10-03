@@ -161,11 +161,11 @@ class Library {
     })
     this.activeProviderIds = decision.active
     this.knownProviderIds = decision.known
+    // Seeded rather than persisted: the app worked these out, the user did
+    // not choose them, so they must not outrank a choice made on another
+    // device. See `StoreCore.seedPreference`.
     if (decision.changed) {
-      void this.persist({
-        activeProviderIds: this.activeProviderIds,
-        knownProviderIds: this.knownProviderIds,
-      })
+      void this.seed({ activeProviderIds: decision.stored, knownProviderIds: decision.known })
     }
   }
 
@@ -321,6 +321,18 @@ class Library {
     } catch (err) {
       this.persistError = err instanceof Error ? err.message : 'Could not save your change to disk'
       console.error('[library] could not persist change:', err)
+    }
+  }
+
+  /** `persist` for what the app worked out by itself, written unstamped. */
+  private async seed(patch: Partial<Pick<StoreShape, 'activeProviderIds' | 'knownProviderIds'>>): Promise<void> {
+    this.localWrites += 1
+    try {
+      await window.wta.store.seed($state.snapshot(patch))
+      this.persistError = null
+    } catch (err) {
+      this.persistError = err instanceof Error ? err.message : 'Could not save your change to disk'
+      console.error('[library] could not record the provider lists:', err)
     }
   }
 
