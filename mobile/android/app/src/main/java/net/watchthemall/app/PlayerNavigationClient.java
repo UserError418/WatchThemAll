@@ -8,6 +8,10 @@ import android.webkit.WebView;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeWebViewClient;
 
+import java.io.ByteArrayInputStream;
+import java.util.Collections;
+import java.util.Map;
+
 /**
  * Keeps the app in the app.
  *
@@ -100,12 +104,49 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
      */
     @Override
     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        if (isFileDocument(request)) {
+            return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden",
+                Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+        }
         try {
             MediaCapture.record(request, appHost());
         } catch (Exception ignored) {
             // Capture is a side feature; nothing here may break playback.
         }
         return super.shouldInterceptRequest(view, request);
+    }
+
+    /**
+     * A frame opening one of the app's files as a page.
+     *
+     * Capacitor serves the app's private files under the app's own origin, at
+     * `/_capacitor_file_/` (that is how the preview cache plays from disk), to
+     * any frame that asks, a provider's included. The app only ever plays them
+     * as media. Opened as a document, a file holding a page would run with the
+     * app's origin, and with it the reach of the native bridge and of the app's
+     * own window. The preview cache keeps bytes a provider served, so that is
+     * not a file this can rule out. Navigations are told apart as Capacitor's
+     * own HTTP proxy tells them apart (`isDocumentRequest`), with Sec-Fetch-Dest
+     * where the WebView passes it on.
+     */
+    private boolean isFileDocument(WebResourceRequest request) {
+        Uri url = request.getUrl();
+        String path = url.getPath();
+        if (path == null || !isAppHost(url)) return false;
+        if (!path.startsWith(Bridge.CAPACITOR_FILE_START) && !path.startsWith(Bridge.CAPACITOR_CONTENT_START)) return false;
+        if (request.isForMainFrame()) return true;
+        Map<String, String> headers = request.getRequestHeaders();
+        if (headers == null) return false;
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            String name = header.getKey();
+            if ("Upgrade-Insecure-Requests".equalsIgnoreCase(name)) return true;
+            if ("Sec-Fetch-Dest".equalsIgnoreCase(name)) {
+                String dest = header.getValue();
+                if ("document".equals(dest) || "iframe".equals(dest) || "frame".equals(dest)
+                    || "embed".equals(dest) || "object".equals(dest)) return true;
+            }
+        }
+        return false;
     }
 
     private String appHost() {
