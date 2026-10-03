@@ -1,6 +1,10 @@
 package net.watchthemall.app;
 
+import android.app.Activity;
 import android.net.Uri;
+import android.os.SystemClock;
+import android.util.Log;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -43,6 +47,14 @@ import java.util.Map;
  * another app over the film.
  */
 public class PlayerNavigationClient extends BridgeWebViewClient {
+
+    private static final String TAG = "PlayerNavigation";
+
+    /** Two renderer deaths closer together than this are a page that kills it on load. */
+    private static final long RECOVERY_SPACING_MS = 30_000L;
+
+    /** When the activity was last rebuilt after a renderer death; static, as the client is per activity. */
+    private static long lastRecoveryAt = -RECOVERY_SPACING_MS;
 
     private final Bridge bridge;
 
@@ -147,6 +159,29 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
             }
         }
         return false;
+    }
+
+    /**
+     * The WebView's renderer died: crashed, or killed by Android for memory.
+     *
+     * Every WebView in the app shares one renderer, the probes' and the
+     * player's frames included, so a provider page that brings it down takes
+     * this one with it. Returning false, Capacitor's answer, makes Android
+     * crash or kill the whole process, and with it the cast proxy a television
+     * may be playing from. The WebView is unusable either way, so the activity
+     * is rebuilt: the app starts again, and a cast in progress keeps playing
+     * (`CastPlugin`'s proxy is the process's). A second death within the
+     * spacing falls back to the old answer rather than rebuilding in a loop.
+     */
+    @Override
+    public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastRecoveryAt < RECOVERY_SPACING_MS) return super.onRenderProcessGone(view, detail);
+        lastRecoveryAt = now;
+        Log.w(TAG, "renderer " + (detail.didCrash() ? "crashed" : "killed") + "; rebuilding the activity");
+        Activity activity = bridge.getActivity();
+        if (activity != null) activity.recreate();
+        return true;
     }
 
     private String appHost() {
