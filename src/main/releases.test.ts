@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Episode, ReleaseTracker, StoreShape } from '@shared/types'
-import { checkAll, checkTracker, describeNotice, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
+import { checkAll, checkTracker, describeNotice, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, sweepNow, type SweepableStore } from './releases'
 import { NOTHING_AIRED_YET } from '@shared/aired'
 import * as tmdb from './tmdb'
 
@@ -379,6 +379,20 @@ describe('checkAll', () => {
     await checkAll(store)
 
     expect(store.trackers[0]!.lastChecked).toBeGreaterThan(0)
+  })
+
+  /**
+   * The bug: "Check now" pressed during the timer's sweep was told nothing
+   * was found, about a sweep that had just announced something.
+   */
+  it('tells a joiner what the running sweep found, and that it only joined', async () => {
+    const store = storeOf([tracker('a', 1)])
+    detailWithNewEpisode()
+
+    const [ran, joined] = await Promise.all([sweepNow(store), sweepNow(store)])
+
+    expect(ran).toMatchObject({ joined: false, notices: [{ episode: { season: 1, episode: 2 } }] })
+    expect(joined).toMatchObject({ joined: true, notices: [{ episode: { season: 1, episode: 2 } }] })
   })
 
   /** Every tracker's `lastChecked` moves, so one write per tracker was a full save each. */

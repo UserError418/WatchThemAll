@@ -251,13 +251,27 @@ let running: Promise<ReleaseNotice[]> | null = null
  * waits for it and returns nothing, because the running one announces.
  */
 export async function checkAll(store: SweepableStore): Promise<ReleaseNotice[]> {
+  const { notices, joined } = await sweepNow(store)
+  return joined ? [] : notices
+}
+
+/**
+ * `checkAll`, saying whether it ran the sweep or joined one already running.
+ *
+ * For "Check now", which reports how many series turned up something. A
+ * joiner used to be told nothing was found, so pressing it while the timer's
+ * sweep was under way said "nothing new" about a sweep that had just
+ * announced something. A joiner gets those notices to count, and must not
+ * announce them: the sweep that found them does.
+ */
+export async function sweepNow(store: SweepableStore): Promise<{ notices: ReleaseNotice[]; joined: boolean }> {
   if (running) {
-    await running.catch(() => {})
-    return []
+    const notices = await running.catch((): ReleaseNotice[] => [])
+    return { notices, joined: true }
   }
   running = sweep(store)
   try {
-    return await running
+    return { notices: await running, joined: false }
   } finally {
     running = null
   }

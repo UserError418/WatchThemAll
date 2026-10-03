@@ -34,7 +34,7 @@ import { allowStreamPreviews, previewRequests } from './previewview'
 import { isProbeRun, probeAndQuit } from './probecli'
 import type { PlayCandidate } from './providers'
 import type { VideoPosition } from './playerview'
-import { checkAll, describeNotice, startReleaseTimer, type ReleaseNotice } from './releases'
+import { describeNotice, startReleaseTimer, sweepNow, type ReleaseNotice } from './releases'
 import { backfillScores } from './scorebackfill'
 import { runSeasonSplit, tmdbIdentify } from './seasonsplit'
 import { buildPlayUrl } from './providers'
@@ -1361,8 +1361,9 @@ function show(title: string, body: string): void {
 
 async function checkReleases(): Promise<{ checked: number; found: number }> {
   const checked = store.read().trackers.length
-  const notices = await checkAll(store)
-  if (notices.length > 0) announce(notices)
+  const { notices, joined } = await sweepNow(store)
+  // A sweep already under way announces what it found; joining it only counts.
+  if (!joined && notices.length > 0) announce(notices)
   return { checked, found: notices.length }
 }
 
