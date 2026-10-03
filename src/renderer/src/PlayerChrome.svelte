@@ -896,8 +896,14 @@
      * value it writes every tick, so each tick would tear the interval down
      * and start another — which once produced two intervals and switched the
      * provider twice.
+     *
+     * Always from the top. This runs again only for a new offer, or after the
+     * mini player or a cast stopped the clock, and both mean "start over".
+     * It used to carry on from what the last clock had left, so a second
+     * failure in the same load (a silence offer, then the provider's page
+     * failing) switched two or three seconds later instead of five.
      */
-    let left = untrack(() => countdown) ?? AUTOSWITCH_SECONDS
+    let left = AUTOSWITCH_SECONDS
     countdown = left
 
     const tick = setInterval(() => {
