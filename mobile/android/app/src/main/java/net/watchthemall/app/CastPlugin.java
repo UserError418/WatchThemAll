@@ -545,6 +545,14 @@ public class CastPlugin extends Plugin {
             return;
         }
         getActivity().runOnUiThread(() -> {
+            // Play Services missing or too old: `load` left both unset, and the
+            // route lookup below on a null router would throw on the main
+            // thread, which takes the app down.
+            if (castContext == null || mediaRouter == null) {
+                call.reject("Google Cast is unavailable on this device");
+                return;
+            }
+
             // Already attached to something: nothing to wait for.
             CastSession existing = currentSession();
             if (existing != null && existing.isConnected()) {
