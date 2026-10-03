@@ -56,4 +56,31 @@ public class PlayerRelayPlugin extends Plugin {
             call.resolve(result);
         });
     }
+
+    /**
+     * Silence the app's WebView, every frame of it, or give it its sound back.
+     *
+     * While the television has the film the phone must make no sound, and an
+     * episode step loads the source on the phone again (its stream is what the
+     * television is handed). A page cannot unmute this; it is the WebView's.
+     * Resolves with whether the WebView is muted now: never, where it predates
+     * the feature.
+     */
+    @PluginMethod
+    public void setMuted(PluginCall call) {
+        boolean muted = Boolean.TRUE.equals(call.getBoolean("muted", false));
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) {
+            JSObject result = new JSObject();
+            result.put("muted", false);
+            call.resolve(result);
+            return;
+        }
+        getActivity().runOnUiThread(() -> {
+            WebView webView = getBridge().getWebView();
+            WebViewCompat.setAudioMuted(webView, muted);
+            JSObject result = new JSObject();
+            result.put("muted", WebViewCompat.isAudioMuted(webView));
+            call.resolve(result);
+        });
+    }
 }

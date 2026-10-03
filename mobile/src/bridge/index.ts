@@ -124,7 +124,9 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
-import { installFilmRelay, type RelayTime } from './mediarelay'
+import { installFilmRelay, setPageMuted, type RelayTime } from './mediarelay'
+import { TV_HANDOVER, TvHandover } from './tvhandover'
+import { createVisibleGate } from './visiblegate'
 import { createOverlayHub } from './overlayhub'
 import { createOverlayHost } from './overlayhost'
 import { createPhoneFullscreen } from './phonefullscreen'
@@ -948,6 +950,7 @@ export async function createBridge(): Promise<WtaApi> {
       onTv = true
       tvStale = false
       surface.blank()
+      standDownForTv()
       // Before the remote's own portrait lock, which is not ours to undo.
       phoneFullscreen.setActive(false)
       standUpright()
@@ -990,6 +993,30 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   /**
+   * The phone's picture out of sight and its sound off while the television
+   * has the film, and both back after.
+   *
+   * Blanking covered only the moment of the beam. An episode step while
+   * casting (auto-next, the remote's ⏭) loads the source on the phone again,
+   * because its stream is what the television is handed, and that page showed
+   * and played aloud until the next beam landed, or for good when it did not:
+   * in a pocket, the film twice. Concealed and muted, it loads and is captured
+   * with nothing seen or heard.
+   */
+  const standDownForTv = (): void => {
+    surface.setConcealed(true)
+    void setPageMuted(true)
+  }
+
+  const standUpFromTv = (): void => {
+    surface.setConcealed(false)
+    void setPageMuted(false)
+  }
+
+  /** For what should happen only with the app on screen; see `reclaimFromTv`. */
+  const visibleGate = createVisibleGate()
+
+  /**
    * Casting stopped: take the film back, at the position the television reached.
    *
    * Written as a resume point rather than passed along, so the ordinary
@@ -1012,10 +1039,17 @@ export async function createBridge(): Promise<WtaApi> {
     }
     onTv = false
     tvStale = false
-    const candidate = session?.candidates[session.index]
-    surface.restore(candidate ? resumeUrl(candidate) : undefined)
-    releaseOrientation()
-    phoneFullscreen.setActive(session !== null && !mini)
+    handover = null
+    // The picture, the sound and the source come back only on screen. A cast
+    // that ends in a pocket (the set switched off, the Wi-Fi gone) used to
+    // reload the source there, and one that plays by itself played aloud.
+    visibleGate.run(() => {
+      standUpFromTv()
+      const candidate = session?.candidates[session.index]
+      surface.restore(candidate ? resumeUrl(candidate) : undefined)
+      releaseOrientation()
+      phoneFullscreen.setActive(session !== null && !mini)
+    })
   }
 
   /*
@@ -1378,6 +1412,8 @@ export async function createBridge(): Promise<WtaApi> {
     }
     upNext.reset()
     skipWatch.reset()
+    handover = null
+    visibleGate.cancel()
     setMini(false)
     videoPlaying = false
     phoneFullscreen.setActive(false)
@@ -1446,24 +1482,44 @@ export async function createBridge(): Promise<WtaApi> {
       ? { tmdbId: req.tmdbId, season: req.season, episode: req.episode }
       : null
 
-  /**
-   * How long the television is waited on for the next episode's stream: the
-   * remote's own budget, as on the desktop (`TV_NEXT_WAIT_MS` in main).
-   */
-  const TV_NEXT_WAIT_MS = 25_000
-  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+  /** The next episode on its way to the television, or null; see `TvHandover`. */
+  let handover: TvHandover | null = null
 
-  const beamNextToTv = async (): Promise<void> => {
-    // Nothing is captured for a beat after a navigation.
-    await sleep(2_000)
-    const deadline = Date.now() + TV_NEXT_WAIT_MS
-    while (Date.now() < deadline && session) {
-      const result = await beamToTv()
-      if (result.ok) return
-      if (result.final) break
-      await sleep(1_200)
+  const handOverToTv = (): void => {
+    handover = new TvHandover(Date.now())
+    setTimeout(pumpHandover, TV_HANDOVER.firstTryAfterMs)
+  }
+
+  /**
+   * Try the hand-over if one is due. Asked by a timer while the app is in
+   * front, and by the television's progress events, which keep arriving with
+   * the phone in a pocket, where timers run about once a minute.
+   */
+  const pumpHandover = (): void => {
+    const current = handover
+    if (current === null) return
+    const step = current.next(Date.now())
+    if (step === 'give-up') {
+      handoverFailed(current)
+      return
     }
+    if (step !== 'try') return
+    void beamToTv().then((result) => {
+      if (handover !== current) return
+      current.settle(result.ok ? 'ok' : result.final ? 'final' : 'retry')
+      if (result.ok) handover = null
+      else if (current.done) handoverFailed(current)
+      else setTimeout(pumpHandover, TV_HANDOVER.retryEveryMs)
+    })
+  }
+
+  const handoverFailed = (current: TvHandover): void => {
+    if (handover !== current) return
+    handover = null
     console.warn('[upnext] the next episode could not be sent to the television')
+    // Nobody is looking at the phone, and the episode it loaded for the
+    // television would play on there, unseen, unheard and downloading.
+    if (document.visibilityState === 'hidden') surface.setPaused(true)
   }
 
   /** The aired episode after `place`, or null; for auto-next and the credits' "Next episode". */
@@ -1479,7 +1535,7 @@ export async function createBridge(): Promise<WtaApi> {
     advance: (next, toTv) => {
       console.log(`[upnext] playing S${next.season}E${next.episode}${toTv ? ' on the television' : ''}`)
       void playerGoTo(next.season, next.episode).then(() => {
-        if (toTv) void beamNextToTv()
+        if (toTv) handOverToTv()
       })
     },
   })
@@ -1495,6 +1551,9 @@ export async function createBridge(): Promise<WtaApi> {
    * see `onProgress`.
    */
   castBridge.onProgress((tv) => {
+    // First, whatever state the readings are in: these events are the
+    // hand-over's clock while the app is in the background.
+    pumpHandover()
     if (!session || !progress || !onTv || tvStale) return
     // A finished receiver often reports no media at all; its end is the last
     // length it did report.
@@ -2198,6 +2257,8 @@ export async function createBridge(): Promise<WtaApi> {
       // even when it replaces a mini player.
       setMini(false)
       upNext.reset()
+      // A picture held back for when the app returns belongs to what played before.
+      visibleGate.cancel()
 
       session = { req, candidates: selection.candidates, index: 0 }
       const now = Date.now()

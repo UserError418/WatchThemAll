@@ -209,9 +209,23 @@ export function mediaRelayScript(appOrigin: string): string {
 
 interface PlayerRelayNative {
   install(options: { script: string }): Promise<{ installed: boolean }>
+  setMuted(options: { muted: boolean }): Promise<{ muted: boolean }>
 }
 
 const PlayerRelay = registerPlugin<PlayerRelayNative>('PlayerRelay')
+
+/**
+ * Silence the app's whole WebView, every frame of it, or give it its sound
+ * back. No page can undo it: it is the WebView's, not the document's. False
+ * where the WebView cannot (it predates `MUTE_AUDIO`).
+ */
+export async function setPageMuted(muted: boolean): Promise<boolean> {
+  try {
+    return (await PlayerRelay.setMuted({ muted })).muted === muted
+  } catch {
+    return false
+  }
+}
 
 /**
  * Install the relay into the app's WebView. Call once, before any player
