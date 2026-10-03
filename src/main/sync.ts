@@ -305,7 +305,13 @@ export function importIntoStore(
   if (Array.isArray(providers)) {
     const merged = new Set(store.activeProviderIds)
     for (const id of providers) if (typeof id === 'string') merged.add(id)
-    store.activeProviderIds = [...merged]
+    if (merged.size !== store.activeProviderIds.length) {
+      store.activeProviderIds = [...merged]
+      // Stamped like any other change to the list. Unstamped, the next sync
+      // took it for an old value: a device that had touched its list since
+      // took the imported providers away again, and the rest never saw them.
+      store.preferenceUpdatedAt = { ...store.preferenceUpdatedAt, activeProviderIds: Date.now() }
+    }
   }
 
   const schemas = data.vidsrc_schemas
