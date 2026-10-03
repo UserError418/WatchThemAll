@@ -41,7 +41,7 @@ describe('dueWhileWatching', () => {
 })
 
 describe('AutoTester', () => {
-  function tester(playing: { tmdbId: number } | null, list: WatchlistEntry[]) {
+  function tester(playing: { tmdbId: number; type: 'tv' | 'movie' } | null, list: WatchlistEntry[]) {
     const runs: Array<[number, AutoTestMode]> = []
     let finish: () => void = () => {}
     const auto = new AutoTester({
@@ -59,15 +59,22 @@ describe('AutoTester', () => {
   }
 
   it('tests the title being watched for the first time, gently, and nothing else meanwhile', () => {
-    const { auto, runs } = tester({ tmdbId: 5 }, [entry(5, NOW), entry(1, NOW - AUTO_TEST_AFTER_ADD_MS)])
+    const { auto, runs } = tester({ tmdbId: 5, type: 'tv' }, [entry(5, NOW), entry(1, NOW - AUTO_TEST_AFTER_ADD_MS)])
     auto.tick()
     auto.tick()
     expect(runs).toEqual([[5, 'watching']])
   })
 
+  /** The bug: a film sharing a watchlisted series' TMDB id started a full test of the series. */
+  it('does not take a film for the series that shares its id', () => {
+    const { auto, runs } = tester({ tmdbId: 5, type: 'movie' }, [entry(5, NOW)])
+    auto.tick()
+    expect(runs).toEqual([])
+  })
+
   it('tests a standing addition only while nothing plays', () => {
     const list = [entry(1, NOW - AUTO_TEST_AFTER_ADD_MS)]
-    const watching = tester({ tmdbId: 9 }, list)
+    const watching = tester({ tmdbId: 9, type: 'tv' }, list)
     watching.auto.tick()
     expect(watching.runs).toEqual([])
 

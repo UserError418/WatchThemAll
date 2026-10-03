@@ -358,14 +358,17 @@ function noteFilmReading(position: VideoPosition): void {
 const autoTester = new AutoTester({
   watchlist: () => store.read().watchlist,
   tested: (key) => kindTested(testResults.sources(), 'desktop', key, enabledProviders().map((p) => p.id)),
-  playing: () => (player && !player.held() && !onTv ? { tmdbId: player.context.tmdbId } : null),
+  playing: () => (player && !player.held() && !onTv ? { tmdbId: player.context.tmdbId, type: player.context.type } : null),
   busy: () => scan.busy(),
   log: (line) => console.log(line),
   run: async (entry, mode) => {
     const facts = await tmdb.detail(entry.tmdbId, entry.type).catch(() => null)
     // Offline, or TMDB is down: every source would read red for days.
     if (facts === null || notOutYet(facts.releaseDate, Date.now())) return
-    const watching = mode === 'watching' && player?.context.tmdbId === entry.tmdbId ? player.context : null
+    const watching =
+      mode === 'watching' && player?.context.tmdbId === entry.tmdbId && player.context.type === entry.type
+        ? player.context
+        : null
     const wanted =
       watching && watching.season !== null && watching.episode !== null
         ? { season: watching.season, episode: watching.episode }

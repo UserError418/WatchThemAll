@@ -2029,11 +2029,13 @@ export async function createBridge(): Promise<WtaApi> {
   const autoTester = new AutoTester({
     watchlist: () => store.read().watchlist,
     tested: (key) => kindTested(testResults.sources(), 'phone', key, enabledProviders().map((p) => p.id)),
-    playing: () => (session && !onTv && (carry === null || carry.done) ? { tmdbId: session.req.tmdbId } : null),
+    playing: () =>
+      session && !onTv && (carry === null || carry.done) ? { tmdbId: session.req.tmdbId, type: session.req.type } : null,
     busy: () => scanRunner.busy(),
     log: (line) => console.log(line),
     run: async (entry, mode) => {
-      const watching = mode === 'watching' && session?.req.tmdbId === entry.tmdbId ? session.req : null
+      const watching =
+        mode === 'watching' && session?.req.tmdbId === entry.tmdbId && session.req.type === entry.type ? session.req : null
       const episode =
         watching && watching.season != null && watching.episode != null
           ? { season: watching.season, episode: watching.episode }

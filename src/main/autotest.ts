@@ -31,7 +31,7 @@
  * `AutoTester` is the loop both platforms run around them.
  */
 
-import type { WatchlistEntry } from '@shared/types'
+import type { MediaType, WatchlistEntry } from '@shared/types'
 import { isListed } from '@shared/listed'
 import { titleKey } from './outcomes'
 
@@ -82,8 +82,12 @@ export interface AutoTesterDeps {
   watchlist(): WatchlistEntry[]
   /** Whether this kind of device has tested every enabled source of the title (`kindTested`). */
   tested(titleKey: string): boolean
-  /** The title playing now, by id, or null. */
-  playing(): { tmdbId: number } | null
+  /**
+   * The title playing now, or null. By type as well as id: TMDB numbers films
+   * and series separately, so a film can share a watchlisted series' id, and
+   * playing it once started a full test of the series.
+   */
+  playing(): { tmdbId: number; type: MediaType } | null
   /** A scan is running already, by hand or from here. */
   busy(): boolean
   /** Test every source of `entry`: normally when `idle`, gently while `watching` it. */
@@ -107,7 +111,7 @@ export class AutoTester {
     const tested = (key: string): boolean => this.deps.tested(key)
 
     if (playing !== null) {
-      const entry = watchlist.find((e) => e.tmdbId === playing.tmdbId)
+      const entry = watchlist.find((e) => e.tmdbId === playing.tmdbId && e.type === playing.type)
       if (dueWhileWatching(entry, tested, this.tried)) void this.start(entry!, 'watching')
       return
     }
