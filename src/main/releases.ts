@@ -34,7 +34,7 @@ export interface SweepableStore {
   }
 }
 import * as tmdb from './tmdb'
-import { isNothingAiredYet, NOTHING_AIRED_YET } from '@shared/aired'
+import { isNothingAiredYet, localMidnight, NOTHING_AIRED_YET } from '@shared/aired'
 
 /** Spacing between TMDB calls, so a large tracker list does not burst. */
 const REQUEST_SPACING_MS = 250
@@ -175,12 +175,39 @@ export async function checkTracker(tracker: ReleaseTracker): Promise<ReleaseNoti
   // series starting; the bookmark waits for season 1.
   if (isNothingAiredYet(tracker.lastNotified) && latest.season < 1) return null
 
-  if (detail.status === 'Ended' || detail.status === 'Canceled') return null
   if (!isNewerThan(latest, tracker.lastNotified)) return null
 
   const kind = latest.season > tracker.lastNotified.season ? 'new_season' : 'new_episode'
   tracker.lastNotified = latest
+
+  /*
+   * An ended series announces its finale and nothing else.
+   *
+   * The rule is the original's lesson: TMDB keeps correcting a finished show's
+   * metadata, and comparing season numbers read a correction as a new season.
+   * But returning before the comparison also lost the one episode an ended
+   * series still has to announce, its last, whenever TMDB filed "Ended" before
+   * a sweep had seen the finale. And it left the bookmark behind, so a later
+   * flip back to "Returning Series" announced an episode from months before,
+   * which is the false alarm the rule was there to prevent. So the bookmark
+   * always moves, and only an episode of the same season that aired in the
+   * last week is news.
+   */
+  if (detail.status === 'Ended' || detail.status === 'Canceled') {
+    const finale = kind === 'new_episode' && airedWithin(latest, FINALE_NEWS_MS)
+    return finale ? { tracker, episode: latest, kind } : null
+  }
   return { tracker, episode: latest, kind }
+}
+
+/** How recently an ended series' last episode must have aired to be announced. */
+const FINALE_NEWS_MS = 7 * DAY_MS
+
+/** Whether an episode aired, by the viewer's calendar, within `ms` of now. */
+function airedWithin(episode: EpisodeStub, ms: number, now = Date.now()): boolean {
+  if (!episode.airDate) return false
+  const at = localMidnight(episode.airDate)
+  return Number.isFinite(at) && at <= now && now - at <= ms
 }
 
 /**

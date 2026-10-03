@@ -168,6 +168,49 @@ describe('checkTracker', () => {
     expect(await checkTracker(tracker)).toBeNull()
     expect(tracker.lastNotified).toEqual(NOTHING_AIRED_YET)
   })
+
+  /** `YYYY-MM-DD` some days before today by the real clock, which is what `checkTracker` reads. */
+  const daysAgo = (days: number): string => {
+    const date = new Date(Date.now() - days * DAY)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
+
+  /**
+   * The bug: an ended series returned before the comparison, so a finale TMDB
+   * filed together with "Ended" was never announced.
+   */
+  it('announces the finale of a series TMDB has just marked ended', async () => {
+    const tracker = tracked({
+      status: 'Returning Series',
+      lastNotified: { season: 3, episode: 9, name: 'Nine', airDate: daysAgo(8) },
+    })
+    tmdbSays({ status: 'Ended', lastEpisode: { season: 3, episode: 10, name: 'Finale', airDate: daysAgo(1) } })
+
+    expect(await checkTracker(tracker)).toMatchObject({ kind: 'new_episode', episode: { season: 3, episode: 10 } })
+  })
+
+  /** What the rule was always for: a finished show's corrected metadata is not a new season. */
+  it("takes an ended series' changed metadata silently, and moves the bookmark", async () => {
+    const tracker = tracked({
+      status: 'Ended',
+      lastNotified: { season: 3, episode: 10, name: 'Finale', airDate: '2024-03-01' },
+    })
+    tmdbSays({ status: 'Ended', lastEpisode: { season: 4, episode: 2, name: 'Extra', airDate: '2024-04-01' } })
+
+    expect(await checkTracker(tracker)).toBeNull()
+    expect(tracker.lastNotified).toMatchObject({ season: 4, episode: 2 })
+  })
+
+  it("does not announce an ended series' episode that aired long ago", async () => {
+    const tracker = tracked({
+      status: 'Ended',
+      lastNotified: { season: 2, episode: 7, name: 'Seven', airDate: '2023-05-01' },
+    })
+    tmdbSays({ status: 'Ended', lastEpisode: { season: 2, episode: 8, name: 'Eight', airDate: '2023-05-08' } })
+
+    expect(await checkTracker(tracker)).toBeNull()
+    expect(tracker.lastNotified).toMatchObject({ season: 2, episode: 8 })
+  })
 })
 
 describe('checkAll', () => {
