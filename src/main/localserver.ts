@@ -23,10 +23,10 @@
  *   and never reaches renderer code.
  */
 
-import { createServer, type Server, type ServerResponse } from 'node:http'
-import { createReadStream } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { createServer, type OutgoingHttpHeaders, type Server, type ServerResponse } from 'node:http'
+import { open, readFile, type FileHandle } from 'node:fs/promises'
 import { join, normalize, sep, extname } from 'node:path'
+import { pipeline } from 'node:stream'
 
 /** Content types for what a Vite build actually emits. */
 const MIME: Record<string, string> = {
@@ -70,11 +70,42 @@ export function serveCacheFrom(root: string | null): void {
 async function serveCached(res: ServerResponse, pathname: string): Promise<boolean> {
   const match = CACHE_FILE.exec(pathname)
   if (!match || cacheRoot === null) return false
-  const file = join(cacheRoot, match[1]!, match[2]!)
-  const info = await stat(file)
-  if (!info.isFile()) return false
-  res.writeHead(200, { 'Content-Type': CACHE_MIME[match[3]!]!, 'Content-Length': info.size, 'Cache-Control': 'no-store' })
-  createReadStream(file).pipe(res)
+  return sendFile(res, join(cacheRoot, match[1]!, match[2]!), {
+    'Content-Type': CACHE_MIME[match[3]!]!,
+    'Cache-Control': 'no-store',
+  })
+}
+
+/**
+ * Answer with a file, or return false, having written nothing, when it cannot
+ * be opened or is not a file.
+ *
+ * Opened first and measured through the open handle, not `stat` and then
+ * `createReadStream`: a preview cache window can be evicted (`rm -rf`) between
+ * the two, and the stream's own open then failed with nobody listening for its
+ * `error`. That was an uncaught exception in the main process, and a request
+ * left without any answer. An open file keeps its bytes after it is deleted.
+ *
+ * And `pipeline` rather than `pipe`: when the viewer dropped a request
+ * mid-transfer (a seek, the copy handing over to the source, the detail view
+ * closing), `pipe` let go of the response but kept the file open, one
+ * descriptor leaked per dropped request for the life of the app.
+ */
+async function sendFile(res: ServerResponse, file: string, headers: OutgoingHttpHeaders): Promise<boolean> {
+  let handle: FileHandle
+  try {
+    handle = await open(file, 'r')
+  } catch {
+    return false
+  }
+  const info = await handle.stat().catch(() => null)
+  if (info === null || !info.isFile()) {
+    await handle.close().catch(() => {})
+    return false
+  }
+  res.writeHead(200, { ...headers, 'Content-Length': info.size })
+  // Either end closing closes the other, and the stream closes the handle.
+  pipeline(handle.createReadStream(), res, () => {})
   return true
 }
 
@@ -240,21 +271,14 @@ export function startRendererServer(rendererDir: string): Promise<string> {
             return
           }
 
-          const info = await stat(resolved)
-          if (!info.isFile()) {
-            res.writeHead(404).end('Not found')
-            return
-          }
-
-          res.writeHead(200, {
+          const sent = await sendFile(res, resolved, {
             'Content-Type': MIME[extname(resolved).toLowerCase()] ?? 'application/octet-stream',
-            'Content-Length': info.size,
             // The bundle is rebuilt on every release and served locally, so
             // caching it buys nothing and can serve a stale build after an
             // update.
             'Cache-Control': 'no-store',
           })
-          createReadStream(resolved).pipe(res)
+          if (!sent) res.writeHead(404).end('Not found')
         } catch {
           res.writeHead(404).end('Not found')
         }
