@@ -6,13 +6,13 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.PushbackInputStream;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Serves a provider's stream to a Chromecast on the local network.
@@ -98,9 +99,29 @@ public final class CastProxyServer {
         "range", "host", "connection", "content-length", "accept-encoding"
     };
 
-    private ServerSocket socket;
+    /** Longest request head served. A receiver's is a few hundred bytes. */
+    private static final int MAX_HEAD_BYTES = 16 * 1024;
+
+    /** Most headers kept from one request. A receiver sends under a dozen. */
+    private static final int MAX_HEADERS = 64;
+
+    /** How long a client has to send its whole request head, however it paces it. */
+    private static final int HEAD_DEADLINE_MS = 10_000;
+
+    private final int headDeadlineMs;
+
+    private volatile ServerSocket socket;
     private ExecutorService workers;
     private volatile int port = -1;
+
+    public CastProxyServer() {
+        this(HEAD_DEADLINE_MS);
+    }
+
+    /** With a shorter head deadline, for the tests. */
+    CastProxyServer(int headDeadlineMs) {
+        this.headDeadlineMs = headDeadlineMs;
+    }
 
     /** id -> rewritten playlist body, served from memory. */
     private final Map<String, String> playlists = new ConcurrentHashMap<>();
@@ -115,16 +136,19 @@ public final class CastProxyServer {
     public synchronized int start() throws IOException {
         if (socket != null && !socket.isClosed()) return port;
 
-        socket = new ServerSocket();
-        socket.setReuseAddress(true);
-        socket.bind(new InetSocketAddress(0));
-        port = socket.getLocalPort();
+        ServerSocket listening = new ServerSocket();
+        listening.setReuseAddress(true);
+        listening.bind(new InetSocketAddress(0));
 
         // Bounded: a Chromecast opens a handful of connections at a time, and an
         // unbounded pool would turn a misbehaving receiver into an OOM.
-        workers = Executors.newFixedThreadPool(8);
+        ExecutorService pool = Executors.newFixedThreadPool(8);
 
-        Thread accept = new Thread(this::acceptLoop, "cast-proxy-accept");
+        socket = listening;
+        workers = pool;
+        port = listening.getLocalPort();
+
+        Thread accept = new Thread(() -> acceptLoop(listening, pool), "cast-proxy-accept");
         accept.setDaemon(true);
         accept.start();
 
@@ -206,49 +230,60 @@ public final class CastProxyServer {
 
     /* ── The server ─────────────────────────────────────────────────────── */
 
-    private void acceptLoop() {
-        while (socket != null && !socket.isClosed()) {
+    /**
+     * Hand each connection to a worker until `stop` closes the socket.
+     *
+     * Handed the socket and the pool rather than reading the fields, which
+     * `stop` clears from another thread. Read in between, they could be null,
+     * or the pool already shut down; either exception is not an IOException,
+     * and one escaping this thread kills the app.
+     */
+    private void acceptLoop(ServerSocket listening, ExecutorService pool) {
+        while (!listening.isClosed()) {
+            Socket client;
             try {
-                Socket client = socket.accept();
-                ExecutorService pool = workers;
-                if (pool != null) pool.execute(() -> serve(client));
+                client = listening.accept();
             } catch (IOException error) {
                 // `stop()` closes the socket out from under accept(); that is the
                 // normal way this loop ends, not a fault worth logging loudly.
-                if (socket != null && !socket.isClosed()) Log.w(TAG, "accept failed: " + error);
+                if (!listening.isClosed()) Log.w(TAG, "accept failed: " + error);
+                return;
+            }
+            try {
+                pool.execute(() -> serve(client));
+            } catch (RejectedExecutionException stopped) {
+                closeQuietly(client);
                 return;
             }
         }
     }
 
+    private static void closeQuietly(Socket client) {
+        try {
+            client.close();
+        } catch (IOException ignored) {
+            // Closing is all that was wanted.
+        }
+    }
+
     private void serve(Socket client) {
         try (Socket open = client) {
-            open.setSoTimeout(UPSTREAM_TIMEOUT_MS);
-            PushbackInputStream in = new PushbackInputStream(open.getInputStream(), 1);
             OutputStream out = new BufferedOutputStream(open.getOutputStream(), BUFFER_BYTES);
 
-            String requestLine = readLine(in);
-            if (requestLine == null) return;
-
-            Map<String, String> requestHeaders = new HashMap<>();
-            String header;
-            while ((header = readLine(in)) != null && !header.isEmpty()) {
-                int colon = header.indexOf(':');
-                if (colon > 0) {
-                    requestHeaders.put(
-                        header.substring(0, colon).trim().toLowerCase(Locale.ROOT),
-                        header.substring(colon + 1).trim()
-                    );
-                }
-            }
-
-            String[] parts = requestLine.split(" ");
-            if (parts.length < 2) {
-                writeStatus(out, 400, "bad request");
+            RequestHead request;
+            try {
+                request = readHead(open);
+            } catch (RefusedRequest refused) {
+                writeStatus(out, refused.status, refused.getMessage());
+                drainBriefly(open);
                 return;
             }
-            String method = parts[0];
-            String id = idFromPath(parts[1]);
+            if (request == null) return;
+            open.setSoTimeout(UPSTREAM_TIMEOUT_MS);
+
+            Map<String, String> requestHeaders = request.headers;
+            String method = request.method;
+            String id = idFromPath(request.path);
 
             String playlist = playlists.get(id);
             if (playlist != null) {
@@ -465,21 +500,105 @@ public final class CastProxyServer {
         out.flush();
     }
 
-    /** Read one CRLF-terminated line, tolerating a bare LF. */
-    private static String readLine(PushbackInputStream in) throws IOException {
-        StringBuilder line = new StringBuilder();
-        int character;
-        while ((character = in.read()) != -1) {
-            if (character == '\r') {
-                int next = in.read();
-                if (next != '\n' && next != -1) in.unread(next);
-                return line.toString();
-            }
-            if (character == '\n') return line.toString();
-            line.append((char) character);
-            // A request line this long is not a client we want to serve.
-            if (line.length() > 8192) return line.toString();
+    /** A request's line and headers, header names lower-cased. */
+    private static final class RequestHead {
+        final String method;
+        final String path;
+        final Map<String, String> headers;
+
+        RequestHead(String method, String path, Map<String, String> headers) {
+            this.method = method;
+            this.path = path;
+            this.headers = headers;
         }
-        return line.length() > 0 ? line.toString() : null;
+    }
+
+    /** A request answered with an error status before anything is fetched. */
+    private static final class RefusedRequest extends IOException {
+        final int status;
+
+        RefusedRequest(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+    }
+
+    /**
+     * The request line and headers, against one deadline for the lot.
+     *
+     * The proxy listens on the whole local network, and it used to read
+     * headers a byte at a time with a fresh timeout per read and no limit. A
+     * client sending one byte every nineteen seconds held a worker for ever, and
+     * eight of them, one per worker, stalled the television's next segment. A
+     * head that never ended grew the header map until memory ran out, which on
+     * Android takes the app down. Null when the client hung up first.
+     */
+    private RequestHead readHead(Socket socket) throws IOException {
+        InputStream in = socket.getInputStream();
+        java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream(1024);
+        byte[] buffer = new byte[1024];
+        long deadline = System.currentTimeMillis() + headDeadlineMs;
+        int end;
+        while ((end = endOfHead(raw)) < 0) {
+            long left = deadline - System.currentTimeMillis();
+            if (left <= 0) throw new RefusedRequest(408, "request timeout");
+            socket.setSoTimeout((int) left);
+            int read;
+            try {
+                read = in.read(buffer);
+            } catch (SocketTimeoutException slow) {
+                throw new RefusedRequest(408, "request timeout");
+            }
+            if (read == -1) return null;
+            raw.write(buffer, 0, read);
+            if (raw.size() > MAX_HEAD_BYTES) throw new RefusedRequest(431, "request header fields too large");
+        }
+
+        String[] lines = raw.toString("ISO-8859-1").substring(0, end).split("\r?\n");
+        String[] parts = lines[0].split(" ");
+        if (parts.length < 2) throw new RefusedRequest(400, "bad request");
+        Map<String, String> headers = new HashMap<>();
+        for (int i = 1; i < lines.length && headers.size() < MAX_HEADERS; i++) {
+            int colon = lines[i].indexOf(':');
+            if (colon > 0) {
+                headers.put(
+                    lines[i].substring(0, colon).trim().toLowerCase(Locale.ROOT),
+                    lines[i].substring(colon + 1).trim()
+                );
+            }
+        }
+        return new RequestHead(parts[0], parts[1], headers);
+    }
+
+    /** Where the blank line that ends a request head starts, or -1 before it has arrived. */
+    private static int endOfHead(java.io.ByteArrayOutputStream raw) throws IOException {
+        String text = raw.toString("ISO-8859-1");
+        int crlf = text.indexOf("\r\n\r\n");
+        int lf = text.indexOf("\n\n");
+        if (crlf < 0) return lf;
+        return lf < 0 ? crlf : Math.min(crlf, lf);
+    }
+
+    /**
+     * Let a refused client read its answer before the connection goes.
+     *
+     * Closed with the client's bytes still unread, the socket resets, and the
+     * reset can overtake the status line. Bounded in time and bytes, because
+     * the client being refused is the one not to wait on.
+     */
+    private static void drainBriefly(Socket socket) {
+        try {
+            socket.shutdownOutput();
+            socket.setSoTimeout(500);
+            InputStream in = socket.getInputStream();
+            byte[] discard = new byte[4096];
+            for (int total = 0; total < 64 * 1024; ) {
+                int read = in.read(discard);
+                if (read == -1) break;
+                total += read;
+            }
+        } catch (IOException ignored) {
+            // Timed out or reset: the answer has gone, which is all this was for.
+        }
     }
 }

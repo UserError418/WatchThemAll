@@ -2,6 +2,7 @@ package net.watchthemall.app;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -87,6 +88,56 @@ public class CastProxyServerTest {
         assertEquals(502, refused.status);
         assertEquals(200, served.status);
         assertEquals(1000, served.body.length);
+        assertNull(uncaught.get());
+    }
+
+    @Test
+    public void aHeadThatNeverEndsIsRefusedRatherThanKept() throws Exception {
+        int port = startServing(Collections.singletonMap("s0", upstream.chunked(1000)));
+        StringBuilder flood = new StringBuilder("GET /s0 HTTP/1.1\r\n");
+        while (flood.length() < 20_000) flood.append("X-Padding: ").append(flood.length()).append("\r\n");
+
+        // Never the blank line that ends a head: the old proxy kept every header.
+        Reply refused = send(port, flood.toString());
+
+        assertEquals(431, refused.status);
+        assertEquals(200, get(port, "/s0").status);
+        assertNull(uncaught.get());
+    }
+
+    @Test
+    public void aClientTricklingItsHeadIsHungUpOnAtTheDeadline() throws Exception {
+        CastProxyServer quick = new CastProxyServer(300);
+        try {
+            int port = quick.start();
+            quick.load(new HashMap<>(), new HashMap<>(Collections.singletonMap("s0", upstream.chunked(1000))), new HashMap<>());
+            try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                socket.setSoTimeout(5_000);
+                long started = System.currentTimeMillis();
+                // A byte every 100 ms: no single read ever waits long enough to time out.
+                Thread trickle = new Thread(() -> {
+                    try {
+                        OutputStream out = socket.getOutputStream();
+                        for (byte b : "GET /s0 HTTP/1.1\r\nHost: receiver\r\n".getBytes(StandardCharsets.ISO_8859_1)) {
+                            out.write(b);
+                            out.flush();
+                            Thread.sleep(100);
+                        }
+                    } catch (IOException | InterruptedException hungUp) {
+                        // The proxy closed on us, which is what is being tested.
+                    }
+                });
+                trickle.setDaemon(true);
+                trickle.start();
+
+                Reply reply = parse(readAll(socket.getInputStream()));
+
+                assertEquals(408, reply.status);
+                assertTrue(System.currentTimeMillis() - started < 3_000);
+            }
+        } finally {
+            quick.stop();
+        }
         assertNull(uncaught.get());
     }
 
