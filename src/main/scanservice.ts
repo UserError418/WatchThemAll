@@ -159,7 +159,10 @@ export interface ScanService {
   probeOne(titleKey: string, subject: ProbeSubject, provider: Provider): Promise<ProviderScan | null>
   /** Stop scheduling further providers. */
   cancel(): void
-  /** Whether a scan is in flight. */
+  /**
+   * Whether a scan is in flight, or any test is still loading: one left over
+   * from a cancelled or superseded scan, or the background tester's.
+   */
   busy(): boolean
 }
 
@@ -220,6 +223,19 @@ export function createScanService(options: ScanServiceOptions): ScanService {
   let running = false
 
   /**
+   * Tests loading right now, from any run and from `probeOne`.
+   *
+   * The pool of three is the whole service's, not each run's. A test cannot
+   * be interrupted, so a cancelled or superseded run leaves up to three still
+   * loading, and a new run used to start three more beside them at once: six
+   * players at a time, which is how a working source is starved into a red
+   * (nine at a time turned one red when the pool was measured). And `busy()`
+   * said idle as soon as a scan was cancelled, so the automatic tester
+   * started its own three on top of the leftovers.
+   */
+  let loading = 0
+
+  /**
    * One measurement: the verdict, how long the stream took to appear, the best
    * quality it offers, and why it failed if it did.
    *
@@ -233,11 +249,17 @@ export function createScanService(options: ScanServiceOptions): ScanService {
    * always stopped; see `QualityMode` for why it must not linger.
    */
   const probe = async (titleKey: string, provider: Provider, subject: ProbeSubject, budget: number): Promise<Measured> => {
-    const result = await probeQuality(provider, subject, {
-      mode: 'scan',
-      timeoutMs: budget,
-      frameUrl: options.frameUrl,
-    })
+    loading += 1
+    let result: Awaited<ReturnType<typeof probeQuality>>
+    try {
+      result = await probeQuality(provider, subject, {
+        mode: 'scan',
+        timeoutMs: budget,
+        frameUrl: options.frameUrl,
+      })
+    } finally {
+      loading -= 1
+    }
     const streamed = result.verdict === 'stream'
     if (streamed && result.requests.length > 0) options.onStream?.(titleKey, provider.id, result.requests)
     return {
@@ -252,7 +274,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
   }
 
   return {
-    busy: () => running,
+    busy: () => running || loading > 0,
 
     async probeOne(titleKey, subject, provider) {
       const before = token
@@ -388,7 +410,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       while (queue.length > 0 || tasks.size > 0) {
         // Keep the pool full. Once the run is cancelled nothing new starts, but
         // what is already running is let finish: a probe cannot be interrupted.
-        while (token === mine && tasks.size < limit && !held()) {
+        // Full counts every test loading, this run's or not (`loading`).
+        while (token === mine && loading < limit && !held()) {
           const job = queue.shift()
           if (!job) break
           inFlight.set(job.provider.id, job)
@@ -398,7 +421,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         }
         if (token !== mine) queue.length = 0
         if (tasks.size === 0 && queue.length === 0) break
-        // Held with nothing running: look again in a second.
+        // Held, or the pool taken by another run's tests, with nothing of this
+        // run's own to wait for: look again in a second.
         await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
