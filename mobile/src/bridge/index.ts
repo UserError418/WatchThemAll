@@ -2395,7 +2395,8 @@ export async function createBridge(): Promise<WtaApi> {
           resolveTitle,
           (done, total) => malProgress.emit({ done, total }),
         )
-        await store.replaceDocument(next)
+        // Merged rather than replaced, as on the desktop: see `StoreCore.mergeDocument`.
+        await store.mergeDocument(next)
         /**
          * Cleared, exactly as `src/main/ipc.ts` does after its own commit.
          * Left in place, a second commit without an intervening `preview()`

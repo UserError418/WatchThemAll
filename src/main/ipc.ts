@@ -640,7 +640,9 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
       (done, total) => win?.webContents.send(EV.malProgress, { done, total }),
     )
 
-    await store.replaceDocument(next)
+    // Merged rather than replaced: the lookups took minutes, and the library
+    // did not stand still meanwhile. See `StoreCore.mergeDocument`.
+    await store.mergeDocument(next)
     pendingMal = []
     return summary
   })

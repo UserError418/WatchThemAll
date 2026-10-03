@@ -37,6 +37,8 @@ import {
   identify,
   pruneTombstones,
 } from './document'
+import { mergeDocuments } from './merge'
+import { withOneTrackerPerSeries } from './trackers'
 import type {
   CollectionKey,
   InputOf,
@@ -588,6 +590,22 @@ export class StoreCore {
     this.unsaved = true
     this.notify(null)
     await this.flush()
+  }
+
+  /**
+   * Take a whole document built from an earlier `read()`, keeping everything
+   * written since.
+   *
+   * For an import that takes a while. The MyAnimeList one builds its result
+   * over minutes of TMDB lookups, from the library as it stood when it began,
+   * and `replaceDocument` with that put back everything written meanwhile: a
+   * play opened, positions saved, a setting changed, a merge from the other
+   * device. Merged by the sync's own rules instead, both survive: what the
+   * import did not touch is no newer than what is here and loses to it, and
+   * what it created or changed is stamped from when it did so.
+   */
+  async mergeDocument(next: StoreDocument): Promise<void> {
+    await this.replaceDocument(withOneTrackerPerSeries(mergeDocuments(this.doc, next), Date.now()))
   }
 
   /** Write now. Call when the app is about to lose the chance to. */
