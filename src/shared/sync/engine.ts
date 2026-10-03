@@ -29,7 +29,7 @@
 import { mergeDocuments } from '../store/merge'
 import { migrate } from '../store/migrate'
 import { withOneTrackerPerSeries } from '../store/trackers'
-import type { StoreDocument } from '../store/document'
+import { COLLECTION_KEYS, identify, type StoreDocument } from '../store/document'
 import type { SyncBackend } from './types'
 
 export interface SyncHost {
@@ -87,12 +87,13 @@ export async function syncOnce(
    * that may be a phone a release behind. Merged raw, its records reach this
    * device's live document in the old shape — a rating with no `value` reads
    * as unrated until the next restart migrates it — and are then written to
-   * disk that way. Migrating here also means the push below carries the
-   * current shape back up, so the remote heals rather than staying behind.
+   * disk that way. Migrating here also means any push below carries the
+   * current shape back up, so the remote heals with the next change.
    */
   // Repaired after the merge as well as in `migrate`: two documents that each
   // track a series once can still merge into one that tracks it twice.
-  const merged = withOneTrackerPerSeries(mergeDocuments(local, migrate(remote.document, now)), now)
+  const pulled = migrate(remote.document, now)
+  const merged = withOneTrackerPerSeries(mergeDocuments(local, pulled), now)
 
   /**
    * Compare against both sides to decide whether anything actually moved.
@@ -101,15 +102,73 @@ export async function syncOnce(
    * per sync on a few hundred kilobytes — and it is the only check that is
    * honest about *both* directions. Counting records would miss an edit, and a
    * timestamp would miss a merge that changed nothing.
+   *
+   * The remote side is compared on what another device takes from the file as
+   * pulled (`syncedContent`), not as text. The file names the device that wrote it,
+   * so until 2.0.12 it differed from the merge whenever the other device had
+   * pushed last: every sync re-uploaded the whole library, the other device
+   * downloaded it and pushed it back on its next sync, and the checksum skip
+   * in `drive.ts` never helped two devices at all.
    */
-  const mergedText = JSON.stringify(merged)
-  const localUnchanged = mergedText === JSON.stringify(local)
-  const remoteUnchanged = mergedText === JSON.stringify(remote.document)
+  const localUnchanged = JSON.stringify(merged) === JSON.stringify(local)
+  const remoteUnchanged = syncedContent(merged) === syncedContent(remote.document)
 
   if (!localUnchanged) await host.write(merged)
   if (!remoteUnchanged) await backend.push(merged, remote.version)
 
   return { changed: !localUnchanged || !remoteUnchanged, createdRemote: false, at: now }
+}
+
+/**
+ * Fields that describe the device which wrote a document rather than the
+ * library: its id and kind, its own test rows from before 2.0.3 and what it
+ * holds of other devices' (`scanshare.ts` reads those apart), and the schema
+ * number, which `migrate` settles on every read.
+ */
+const DEVICE_FIELDS = ['deviceId', 'deviceKind', 'schemaVersion', 'providerScans', 'sharedScans'] as const
+
+/**
+ * The library as another device takes it from the file, as text that two
+ * copies saying the same thing always share.
+ *
+ * Order is left out where it means nothing: records are sorted by identity
+ * (each device keeps its own first), an entry's watched episodes are sorted
+ * (the merge lists the local ones first), and every object's keys are sorted.
+ * Orders that do mean something, such as the provider order, are kept.
+ *
+ * Takes the pulled file as it came, which is not always a well-formed
+ * document: anything this app could not have written simply compares as
+ * different, so the push replaces it.
+ */
+export function syncedContent(doc: StoreDocument): string {
+  const content: Record<string, unknown> = { ...(doc ?? {}) }
+  for (const field of DEVICE_FIELDS) delete content[field]
+  for (const key of COLLECTION_KEYS) {
+    const stored: unknown = content[key]
+    if (!Array.isArray(stored)) continue
+    content[key] = stored
+      .map((record: unknown) => {
+        const isRecord = record !== null && typeof record === 'object'
+        const fields = record as Record<string, unknown>
+        const sorted =
+          isRecord && key === 'watchlist' && Array.isArray(fields.watchedEpisodes)
+            ? { ...fields, watchedEpisodes: [...(fields.watchedEpisodes as string[])].sort() }
+            : record
+        return { id: isRecord ? identify(key, record as never) : '', record: sorted }
+      })
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(({ record }) => record)
+  }
+  return canonicalJson(content)
+}
+
+/** JSON with every object's keys in one order, so key order alone never reads as a change. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : inner,
+  )
 }
 
 /**

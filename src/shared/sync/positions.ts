@@ -28,7 +28,7 @@ import { mergeResumePoints } from '../store/merge'
 import type { RecordOf } from '../store/document'
 import type { FetchLike } from './devicecode'
 import { createDriveBackend } from './drive'
-import { CoalescingRunner } from './engine'
+import { CoalescingRunner, canonicalJson } from './engine'
 import type { SyncBackend } from './types'
 
 /** The filename in the user's Drive, next to the library. */
@@ -87,6 +87,15 @@ export function recentPoints(points: readonly Point[], now: number): Point[] {
 }
 
 /**
+ * Points in one order, by key, so every device writes and compares the same
+ * file. Also takes the file's own list, which may hold anything.
+ */
+function byKey<T>(points: readonly T[]): T[] {
+  const keyOf = (point: T): string => String((point as { key?: unknown } | null)?.key)
+  return [...points].sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0))
+}
+
+/**
  * One positions sync: pull, merge, keep what is new, push what the file lacks.
  *
  * The same shape as the library's `syncOnce`, on a document small enough that
@@ -112,8 +121,16 @@ export async function syncPositions(
   const adopted = JSON.stringify(merged) !== JSON.stringify(local)
   if (adopted) await host.adopt(merged)
 
-  const outgoing: PositionsDocument = { positions: 1, resumePoints: recentPoints(merged, now) }
-  const pushed = remote === null || JSON.stringify(outgoing) !== JSON.stringify(remote.document)
+  const outgoing: PositionsDocument = { positions: 1, resumePoints: byKey(recentPoints(merged, now)) }
+  // Kept by key and compared on content. Each device holds its points in its
+  // own order, so until 2.0.12 the file always differed from the merge and both
+  // devices re-pushed the same positions after every push by the other. The
+  // file's own list, not `incoming`, so a record dropped above is mended.
+  const inFile: unknown[] = Array.isArray(remote?.document?.resumePoints) ? remote.document.resumePoints : []
+  const pushed =
+    remote === null ||
+    remote.document?.positions !== 1 ||
+    canonicalJson(outgoing.resumePoints) !== canonicalJson(byKey(inFile))
   if (pushed) await backend.push(outgoing, remote?.version ?? null)
 
   return { adopted, pushed }
