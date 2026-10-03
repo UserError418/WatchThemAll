@@ -186,7 +186,7 @@ describe('buildCastBundle', () => {
     const master = bundle.playlists.find((p) => p.id === bundle.rootId)
     expect(master).toBeDefined()
     // Relative, so the proxy's own address never has to be known here.
-    expect(master?.body).toMatch(/^p\d+\.m3u8$/m)
+    expect(master?.body).toMatch(/^p[0-9a-f]{32}\.m3u8$/m)
     expect(master?.body).not.toContain('https://')
   })
 
@@ -346,5 +346,29 @@ describe('what a provider playlist can make the proxy fetch', () => {
     expect(body).toContain('\nfile:///data/data/net.watchthemall.app/shared_prefs/CapacitorStorage.xml\n')
     expect(body).toContain('\nftp://198.51.100.7/seg2.ts\n')
     expect(body).not.toContain('\nseg0.ts\n')
+  })
+})
+
+describe('the ids the proxy answers to', () => {
+  const MASTER = 'https://cdn.example.com/hls/master.m3u8'
+  const bodies: Record<string, string> = {
+    [MASTER]: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1400000\n720/index.m3u8\n',
+    'https://cdn.example.com/hls/720/index.m3u8': '#EXTM3U\n#EXTINF:6.0,\na.ts\n#EXTINF:6.0,\nb.ts\n#EXT-X-ENDLIST\n',
+  }
+  const build = () => buildCastBundle(MASTER, 'hls', async (url) => bodies[url] ?? '')
+
+  it('cannot be guessed by counting', async () => {
+    const bundle = await build()
+
+    expect(bundle.rootId).toMatch(/^p[0-9a-f]{32}$/)
+    for (const playlist of bundle.playlists) expect(playlist.id).toMatch(/^p[0-9a-f]{32}$/)
+    for (const target of bundle.targets) expect(target.id).toMatch(/^s[0-9a-f]{32}$/)
+  })
+
+  it('are new for every cast', async () => {
+    const [first, second] = await Promise.all([build(), build()])
+
+    expect(first.rootId).not.toBe(second.rootId)
+    expect(first.targets.map((t) => t.id)).not.toEqual(second.targets.map((t) => t.id))
   })
 })

@@ -273,6 +273,20 @@ export type FetchText = (url: string) => Promise<string>
 const MAX_PLAYLIST_DEPTH = 3
 
 /**
+ * An id nobody can guess: sixteen random bytes, as hex.
+ *
+ * The proxy answers anything on the local network for as long as a cast runs,
+ * the phone's and the desktop's alike. With counted ids (`p0`, `s1`, …) any
+ * device there could walk the whole stream by trying them in order, so the
+ * ids hid the upstream URLs and not the stream itself.
+ */
+function unguessableId(prefix: string): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return prefix + Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
  * Resolve a stream into something a Cast receiver can be handed.
  *
  * ## Why ids rather than a URL parameter
@@ -297,7 +311,7 @@ const MAX_PLAYLIST_DEPTH = 3
  *
  * ## Why the rewritten URIs are relative
  *
- * `allocate` emits bare ids — `p1.m3u8`, `s7` — not absolute URLs. The receiver
+ * `allocate` emits bare ids — `p<hex>.m3u8`, `s<hex>` — not absolute URLs. The receiver
  * resolves them against the playlist it is reading, which is already a proxy
  * URL, so they land back on the proxy without this function ever being told the
  * phone's address. That matters: the LAN address is not known until the proxy
@@ -313,12 +327,11 @@ export async function buildCastBundle(
 
   /** url -> id, so a segment referenced twice is registered once. */
   const assigned = new Map<string, string>()
-  let counter = 0
 
   const idFor = (url: string, prefix: string): string => {
     const existing = assigned.get(url)
     if (existing !== undefined) return existing
-    const id = `${prefix}${counter++}`
+    const id = unguessableId(prefix)
     assigned.set(url, id)
     return id
   }
