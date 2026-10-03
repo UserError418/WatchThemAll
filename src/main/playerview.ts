@@ -72,7 +72,7 @@ export interface PlayerBounds {
 }
 
 export interface InlinePlayer {
-  /** Mutable: rewritten when the player navigates to another episode. */
+  /** What is showing. Rewritten by `goToEpisode`; read it, do not assign it. */
   context: PlayRequest
   /**
    * Where the detail view's preview is, while it stands in for this held
@@ -123,8 +123,23 @@ export interface InlinePlayer {
    * chrome URL.
    */
   notifyChrome: (channel: string, payload: unknown) => void
-  /** Load a different URL into the same view, e.g. another episode. */
-  load: (url: string) => void
+  /**
+   * Move to another episode of the same title, on the first of `candidates`.
+   *
+   * One call rather than the host rewriting `context` and `candidates` and
+   * then loading, because two things belong to the step and must happen in
+   * order. The context is the new episode's before the resume is armed, so
+   * `onNavigate` hands back *that* episode's place. And what was learned about
+   * the episode being left is forgotten: which sources failed it, which served
+   * it the wrong length, which crashed on it. Kept, the last episode's
+   * failures carried into the next, so a source that had failed S1E1 was
+   * skipped by S1E2's fallback without ever being tried, and S1E2's "No
+   * provider could play this" listed S1E1's failures.
+   *
+   * Not for a provider switch, a reload or a fallback: those stay on the same
+   * episode, and what was learned about it still holds.
+   */
+  goToEpisode: (step: { context: PlayRequest; candidates: PlayCandidate[]; url: string }) => void
   /** Reload the current URL, for a source that loaded but then stalled. */
   reload: () => void
   /**
@@ -555,7 +570,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     setPaused: () => {},
     // Replaced once the overlay exists; until then there is nothing to tell.
     notifyChrome: () => {},
-    load: () => {},
+    goToEpisode: () => {},
     reload: () => {},
     setMuted: () => {},
     position: () => null,
@@ -1854,14 +1869,21 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   contents.on('media-started-playing', () => options.onPlayingChange?.(true))
   contents.on('media-paused', () => options.onPlayingChange?.(false))
 
-  player.load = (nextUrl: string): void => {
+  player.goToEpisode = (step): void => {
     if (!alive()) return
-    // `load` is how the host moves to another episode; the host has already
-    // rewritten `player.context` by the time this runs, so the target it hands
-    // back is the new episode's own stored position.
+    player.context = step.context
+    player.candidates = step.candidates
+    player.candidateIndex = 0
+    player.exhausted = []
+    runtimeJudged.clear()
+    crashedAt = -1
+    // Usually the source already loaded, but not when it cannot serve this
+    // episode: its own Referer, as a switch does.
+    applyIdentityFor(currentCandidate())
+    // After the context, so the place handed back is this episode's own.
     armResume('episode')
     beginLoad()
-    void contents.loadURL(framed(nextUrl))
+    void contents.loadURL(framed(step.url))
   }
 
   /**

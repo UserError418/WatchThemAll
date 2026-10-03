@@ -89,9 +89,8 @@ describe('a reading that arrives after its page has gone', () => {
     contents.frames = [filmFrame(() => ({ seconds: (e3 += 2.5), duration: 2700 })), hangingFrame()]
     await vi.advanceTimersByTimeAsync(12_600) // the poll asked at 12.5 s is still out
 
-    // The viewer picks S1E2, as `navigatePlayer` does it; its shell commits at once.
-    player.context = episodeRequest(2)
-    player.load('https://a.example/tv/1/1/2')
+    // The viewer picks S1E2; its shell commits at once.
+    player.goToEpisode({ context: episodeRequest(2), candidates: [candidate('a')], url: 'https://a.example/tv/1/1/2' })
     contents.frames = [emptyFrame()]
     contents.commit()
     await vi.advanceTimersByTimeAsync(1_500) // the old poll's timeout: S1E3's reading arrives now
@@ -142,5 +141,25 @@ describe('a reading that arrives after its page has gone', () => {
     // Past every per-frame answer timeout a poll left behind.
     await vi.advanceTimersByTimeAsync(1_600)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('stepping to another episode', () => {
+  it('tries again a source that failed the episode being left', async () => {
+    const offers: Array<PlayerSuggestion | null> = []
+    const player = createInlinePlayer(options({ onSuggest: (offer) => void offers.push(offer) }))
+    const contents = lastContents()
+    // A's page answers 500 on S1E3; the offer is taken, and B plays it.
+    contents.emit('did-navigate', {}, 'http://127.0.0.1/__player', 500, 'Internal Server Error')
+    expect(player.acceptSuggestion()).toBe(true)
+    expect(player.currentProviderId()).toBe('b')
+
+    player.goToEpisode({ context: episodeRequest(4), candidates: [candidate('b'), candidate('a')], url: 'https://b.example/tv/1/1/4' })
+    // B fails S1E4: A was never tried for this episode, so it is what is offered.
+    contents.emit('did-navigate', {}, 'http://127.0.0.1/__player', 500, 'Internal Server Error')
+
+    expect(player.exhausted).toEqual([])
+    expect(offers.at(-1)?.nextProviderId).toBe('a')
+    player.destroy()
   })
 })

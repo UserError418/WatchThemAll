@@ -1173,9 +1173,6 @@ function navigatePlayer(season: number, episode: number): void {
   tvPosition = null
   if (onTv) tvStale = true
 
-  player.context = next
-  player.candidates = selection.candidates
-  player.candidateIndex = 0
   /*
    * The episode being left is still the newest thing in the capture buffer, and
    * stays so for the first seconds of the new one. Without this, the remote's
@@ -1185,7 +1182,7 @@ function navigatePlayer(season: number, episode: number): void {
    * which already clears it.
    */
   cast.forget()
-  player.load(selection.url)
+  player.goToEpisode({ context: next, candidates: selection.candidates, url: selection.url })
 
   sendPlayerState()
 }
