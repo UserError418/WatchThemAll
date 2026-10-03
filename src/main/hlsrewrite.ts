@@ -141,10 +141,18 @@ export function isWholeVideoFile(body: string): boolean {
  * Returns null for anything that will not resolve, which the caller leaves
  * untouched rather than replacing with a broken proxy URL — a playlist we
  * cannot fully rewrite should still play for the parts we can.
+ *
+ * Null too for anything that is not a web address. The playlist is the
+ * provider's, so it can name any scheme, and every reference resolved here
+ * becomes something the proxy fetches. A `file:` or `ftp:` one made the phone's
+ * proxy throw on the receiver's request, which killed the app mid-cast. A
+ * `data:` key was registered as a target the proxy cannot fetch at all. Left as
+ * written, the receiver reads a `data:` URI itself.
  */
 function resolve(reference: string, base: string): string | null {
   try {
-    return new URL(reference, base).toString()
+    const url = new URL(reference, base)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
   } catch {
     return null
   }

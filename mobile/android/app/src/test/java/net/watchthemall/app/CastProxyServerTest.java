@@ -74,6 +74,22 @@ public class CastProxyServerTest {
         assertEquals(size, reply.body.length);
     }
 
+    @Test
+    public void aTargetThatIsNotAWebAddressAnswers502AndTheProxyCarriesOn() throws Exception {
+        Map<String, String> targets = new HashMap<>();
+        targets.put("s0", "file:///etc/hostname");
+        targets.put("s1", upstream.chunked(1000));
+        int port = startServing(targets);
+
+        Reply refused = get(port, "/s0");
+        Reply served = get(port, "/s1");
+
+        assertEquals(502, refused.status);
+        assertEquals(200, served.status);
+        assertEquals(1000, served.body.length);
+        assertNull(uncaught.get());
+    }
+
     /* ── Helpers ─────────────────────────────────────────────────────────── */
 
     private int startServing(Map<String, String> targets) throws IOException {

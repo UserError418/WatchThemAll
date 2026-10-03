@@ -14,6 +14,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
@@ -269,6 +270,10 @@ public final class CastProxyServer {
             // A receiver that seeks or stops closes the connection mid-write.
             // That is routine, not a failure.
             Log.d(TAG, "client gone: " + error);
+        } catch (RuntimeException error) {
+            // Never past here: on Android an exception that escapes a worker
+            // thread kills the app, and with it the film on the television.
+            Log.w(TAG, "request failed: " + error);
         }
     }
 
@@ -290,7 +295,15 @@ public final class CastProxyServer {
     private void proxy(String upstream, String range, String method, OutputStream out) throws IOException {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) new URL(upstream).openConnection();
+            URLConnection opened = new URL(upstream).openConnection();
+            // Only web addresses are registered (`buildCastBundle`). This is the
+            // backstop: anything else opens as a different kind of connection,
+            // and the cast below would throw.
+            if (!(opened instanceof HttpURLConnection)) {
+                writeStatus(out, 502, "not a web address");
+                return;
+            }
+            connection = (HttpURLConnection) opened;
             connection.setConnectTimeout(UPSTREAM_TIMEOUT_MS);
             connection.setReadTimeout(UPSTREAM_TIMEOUT_MS);
             connection.setRequestMethod("HEAD".equalsIgnoreCase(method) ? "HEAD" : "GET");
@@ -354,7 +367,7 @@ public final class CastProxyServer {
                 while ((read = body.read(buffer)) != -1) out.write(buffer, 0, read);
             }
             out.flush();
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException error) {
             Log.w(TAG, "upstream failed: " + error);
             writeStatus(out, 502, "upstream failed");
         } finally {

@@ -316,3 +316,35 @@ describe('isWholeVideoFile', () => {
     expect(isWholeVideoFile('ftypisomisomavc1moovmvhdmvextrex')).toBe(false)
   })
 })
+
+describe('what a provider playlist can make the proxy fetch', () => {
+  const PLAYLIST = 'https://cdn.example.com/hls/index.m3u8'
+  const media = [
+    '#EXTM3U',
+    '#EXT-X-TARGETDURATION:6',
+    '#EXT-X-KEY:METHOD=AES-128,URI="data:text/plain;base64,AAECAwQFBgcICQoLDA0ODw=="',
+    '#EXTINF:6.0,',
+    'seg0.ts',
+    '#EXTINF:6.0,',
+    'file:///data/data/net.watchthemall.app/shared_prefs/CapacitorStorage.xml',
+    '#EXTINF:6.0,',
+    'ftp://198.51.100.7/seg2.ts',
+    '#EXT-X-ENDLIST',
+  ].join('\n')
+
+  it('registers web addresses only', async () => {
+    const bundle = await buildCastBundle(PLAYLIST, 'hls', async () => media)
+
+    expect(bundle.targets.map((t) => t.url)).toEqual(['https://cdn.example.com/hls/seg0.ts'])
+  })
+
+  it('leaves every other address as the provider wrote it', async () => {
+    const bundle = await buildCastBundle(PLAYLIST, 'hls', async () => media)
+    const body = bundle.playlists[0]!.body
+
+    expect(body).toContain('URI="data:text/plain;base64,AAECAwQFBgcICQoLDA0ODw=="')
+    expect(body).toContain('\nfile:///data/data/net.watchthemall.app/shared_prefs/CapacitorStorage.xml\n')
+    expect(body).toContain('\nftp://198.51.100.7/seg2.ts\n')
+    expect(body).not.toContain('\nseg0.ts\n')
+  })
+})
