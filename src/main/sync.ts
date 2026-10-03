@@ -22,7 +22,7 @@ import type {
 } from '@shared/types'
 import { emptyStore } from './migrate'
 import { isListed } from '@shared/listed'
-import { stamp } from '@shared/store/core'
+import { nextStamp, stamp } from '@shared/store/core'
 
 /** TMDB path fragments are stored bare; the shared format carries full URLs. */
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
@@ -310,7 +310,10 @@ export function importIntoStore(
       // Stamped like any other change to the list. Unstamped, the next sync
       // took it for an old value: a device that had touched its list since
       // took the imported providers away again, and the rest never saw them.
-      store.preferenceUpdatedAt = { ...store.preferenceUpdatedAt, activeProviderIds: Date.now() }
+      store.preferenceUpdatedAt = {
+        ...store.preferenceUpdatedAt,
+        activeProviderIds: nextStamp(store.preferenceUpdatedAt.activeProviderIds),
+      }
     }
   }
 

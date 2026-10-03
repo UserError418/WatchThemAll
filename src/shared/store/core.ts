@@ -190,7 +190,25 @@ function newDeviceId(): string {
  * skip the question.
  */
 export function stamp<T>(record: T, now = Date.now()): Synced<T> {
-  return { ...record, updatedAt: now, deletedAt: null } as Synced<T>
+  // A record that already carries a stamp (an importer changing one it found)
+  // is stamped past it; see `nextStamp`.
+  const previous = (record as { updatedAt?: unknown }).updatedAt
+  return { ...record, updatedAt: nextStamp(typeof previous === 'number' ? previous : null, now), deletedAt: null } as Synced<T>
+}
+
+/**
+ * The stamp for a change to something last stamped at `previous`: the clock,
+ * unless the clock has not reached that version yet.
+ *
+ * Every stamp is the device's wall clock, and two devices' clocks disagree. A
+ * phone running an hour fast stamped its edits an hour ahead, and an edit made
+ * here five minutes later, by someone who had seen the phone's, lost to it on
+ * every sync for the rest of that hour. One past the version it replaces
+ * makes an edit beat what it was made over, whatever the clocks say, and
+ * changes nothing while they agree.
+ */
+export function nextStamp(previous: number | null | undefined, now = Date.now()): number {
+  return typeof previous === 'number' && previous >= now ? previous + 1 : now
 }
 
 /** `stamp` for a list, with one timestamp shared by all of them. */
@@ -382,7 +400,7 @@ export class StoreCore {
         const now = Date.now()
         const next = [...(this.doc[key] as RecordOf<K>[])]
         const at = indexOf(identify(key, record))
-        if (at >= 0) next[at] = stamped(record, now)
+        if (at >= 0) next[at] = stamped(record, nextStamp(next[at]!.updatedAt, now))
         else next.push(stamped(record, now))
         write(next)
       },
@@ -401,7 +419,7 @@ export class StoreCore {
             positions.set(id, next.length)
             next.push(stamped(record, now))
           } else {
-            next[at] = stamped(record, now)
+            next[at] = stamped(record, nextStamp(next[at]!.updatedAt, now))
           }
         }
         write(next)
@@ -413,7 +431,7 @@ export class StoreCore {
         const current = (this.doc[key] as RecordOf<K>[])[at]!
         if (current.deletedAt !== null) return false
         const next = [...(this.doc[key] as RecordOf<K>[])]
-        next[at] = { ...current, ...changes, updatedAt: Date.now(), deletedAt: null } as RecordOf<K>
+        next[at] = { ...current, ...changes, updatedAt: nextStamp(current.updatedAt), deletedAt: null } as RecordOf<K>
         write(next)
         return true
       },
@@ -423,9 +441,9 @@ export class StoreCore {
         if (at < 0) return false
         const current = (this.doc[key] as RecordOf<K>[])[at]!
         if (current.deletedAt !== null) return false
-        const now = Date.now()
+        const when = nextStamp(current.updatedAt)
         const next = [...(this.doc[key] as RecordOf<K>[])]
-        next[at] = { ...current, updatedAt: now, deletedAt: now }
+        next[at] = { ...current, updatedAt: when, deletedAt: when }
         write(next)
         return true
       },
@@ -436,7 +454,8 @@ export class StoreCore {
         const next = (this.doc[key] as RecordOf<K>[]).map((record) => {
           if (record.deletedAt !== null || !predicate(record)) return record
           removed += 1
-          return { ...record, updatedAt: now, deletedAt: now }
+          const when = nextStamp(record.updatedAt, now)
+          return { ...record, updatedAt: when, deletedAt: when }
         })
         if (removed > 0) write(next)
         return removed
@@ -470,14 +489,15 @@ export class StoreCore {
              * un-delete, which is a change, and is stamped like one.
              */
             const unchanged = existing.deletedAt === null && sameContent(existing, replacement)
-            next.push(unchanged ? existing : stamped(replacement, now))
+            next.push(unchanged ? existing : stamped(replacement, nextStamp(existing.updatedAt, now)))
             if (!unchanged) changedAny = true
             wanted.delete(id)
           } else if (existing.deletedAt !== null) {
             next.push(existing)
           } else {
             // Present before, absent now: a deletion, not an omission.
-            next.push({ ...existing, updatedAt: now, deletedAt: now })
+            const when = nextStamp(existing.updatedAt, now)
+            next.push({ ...existing, updatedAt: when, deletedAt: when })
             changedAny = true
           }
         }
@@ -530,7 +550,7 @@ export class StoreCore {
     // The same value again is not a change: stamping it would also make this
     // device's copy look newer to the sync merge than it is.
     if (deepEqual(this.doc[key], value)) return
-    const now = Date.now()
+    const now = nextStamp(this.doc.preferenceUpdatedAt[key])
     const stamps = { ...this.doc.preferenceUpdatedAt }
     if (key === 'settings') stampSettingsFields(stamps, this.doc.settings, value as Settings, now)
     stamps[key] = now

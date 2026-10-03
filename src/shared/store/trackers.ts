@@ -58,10 +58,12 @@ export function withOneTrackerPerSeries(doc: StoreDocument, now: number): StoreD
 
   return {
     ...doc,
-    trackers: doc.trackers.map((tracker) =>
-      tracker.deletedAt === null && !kept.has(tracker.id)
-        ? { ...tracker, deletedAt: now, updatedAt: now }
-        : tracker,
-    ),
+    trackers: doc.trackers.map((tracker) => {
+      if (tracker.deletedAt !== null || kept.has(tracker.id)) return tracker
+      // One past the copy deleted, as `nextStamp` in core.ts does for every
+      // change, so a copy stamped by a clock running ahead is deleted too.
+      const when = Math.max(now, tracker.updatedAt + 1)
+      return { ...tracker, deletedAt: when, updatedAt: when }
+    }),
   }
 }

@@ -30,7 +30,7 @@ import { isListed } from '@shared/listed'
 import { NOTHING_AIRED_YET } from '@shared/aired'
 import { indexRatings, legacyRatingOf, ratingScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
-import { DEFAULT_SETTINGS } from '@shared/store/core'
+import { DEFAULT_SETTINGS, nextStamp } from '@shared/store/core'
 
 /**
  * The stored keys this library mirrors. A change to any other key (test
@@ -512,7 +512,8 @@ class Library {
       // Un-marking an episode that was never marked is not a change worth
       // recording; it would put a stamp in the document saying nothing happened.
       if (current === undefined && !watched && !entry.watchedEpisodes.includes(key)) continue
-      marks[key] = { watched, at }
+      // One past a mark from a device whose clock runs ahead: see `nextStamp`.
+      marks[key] = { watched, at: nextStamp(current?.at, at) }
       changed = true
     }
     if (!changed) return false
