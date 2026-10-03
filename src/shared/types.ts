@@ -545,8 +545,12 @@ export interface StoreShape {
    * merge needs to tell "the copy I wrote" from "the copy that arrived".
    */
   deviceId: string
-  /** Epoch ms per preference key; absent means "never set on this device". */
-  preferenceUpdatedAt: Partial<Record<PreferenceKey, number>>
+  /**
+   * Epoch ms per preference key; absent means "never set on this device".
+   * `settings` also has one per field (`settings.autoNext`) since 2.0.12; see
+   * `mergeSettings` in store/merge.ts.
+   */
+  preferenceUpdatedAt: Partial<Record<PreferenceKey | `settings.${string}`, number>>
 
   watchlist: Synced<WatchlistEntry>[]
   trackers: Synced<ReleaseTracker>[]

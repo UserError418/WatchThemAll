@@ -37,7 +37,7 @@ import {
   identify,
   pruneTombstones,
 } from './document'
-import { mergeDocuments } from './merge'
+import { mergeDocuments, stampsSettingsFields } from './merge'
 import { withOneTrackerPerSeries } from './trackers'
 import type {
   CollectionKey,
@@ -530,8 +530,12 @@ export class StoreCore {
     // The same value again is not a change: stamping it would also make this
     // device's copy look newer to the sync merge than it is.
     if (deepEqual(this.doc[key], value)) return
+    const now = Date.now()
+    const stamps = { ...this.doc.preferenceUpdatedAt }
+    if (key === 'settings') stampSettingsFields(stamps, this.doc.settings, value as Settings, now)
+    stamps[key] = now
     ;(this.doc as unknown as Record<string, unknown>)[key] = value
-    this.doc.preferenceUpdatedAt = { ...this.doc.preferenceUpdatedAt, [key]: Date.now() }
+    this.doc.preferenceUpdatedAt = stamps
     this.changed(key)
   }
 
@@ -691,6 +695,32 @@ function keepTombstones(current: StoreDocument, next: StoreDocument): StoreDocum
     }
   }
   return kept
+}
+
+/**
+ * Stamp each settings field that changed, for `mergeSettings`.
+ *
+ * A document that has only the object's stamp (from an older build) is read
+ * field by field by that one stamp. Its first change here hands that stamp to
+ * every field that did not change, rather than letting them borrow the new
+ * one: the object's stamp moves on with every change to any field, so this
+ * change to one field would otherwise undo a later change to another, made
+ * on another device.
+ */
+function stampSettingsFields(
+  stamps: StoreDocument['preferenceUpdatedAt'],
+  before: Settings,
+  after: Settings,
+  now: number,
+): void {
+  const previous = stampsSettingsFields(stamps) ? undefined : stamps.settings
+  const old = before as unknown as Record<string, unknown>
+  const next = after as unknown as Record<string, unknown>
+  for (const field of new Set([...Object.keys(old), ...Object.keys(next)])) {
+    const key = `settings.${field}` as const
+    if (!deepEqual(old[field], next[field])) stamps[key] = now
+    else if (stamps[key] === undefined && previous !== undefined) stamps[key] = previous
+  }
 }
 
 /** The sync metadata, which says when a record changed rather than what it is. */

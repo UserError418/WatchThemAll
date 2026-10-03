@@ -129,9 +129,13 @@ export function identify<K extends CollectionKey>(key: K, record: InputOf<K>): s
 /**
  * The scalar fields, stamped by key rather than by record.
  *
- * `settings` is deliberately one unit even though it is an object: its fields
- * are read together and changed from one screen, and per-field stamps would
- * triple the bookkeeping to settle an argument nobody is having.
+ * `settings` was one unit until 2.0.12, on the reasoning that its fields are
+ * read together and changed from one screen. That stopped being true: the
+ * subtitle language is set from the player and preview sound from the detail
+ * view, so picking subtitles on one device carried the whole object over a
+ * setting just changed on another. Its fields now carry a stamp each as well
+ * (`settings.<field>`, see `mergeSettings`), and the key's own stamp is kept
+ * as the latest of them, for older builds that still merge it whole.
  */
 export type Preferences = Pick<StoreShape, PreferenceKey>
 

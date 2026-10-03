@@ -48,7 +48,7 @@
  * unreviewable.
  */
 
-import type { EpisodeMark, EpisodeStub, PreferenceKey, StoreShape, Synced } from '../types'
+import type { EpisodeMark, EpisodeStub, PreferenceKey, Settings, StoreShape, Synced } from '../types'
 import { mergeSharedScans } from '../scanshare'
 import {
   COLLECTION_KEYS,
@@ -299,6 +299,12 @@ function mergePreferences(
   const stamps: StoreShape['preferenceUpdatedAt'] = {}
 
   for (const key of PREFERENCE_KEYS) {
+    if (key === 'settings') {
+      const settings = mergeSettings(local, remote)
+      values.settings = settings.value
+      Object.assign(stamps, settings.stamps)
+      continue
+    }
     const localStamp = local.preferenceUpdatedAt[key]
     const remoteStamp = remote.preferenceUpdatedAt[key]
 
@@ -315,6 +321,60 @@ function mergePreferences(
   }
 
   return { ...values, preferenceUpdatedAt: stamps }
+}
+
+/**
+ * Whether a document stamps its settings field by field. Written by 2.0.12 or
+ * later, and not since merged by an older build, whose merge keeps only the
+ * object's stamp.
+ */
+export function stampsSettingsFields(stamps: StoreShape['preferenceUpdatedAt']): boolean {
+  return Object.keys(stamps).some((key) => key.startsWith('settings.'))
+}
+
+/**
+ * Settings, one field at a time.
+ *
+ * They were one preference with one stamp, on the reasoning that they are
+ * changed together from one screen. With the subtitle language set from the
+ * player and preview sound from the detail view, that no longer held: picking
+ * subtitles on the phone carried its whole settings object over a setting just
+ * changed on the desktop. Each field is now decided on its own stamp
+ * (`settings.<field>`). A document from an older build carries none, so there
+ * every field is read by the object's stamp; in one that stamps fields, a
+ * field without a stamp has never been set. Ties go to the local side, as
+ * for the other preferences; a field only one side has is taken from it.
+ *
+ * The object's stamp stays the latest of all, because an older build still
+ * merges settings as one unit and compares only that.
+ */
+function mergeSettings(
+  local: StoreDocument,
+  remote: StoreDocument,
+): { value: Settings; stamps: StoreShape['preferenceUpdatedAt'] } {
+  const stampOf = (doc: StoreDocument, field: string): number | undefined =>
+    stampsSettingsFields(doc.preferenceUpdatedAt)
+      ? doc.preferenceUpdatedAt[`settings.${field}`]
+      : doc.preferenceUpdatedAt.settings
+  const mine = local.settings as unknown as Record<string, unknown>
+  const theirs = remote.settings as unknown as Record<string, unknown>
+  const value: Record<string, unknown> = {}
+  const stamps: StoreShape['preferenceUpdatedAt'] = {}
+
+  for (const field of new Set([...Object.keys(mine), ...Object.keys(theirs)])) {
+    const localStamp = stampOf(local, field)
+    const remoteStamp = stampOf(remote, field)
+    const takeRemote =
+      !(field in mine) ||
+      (field in theirs && remoteStamp !== undefined && (localStamp === undefined || remoteStamp > localStamp))
+    value[field] = takeRemote ? theirs[field] : mine[field]
+    const stamp = takeRemote ? remoteStamp : localStamp
+    if (stamp !== undefined) stamps[`settings.${field}`] = stamp
+  }
+
+  const whole = Math.max(local.preferenceUpdatedAt.settings ?? -Infinity, remote.preferenceUpdatedAt.settings ?? -Infinity)
+  if (Number.isFinite(whole)) stamps.settings = whole
+  return { value: value as unknown as Settings, stamps }
 }
 
 /* ── The merge ──────────────────────────────────────────────────────────── */
