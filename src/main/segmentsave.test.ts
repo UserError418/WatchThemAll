@@ -18,6 +18,7 @@ function playlist(count: number, seconds: number, prefix: string): string {
 function fakeIo(texts: Record<string, string>, broken: string[] = []) {
   const written: Record<string, string> = {}
   const downloads: string[] = []
+  const removed: string[] = []
   const io: SaveIo = {
     async fetchText(url) {
       return url in texts ? { status: 200, body: texts[url]! } : null
@@ -30,8 +31,11 @@ function fakeIo(texts: Record<string, string>, broken: string[] = []) {
     async writeText(name, text) {
       written[name] = text
     },
+    async remove(name) {
+      removed.push(name)
+    },
   }
-  return { io, written, downloads }
+  return { io, written, downloads, removed }
 }
 
 const FILM = { seconds: 600, duration: 2518.7 }
@@ -75,9 +79,19 @@ describe('saveStreamWindow', () => {
       ['https://cdn.example/seg/123.ts'],
     )
     const outcome = await saveStreamWindow([{ url: 'https://cdn.example/ep/index.m3u8', headers: HEADERS }], FILM, 42, io)
-    // The fifth segment arrived too, after the broken fourth, and is on disk.
-    expect(outcome).toEqual({ ok: true, startSeconds: 600, endSeconds: 615, bytes: 4 * 1_300_000 })
+    // The fifth segment arrived too, after the broken fourth; neither stays.
+    expect(outcome).toEqual({ ok: true, startSeconds: 600, endSeconds: 615, bytes: 3 * 1_300_000 })
     expect(written['index.m3u8']?.match(/#EXTINF/g)).toHaveLength(3)
+  })
+
+  it('deletes every segment it does not keep, starting with the one that is not video', async () => {
+    const { io, removed } = fakeIo(
+      { 'https://cdn.example/ep/index.m3u8': playlist(504, 5, 'https://cdn.example/seg/') },
+      ['https://cdn.example/seg/123.ts'],
+    )
+    await saveStreamWindow([{ url: 'https://cdn.example/ep/index.m3u8', headers: HEADERS }], FILM, 42, io)
+
+    expect(removed).toEqual(['s3.ts', 's4.ts'])
   })
 
   it('refuses a playlist that is not the film the player showed', async () => {

@@ -54,6 +54,9 @@ function memoryFiles(existing: string[] = [], index: string | null = null) {
         async writeText(fileName, text) {
           dir.set(fileName, text)
         },
+        async remove(fileName) {
+          dir.delete(fileName)
+        },
       }
       return io
     },

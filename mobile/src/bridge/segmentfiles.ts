@@ -43,6 +43,9 @@ function windowIo(dir: string): SaveIo {
     async writeText(name, text) {
       await Filesystem.writeFile({ path: `${dir}/${name}`, directory: DIRECTORY, data: text, encoding: Encoding.UTF8 })
     },
+    async remove(name) {
+      await Filesystem.deleteFile({ path: `${dir}/${name}`, directory: DIRECTORY }).catch(() => {})
+    },
   }
 }
 

@@ -56,6 +56,8 @@ export interface SaveIo extends StreamFetch {
   download(url: string, headers: Record<string, string>, name: string): Promise<{ status: number; bytes: number; head: Uint8Array } | null>
   /** Write `text` as `name` in the window's directory. */
   writeText(name: string, text: string): Promise<void>
+  /** Delete `name` from the window's directory; nothing when it is not there. */
+  remove(name: string): Promise<void>
 }
 
 export type SaveOutcome =
@@ -229,9 +231,14 @@ export async function saveStreamWindow(
     if (results[i] === null || results[i] === undefined) break
     kept.push(segment)
   }
-  // Every file written counts against the budget, played or not: a segment
-  // after a failed one arrived all the same.
-  for (const size of results) bytes += size ?? 0
+  // What is not kept is deleted, not left on disk beside the window. A
+  // segment that failed its check holds whatever the source served in its
+  // place, and the app's files are served under the app's own origin on the
+  // phone (`PlayerNavigationClient.isFileDocument`). The budget counts what stays.
+  for (const [i, segment] of window.segments.entries()) {
+    if (i >= kept.length) await io.remove(nameOf(segment.url))
+  }
+  for (const size of results.slice(0, kept.length)) bytes += size ?? 0
   if (kept.length === 0) return { ok: false, reason: 'segments-unreachable' }
   const last = kept[kept.length - 1]!
   const endSeconds = last.start + last.seconds

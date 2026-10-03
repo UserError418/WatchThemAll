@@ -65,6 +65,9 @@ function windowIo(dir: string): SaveIo {
     async writeText(name, text) {
       await writeFile(join(dir, name), text, 'utf8')
     },
+    async remove(name) {
+      await rm(join(dir, name), { force: true })
+    },
   }
 }
 
