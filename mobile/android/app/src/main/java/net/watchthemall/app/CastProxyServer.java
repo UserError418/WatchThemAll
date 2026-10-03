@@ -6,7 +6,9 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
@@ -53,13 +55,15 @@ import java.util.concurrent.RejectedExecutionException;
  * can only ever fetch something already decided on, which is a property the
  * query-string design cannot be given afterwards. Unknown id, 404, no fetch.
  *
- * ## Why it binds a wildcard address when the desktop's server does not
+ * ## Why it binds a network address when the desktop's server does not
  *
  * `localserver.ts` binds 127.0.0.1 precisely so nothing off the machine can
  * reach it. This one is useless under that rule: the whole point is that
- * another device fetches from it. The mitigations are the ones above — no URL
- * route, ids valid only for the session that registered them, and the server
- * stopped the moment casting stops.
+ * another device fetches from it. It binds the one address the receiver
+ * reaches it at (`lanAddress`), not every interface, so a VPN or mobile data
+ * is never offered it. The mitigations are the ones above — no URL route,
+ * unguessable ids valid only for the session that registered them, and the
+ * server stopped the moment casting stops.
  *
  * ## Scope
  *
@@ -132,13 +136,20 @@ public final class CastProxyServer {
     /** Headers to replay upstream, already filtered. */
     private final Map<String, String> upstreamHeaders = new ConcurrentHashMap<>();
 
-    /** Start listening, returning the bound port. Idempotent. */
-    public synchronized int start() throws IOException {
-        if (socket != null && !socket.isClosed()) return port;
+    /**
+     * Start listening on `address`, returning the bound port. Idempotent for
+     * the same address; a new one means the phone changed networks, where the
+     * old address reaches nobody, so the server moves to it.
+     */
+    public synchronized int start(InetAddress address) throws IOException {
+        if (socket != null && !socket.isClosed()) {
+            if (address.equals(socket.getInetAddress())) return port;
+            stop();
+        }
 
         ServerSocket listening = new ServerSocket();
         listening.setReuseAddress(true);
-        listening.bind(new InetSocketAddress(0));
+        listening.bind(new InetSocketAddress(address, 0));
 
         // Bounded: a Chromecast opens a handful of connections at a time, and an
         // unbounded pool would turn a misbehaving receiver into an OOM.
@@ -200,30 +211,57 @@ public final class CastProxyServer {
         return false;
     }
 
+    /** The port a Cast receiver listens on; only ever used to find a route, nothing is sent. */
+    private static final int CAST_PORT = 8009;
+
     /**
-     * The address a Chromecast can reach this phone at.
+     * The address the receiver can reach this phone at.
      *
-     * Returns null when there is no non-loopback IPv4 address, which is the
-     * honest answer when the phone is on mobile data: casting is impossible and
-     * the caller must say so rather than hand out an address that will time out.
+     * With the receiver's own address known, the local end of the route to it:
+     * that is the interface its requests will arrive on. This used to take the
+     * first IPv4 address of any interface, and a VPN's, or mobile data's when
+     * Android keeps it up beside Wi-Fi, could come first; the receiver was
+     * then handed an address it cannot reach and the cast timed out with
+     * nothing to say why. Without the receiver's address, a Wi-Fi interface's,
+     * then any.
+     *
+     * IPv4 only: a Chromecast is reachable over v4 on every home network, and a
+     * link-local v6 address would need a scope id the receiver has no way to
+     * use. Null when there is none, which is the honest answer on mobile data:
+     * the caller says so rather than hand out an address that will time out.
      */
-    public static String lanAddress() {
+    public static InetAddress lanAddress(InetAddress receiver) {
+        InetAddress routed = routeTo(receiver);
+        if (routed != null) return routed;
+        InetAddress any = null;
         try {
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
             for (NetworkInterface network : interfaces) {
                 if (!network.isUp() || network.isLoopback()) continue;
                 for (InetAddress address : Collections.list(network.getInetAddresses())) {
-                    if (address.isLoopbackAddress()) continue;
-                    // IPv4 only: a Chromecast is reachable over v4 on every home
-                    // network, and a link-local v6 address would need a scope id
-                    // the receiver has no way to use.
-                    if (address.getHostAddress() != null && address.getHostAddress().indexOf(':') < 0) {
-                        return address.getHostAddress();
-                    }
+                    if (!(address instanceof Inet4Address) || address.isLoopbackAddress()) continue;
+                    if (network.getName().startsWith("wlan")) return address;
+                    if (any == null) any = address;
                 }
             }
         } catch (Exception error) {
             Log.w(TAG, "no LAN address: " + error);
+        }
+        return any;
+    }
+
+    /**
+     * The local address a packet to `receiver` would leave from, or null.
+     * Connecting a datagram socket only asks the routing table; nothing is sent.
+     */
+    static InetAddress routeTo(InetAddress receiver) {
+        if (receiver == null) return null;
+        try (DatagramSocket probe = new DatagramSocket()) {
+            probe.connect(receiver, CAST_PORT);
+            InetAddress local = probe.getLocalAddress();
+            if (local instanceof Inet4Address && !local.isAnyLocalAddress() && !local.isLoopbackAddress()) return local;
+        } catch (Exception error) {
+            Log.w(TAG, "no route to the receiver: " + error);
         }
         return null;
     }

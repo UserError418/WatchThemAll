@@ -14,6 +14,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.google.android.gms.cast.CastDevice;
 import com.google.android.gms.cast.CastMediaControlIntent;
 import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaLoadRequestData;
@@ -33,6 +34,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -355,28 +357,45 @@ public class CastPlugin extends Plugin {
      */
     @PluginMethod
     public void startProxy(PluginCall call) {
+        // The receiver's address belongs to the Cast session, which is the
+        // main thread's to read; finding the route to it opens a socket, which
+        // Android refuses on the main thread. Hence the two hops.
+        getActivity().runOnUiThread(() -> {
+            InetAddress receiver = receiverAddress();
+            fetchPool.execute(() -> startProxyNow(call, receiver));
+        });
+    }
+
+    private void startProxyNow(PluginCall call, InetAddress receiver) {
         try {
             JSObject playlistsIn = call.getObject("playlists", new JSObject());
             JSObject targetsIn = call.getObject("targets", new JSObject());
             JSObject headersIn = call.getObject("headers", new JSObject());
 
-            String address = CastProxyServer.lanAddress();
+            InetAddress address = CastProxyServer.lanAddress(receiver);
             if (address == null) {
                 call.reject("no local network address — casting needs Wi-Fi");
                 return;
             }
 
-            int port = proxy.start();
+            int port = proxy.start(address);
             proxy.load(toMap(playlistsIn), toMap(targetsIn), toMap(headersIn));
             CastKeepAliveService.start(getContext());
             startProgress();
 
             JSObject result = new JSObject();
-            result.put("base", "http://" + address + ":" + port + "/");
+            result.put("base", "http://" + address.getHostAddress() + ":" + port + "/");
             call.resolve(result);
         } catch (Exception error) {
             call.reject("proxy failed to start: " + error.getMessage());
         }
+    }
+
+    /** The connected receiver's address, or null with none. Main thread only. */
+    private InetAddress receiverAddress() {
+        CastSession session = currentSession();
+        CastDevice device = session != null ? session.getCastDevice() : null;
+        return device != null ? device.getInetAddress() : null;
     }
 
     @PluginMethod

@@ -8,7 +8,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -109,7 +112,7 @@ public class CastProxyServerTest {
     public void aClientTricklingItsHeadIsHungUpOnAtTheDeadline() throws Exception {
         CastProxyServer quick = new CastProxyServer(300);
         try {
-            int port = quick.start();
+            int port = quick.start(InetAddress.getLoopbackAddress());
             quick.load(new HashMap<>(), new HashMap<>(Collections.singletonMap("s0", upstream.chunked(1000))), new HashMap<>());
             try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), port)) {
                 socket.setSoTimeout(5_000);
@@ -141,10 +144,47 @@ public class CastProxyServerTest {
         assertNull(uncaught.get());
     }
 
+    @Test
+    public void theAddressOfferedIsTheOneThatRoutesToTheReceiver() throws Exception {
+        InetAddress receiver = someNetworkAddress();
+        Assume.assumeNotNull(receiver);
+
+        // A receiver on this machine's own network address: the route to it
+        // leaves from that address, whatever else is up.
+        assertEquals(receiver, CastProxyServer.lanAddress(receiver));
+    }
+
+    @Test
+    public void theProxyListensOnTheAddressItWasGivenOnly() throws Exception {
+        InetAddress elsewhere = someNetworkAddress();
+        Assume.assumeNotNull(elsewhere);
+        int port = proxy.start(InetAddress.getLoopbackAddress());
+
+        boolean reachedElsewhere;
+        try (Socket socket = new Socket(elsewhere, port)) {
+            reachedElsewhere = true;
+        } catch (IOException refused) {
+            reachedElsewhere = false;
+        }
+
+        assertEquals(false, reachedElsewhere);
+    }
+
+    /** One of this machine's non-loopback IPv4 addresses, or null with none. */
+    private static InetAddress someNetworkAddress() throws IOException {
+        for (NetworkInterface network : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+            if (!network.isUp() || network.isLoopback()) continue;
+            for (InetAddress address : Collections.list(network.getInetAddresses())) {
+                if (address instanceof Inet4Address && !address.isLoopbackAddress()) return address;
+            }
+        }
+        return null;
+    }
+
     /* ── Helpers ─────────────────────────────────────────────────────────── */
 
     private int startServing(Map<String, String> targets) throws IOException {
-        int port = proxy.start();
+        int port = proxy.start(InetAddress.getLoopbackAddress());
         proxy.load(new HashMap<>(), new HashMap<>(targets), new HashMap<>());
         return port;
     }
