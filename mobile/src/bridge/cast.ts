@@ -382,6 +382,8 @@ export function createCastBridge(): CastBridge {
     async beam(now: NowPlaying): Promise<PhoneBeamResult> {
       /** How the identified stream arrived, once there is one. */
       let delivery: PhoneBeamResult['delivery']
+      /** This attempt has replaced what the proxy serves; see the catch. */
+      let proxyLoaded = false
       try {
         const { candidates } = await Cast.candidates()
         if (candidates.length === 0) {
@@ -415,6 +417,7 @@ export function createCastBridge(): CastBridge {
           targets: Object.fromEntries(bundle.targets.map((t) => [t.id, t.url])),
           headers: stream.headers,
         })
+        proxyLoaded = true
 
         await Cast.loadMedia({
           // The `.m3u8` suffix is for the receiver's benefit: it sniffs the
@@ -428,12 +431,18 @@ export function createCastBridge(): CastBridge {
 
         return { ok: true, providerName: now.providerName, delivery }
       } catch (error) {
-        // The proxy must not outlive a failed attempt: it would sit on the
-        // network serving a stream nothing is watching.
-        try {
-          await Cast.stopProxy()
-        } catch {
-          // Already down, which is the state we wanted.
+        // The proxy must not outlive an attempt that failed after loading it:
+        // it would sit on the network serving a stream nothing is watching.
+        // One that failed earlier (a variant playlist refused, say) never
+        // touched it, and the proxy may still be serving the film the
+        // television is playing from an earlier beam: "Change source" to a
+        // source that would not give up its stream stopped the working one.
+        if (proxyLoaded) {
+          try {
+            await Cast.stopProxy()
+          } catch {
+            // Already down, which is the state we wanted.
+          }
         }
         return { ok: false, error: messageOf(error), delivery }
       }
