@@ -189,13 +189,23 @@ export interface WatchlistTester {
  */
 const DEFAULT_INTERVAL_MS = 60_000
 
+/** How long a title found not out yet is passed over before it is looked up again. */
+const UNRELEASED_RECHECK_MS = 24 * 60 * 60_000
+
 export function createWatchlistTester(options: WatchlistTesterOptions): WatchlistTester {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS
   let timer: ReturnType<typeof setTimeout> | null = null
   let running = false
   let testing = false
-  /** Titles found unreleased, until the next launch. Re-looking every minute would be pointless. */
-  const unreleased = new Set<string>()
+  /**
+   * Titles found unreleased, and when. Re-looking every minute would be
+   * pointless, but this used to hold them until the next launch, and the
+   * desktop app stays open for days: a title that came out meanwhile was not
+   * tested until a restart. So a day.
+   */
+  const unreleased = new Map<string, number>()
+  const notOutYet = (now: number): ReadonlySet<string> =>
+    new Set([...unreleased].filter(([, foundAt]) => now - foundAt < UNRELEASED_RECHECK_MS).map(([key]) => key))
   let current: WatchlistTestStatus = {
     state: 'idle',
     pausedFor: null,
@@ -215,7 +225,7 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
       providers: options.providers(),
       scans: options.scans(),
       now,
-      skip: unreleased,
+      skip: notOutYet(now),
     })
     current = { state, pausedFor: null, title: null, providerName: null, ...counts, ...extra }
     options.onStatus(current)
@@ -244,7 +254,7 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
       providers: options.providers(),
       scans: options.scans(),
       now,
-      skip: unreleased,
+      skip: notOutYet(now),
     })
     if (!plan) {
       // Nothing due. Look again later: results age into re-tests, and the
@@ -263,7 +273,7 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
         return
       }
       if (!facts.released) {
-        unreleased.add(plan.titleKey)
+        unreleased.set(plan.titleKey, Date.now())
         publish('waiting')
         return
       }

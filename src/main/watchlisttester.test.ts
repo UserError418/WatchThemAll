@@ -239,6 +239,23 @@ describe('the tester loop', () => {
     tester.stop()
   })
 
+  /**
+   * The bug: a title found not out yet was passed over until the next launch,
+   * and the desktop app stays open for days.
+   */
+  it('looks again the next day at a title that was not out yet', async () => {
+    let released = false
+    const { tester, probeOne } = harness({ lookUp: async () => ({ released, imdbId: 'tt1', lastAired: null }) })
+    tester.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(probeOne).not.toHaveBeenCalled()
+
+    released = true
+    await vi.advanceTimersByTimeAsync(25 * 60 * 60_000)
+    expect(probeOne).toHaveBeenCalled()
+    tester.stop()
+  })
+
   it('tests one provider a minute, not faster', async () => {
     const { tester, probeOne } = harness({ providers: () => [provider('a'), provider('b'), provider('c')] })
     tester.start()
