@@ -341,6 +341,28 @@ describe('checkAll', () => {
     expect(store.puts).toHaveLength(1)
   })
 
+  /**
+   * The bug: an unreachable TMDB stamped every tracker as checked, so a sweep
+   * that ran before the network was up put the next one an interval away.
+   */
+  it('leaves a tracker it could not check due for the next sweep', async () => {
+    const store = storeOf([tracker('a', 1)])
+    vi.mocked(tmdb.detail).mockRejectedValue(new TypeError('fetch failed'))
+
+    await checkAll(store)
+
+    expect(store.trackers[0]!.lastChecked).toBe(0)
+  })
+
+  it('counts a series TMDB says it does not have as checked', async () => {
+    const store = storeOf([tracker('a', 1)])
+    vi.mocked(tmdb.detail).mockRejectedValue(Object.assign(new Error('TMDB has no /tv/1'), { name: 'TmdbNotFound' }))
+
+    await checkAll(store)
+
+    expect(store.trackers[0]!.lastChecked).toBeGreaterThan(0)
+  })
+
   /** Every tracker's `lastChecked` moves, so one write per tracker was a full save each. */
   it('writes every checked tracker in one go', async () => {
     const store = storeOf([tracker('a', 1), tracker('b', 2), tracker('c', 3)])

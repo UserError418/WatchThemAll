@@ -285,7 +285,12 @@ async function sweep(store: SweepableStore): Promise<ReleaseNotice[]> {
     } catch (err) {
       // One unreachable series must not stop the rest of the sweep.
       console.error(`[releases] check failed for "${checked.title}":`, err)
-      checked.lastChecked = Date.now()
+      // Only TMDB saying the series does not exist counts as checked. Being
+      // unable to ask did, too, and a sweep that ran before the network was up
+      // (the one shortly after start-up, on a laptop just woken) then stamped
+      // every tracker and nothing was checked for a whole interval. Unstamped,
+      // the next timed sweep, at most `MIN_GAP_MS` away, tries again.
+      if (isNotFound(err)) checked.lastChecked = Date.now()
     }
 
     const update: Partial<ReleaseTracker> = {}
@@ -306,6 +311,11 @@ async function sweep(store: SweepableStore): Promise<ReleaseNotice[]> {
     store.collection('trackers').putMany(kept.map(({ id, update }) => ({ ...live.get(id)!, ...update })))
   }
   return kept.flatMap(({ notice }) => (notice ? [notice] : []))
+}
+
+/** TMDB's answer that it has no such series, as distinct from not being reachable (`TmdbNotFound`). */
+function isNotFound(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TmdbNotFound'
 }
 
 /** Human-readable summary for a notification body. */
