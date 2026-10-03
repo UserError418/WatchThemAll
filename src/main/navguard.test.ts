@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { isForeignNavigation } from './navguard'
+import { isForeignNavigation, isShellHijack } from './navguard'
 
 const VIDEASY = 'https://player.videasy.to/tv/1396/1/2'
 
@@ -56,5 +56,27 @@ describe('isForeignNavigation', () => {
   it('treats an address as its own site', () => {
     expect(isForeignNavigation('http://10.0.0.5/embed', 'http://10.0.0.5/other', null)).toBe(false)
     expect(isForeignNavigation('http://10.0.0.5/embed', 'http://10.0.9.5/other', null)).toBe(true)
+  })
+})
+
+describe('isShellHijack', () => {
+  const SHELL = 'http://127.0.0.1:41235/__player?src=https%3A%2F%2Fvidsrc.to%2Fembed%2Fmovie%2F550'
+
+  it("stops a page sending the player's shell to another site", () => {
+    expect(isShellHijack(SHELL, 'https://nq.ernesseallow.cfd/click?z=1')).toBe(true)
+    // Not even to the source's own site: the source belongs inside the shell, not instead of it.
+    expect(isShellHijack(SHELL, 'https://vidsrc.to/embed/movie/550')).toBe(true)
+    // Another port on the same machine is another origin.
+    expect(isShellHijack(SHELL, 'http://127.0.0.1:8080/')).toBe(true)
+  })
+
+  it("lets everything on the shell's own origin through", () => {
+    expect(isShellHijack(SHELL, 'http://127.0.0.1:41235/__player?src=x')).toBe(false)
+    expect(isShellHijack(SHELL, 'http://127.0.0.1:41235/__player?preview=1')).toBe(false)
+  })
+
+  it('lets the first load into an empty view through', () => {
+    expect(isShellHijack('', 'http://127.0.0.1:41235/__player?src=x')).toBe(false)
+    expect(isShellHijack('about:blank', 'http://127.0.0.1:41235/__player?src=x')).toBe(false)
   })
 })

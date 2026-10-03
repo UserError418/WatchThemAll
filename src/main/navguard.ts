@@ -69,3 +69,34 @@ export function isForeignNavigation(from: string, to: string, providerUrl: strin
   const provider = webHost(providerUrl)
   return provider === null || site !== siteOf(provider)
 }
+
+/**
+ * Should a navigation of the shell itself be stopped?
+ *
+ * The shell is the page main loads into the player and the stream preview
+ * (`/__player`), and main moves it only with `loadURL`, which never raises a
+ * navigation event. So a request to navigate it came from a page inside it: a
+ * source, or an advert in one, setting `window.top.location`. Chromium lets a
+ * frame do that once the user has clicked in it, and clicking a source's
+ * poster is how most of them start. Left alone, the whole player became the
+ * advert's page, with the player's own bridge, while the user still thought
+ * it was the app. (The phone has refused this from the start, in
+ * `PlayerNavigationClient`.)
+ *
+ * Anything on the shell's own origin passes, which is every navigation the
+ * app makes, and so does the first load into an empty view.
+ */
+export function isShellHijack(shellUrl: string, to: string): boolean {
+  let current: URL
+  try {
+    current = new URL(shellUrl)
+  } catch {
+    return false
+  }
+  if (current.protocol !== 'http:' && current.protocol !== 'https:') return false
+  try {
+    return new URL(to).origin !== current.origin
+  } catch {
+    return true
+  }
+}

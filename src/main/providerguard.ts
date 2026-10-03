@@ -14,7 +14,7 @@
 
 import { webFrameMain, type Session, type WebContents } from 'electron'
 import { decide } from './adblock'
-import { isForeignNavigation } from './navguard'
+import { isForeignNavigation, isShellHijack } from './navguard'
 
 /**
  * No popups, and never a download from a source's page.
@@ -79,14 +79,22 @@ export function blockAdverts(session: Session, pageOrigin: () => string | null):
  * Keep the provider's page where we put it: `isForeignNavigation`.
  *
  * The provider's document is the shell's direct child. The shell's own
- * navigations are ours (every source change is a `loadURL` of the shell), and
- * the provider's inner frames may go where they like, because what the user
- * sees is decided by the document that holds them.
+ * navigations are ours (every source change is a `loadURL` of the shell, which
+ * raises no event), so one that arrives here was asked for by a page and is
+ * refused unless it stays on the shell's origin (`isShellHijack`). The
+ * provider's inner frames may go where they like, because what the user sees
+ * is decided by the document that holds them.
  */
 export function keepProviderInPlace(contents: WebContents, providerUrl: () => string | null): void {
   contents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame) {
+      if (!isShellHijack(contents.getURL(), details.url)) return
+      console.log(`[navguard] kept the shell from navigating to ${originOf(details.url)}`)
+      details.preventDefault()
+      return
+    }
     const frame = details.frame
-    if (details.isMainFrame || frame === null || frame.parent !== contents.mainFrame) return
+    if (frame === null || frame.parent !== contents.mainFrame) return
     if (!isForeignNavigation(frame.url, details.url, providerUrl())) return
     console.log(`[navguard] kept ${frame.origin} from navigating to ${new URL(details.url).origin}`)
     details.preventDefault()
@@ -117,4 +125,13 @@ export function installFilmRelay(contents: WebContents, relayScript: string): vo
   contents.on('did-frame-finish-load', (_event, isMainFrame, processId, routingId) => {
     if (!isMainFrame) install(webFrameMain.fromId(processId, routingId))
   })
+}
+
+/** For the log: a URL's origin, or the URL itself when it has none worth naming. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url
+  }
 }
