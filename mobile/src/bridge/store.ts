@@ -43,13 +43,10 @@ function isMissingFile(err: unknown): boolean {
 export class CapacitorPersistence implements StorePersistence {
   /** Where each write lands before it replaces the file; see `write`. */
   private readonly tempFile: string
-  /** Where an unparseable document is kept, so a fresh start is not a data loss. */
-  private readonly corruptFile: string
 
   /** `file` is a name ending in `.json`, such as `watchthemall.json`. */
   constructor(private readonly file: string) {
     this.tempFile = `${file}.tmp`
-    this.corruptFile = file.replace(/\.json$/, '.corrupt.json')
   }
 
   async read(): Promise<string | null> {
@@ -118,17 +115,16 @@ export class CapacitorPersistence implements StorePersistence {
     await Filesystem.rename({ from: this.tempFile, to: this.file, directory: DIRECTORY, toDirectory: DIRECTORY })
   }
 
-  async quarantine(): Promise<void> {
-    // One slot, unlike the desktop's timestamped copies: phone storage is not
-    // something the user can browse to clean up, and the *first* failure holds
-    // the most data — so a repeat launch must not overwrite it. `copy` fails
-    // silently here if the destination exists, which is the behaviour wanted.
-    await Filesystem.copy({
-      from: this.file,
-      directory: DIRECTORY,
-      to: this.corruptFile,
-      toDirectory: DIRECTORY,
-    })
+  async quarantine(): Promise<string> {
+    // Timestamped, like the desktop's copies, so every incident is kept. This
+    // was one fixed slot, to keep the first failure from being overwritten;
+    // but `copy` will not overwrite, so a second incident months later could
+    // not be kept at all, and the store then wrote an empty library over the
+    // only copy of it. A copy that fails throws, and the store then leaves the
+    // file alone for the session.
+    const copy = this.file.replace(/\.json$/, `.corrupt-${Date.now()}.json`)
+    await Filesystem.copy({ from: this.file, directory: DIRECTORY, to: copy, toDirectory: DIRECTORY })
+    return copy
   }
 }
 

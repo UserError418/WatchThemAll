@@ -61,7 +61,13 @@ export class ResultStore {
       const items = Array.isArray(parsed.items) ? parsed.items.filter(isSourceResult) : []
       this.items = pruneResults(items, this.now())
     } catch {
-      await this.persistence.quarantine().catch(() => {})
+      try {
+        await this.persistence.quarantine()
+      } catch {
+        // No copy could be kept: leave the file alone this session, as the
+        // library's store does, rather than write over the only copy.
+        this.readFailed = true
+      }
       this.items = []
     }
   }

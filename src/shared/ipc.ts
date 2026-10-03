@@ -46,6 +46,7 @@ export const CH = {
   storeRead: 'store:read',
   storeWrite: 'store:write',
   storeSeed: 'store:seed',
+  storeRecovered: 'store:recovered',
 
   tmdbRow: 'tmdb:row',
   tmdbDetail: 'tmdb:detail',
@@ -941,6 +942,12 @@ export interface WtaApi {
      * of their own so they never outrank a choice made on another device.
      */
     seed(patch: Partial<Pick<StoreShape, PreferenceKey>>): Promise<void>
+    /**
+     * What to tell the user when the library would not open and this session
+     * started from an empty one, with where the unreadable file was kept; null
+     * in every normal case. See `StoreCore.recovered`.
+     */
+    recovered(): Promise<string | null>
   }
   tmdb: {
     row(req: RowRequest | GenreRowRequest | DiscoverRequest): Promise<Paged<MediaSummary>>

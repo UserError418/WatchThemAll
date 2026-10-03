@@ -165,7 +165,7 @@ import { pickTextFile, shareTextFile } from './files'
 import { createMobileSync } from './sync'
 import { throttle } from '@shared/sync/throttle'
 import type { SyncStatus } from '@shared/sync/types'
-import { unreadableLibrary } from '@shared/store/core'
+import { recoveredLibrary, unreadableLibrary } from '@shared/store/core'
 import { batchChanges } from '@shared/store/changebatch'
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
@@ -2180,6 +2180,7 @@ export async function createBridge(): Promise<WtaApi> {
       seed: async (patch: Partial<StoreShape>) => {
         store.seedPatch(patch)
       },
+      recovered: async () => (store.recovered === null ? null : recoveredLibrary(store.recovered)),
     },
 
     tmdb: {

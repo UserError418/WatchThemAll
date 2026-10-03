@@ -159,6 +159,16 @@
       ready = true
     } catch (err) {
       loadError = err instanceof Error ? err.message : 'Could not load your library'
+      return
+    }
+    // The library would not open and this session started from an empty one:
+    // say so, and where the unreadable file was kept (`StoreCore.recovered`).
+    // Longer than other toasts, because it carries a path to note down.
+    const recovered = await window.wta.store.recovered().catch(() => null)
+    if (recovered !== null) {
+      toast = recovered
+      if (toastTimer) clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => (toast = null), 20_000)
     }
   }
 

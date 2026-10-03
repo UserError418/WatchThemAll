@@ -64,7 +64,7 @@ import { NO_CLIENT_REASON } from '@shared/sync/credentials'
 import type { SyncStatus } from '@shared/sync/types'
 import type { CastService, NowPlaying } from './castservice'
 import type { SyncService } from './syncservice'
-import { unreadableLibrary } from '@shared/store/core'
+import { recoveredLibrary, unreadableLibrary } from '@shared/store/core'
 import { isPlayerAction, type PlayerAction } from '@shared/playerkeys'
 import { loadSubtitles, subtitleLanguages, type SubtitleQuery } from './subtitlesearch'
 
@@ -235,6 +235,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   })
   ipcMain.handle(CH.storeWrite, (_e, patch: Partial<StoreShape>) => store.applyPatch(patch))
   ipcMain.handle(CH.storeSeed, (_e, patch: Partial<StoreShape>) => store.seedPatch(patch))
+  ipcMain.handle(CH.storeRecovered, () => (store.recovered === null ? null : recoveredLibrary(store.recovered)))
 
   ipcMain.handle(CH.tmdbRow, (_e, req: RowRequest | GenreRowRequest | DiscoverRequest) => tmdb.row(req))
   /**

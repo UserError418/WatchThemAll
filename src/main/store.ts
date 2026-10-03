@@ -42,14 +42,16 @@ export class NodePersistence implements StorePersistence {
     return Promise.resolve()
   }
 
-  quarantine(): Promise<void> {
+  quarantine(): Promise<string> {
     // Timestamped rather than one fixed slot: on a desktop the file is easy to
     // reach, disk is not scarce, and a second failure should not overwrite the
-    // first copy — which is usually the one with the most data in it.
+    // first copy — which is usually the one with the most data in it. A rename
+    // that fails (a virus scanner holding the file) throws, and the store then
+    // leaves the file alone for the session.
     const backup = `${this.file}.corrupt-${Date.now()}`
     renameSync(this.file, backup)
     console.error(`[store] unreadable document moved to ${backup}`)
-    return Promise.resolve()
+    return Promise.resolve(backup)
   }
 }
 

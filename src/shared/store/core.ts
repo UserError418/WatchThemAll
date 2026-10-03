@@ -70,19 +70,27 @@ export interface StorePersistence {
   read(): Promise<string | null>
   write(text: string): Promise<void>
   /**
-   * Keep an unreadable document somewhere recoverable.
+   * Keep an unreadable document somewhere recoverable, and say where.
    *
    * Called before the store starts empty. Without it the next write destroys
    * the only copy of the user's library, and they never learn it happened — a
    * document that fails to parse is usually truncated, which a text editor can
-   * still rescue most of.
+   * still rescue most of. Where it went is told to the user (`recovered`).
+   *
+   * If no copy can be kept this must throw: the store then leaves the file
+   * alone for the session (`loadFailure`) rather than write over it.
    */
-  quarantine(): Promise<void>
+  quarantine(): Promise<string | void>
 }
 
 /** What the app shows when the library file exists and would not open. */
 export function unreadableLibrary(reason: string): string {
   return `Your library could not be read (${reason}). Nothing was changed. Close and reopen WatchThemAll to try again.`
+}
+
+/** What the app says once, when the library would not open and a copy of it was kept. */
+export function recoveredLibrary(copy: string): string {
+  return `Your library could not be read, so WatchThemAll started with an empty one. The unreadable file was kept, unchanged, as ${copy}.`
 }
 
 /**
@@ -276,6 +284,14 @@ export class StoreCore {
   loadFailure: string | null = null
 
   /**
+   * Where the library was kept when it would not parse, and this session
+   * started from an empty one in its place; null otherwise. The platforms
+   * show it once (`recoveredLibrary`): until 2.0.12 the user saw an empty
+   * library and was never told their own had been kept.
+   */
+  recovered: string | null = null
+
+  /**
    * @param deviceKind What this install is. Stamped on the document at every
    *   load rather than stored once, because it is a fact about the install:
    *   a library restored from another device's backup must not keep calling
@@ -322,7 +338,21 @@ export class StoreCore {
     try {
       this.doc = pruneTombstones(this.migrate(JSON.parse(text)))
     } catch {
-      await this.persistence.quarantine().catch(() => {})
+      let keptAs: string | void
+      try {
+        keptAs = await this.persistence.quarantine()
+      } catch (err) {
+        // No copy could be kept, so the file is still the only one. Until
+        // 2.0.12 this was swallowed and the empty stand-in below was written
+        // over it at the next flush; now it is a file that would not open.
+        const reason = err instanceof Error ? err.message : String(err)
+        this.loadFailure = `the file is damaged, and a safe copy of it could not be made: ${reason}`
+        console.error('[store] the document will not parse and could not be set aside:', err)
+        this.doc = { ...emptyDocument(), deviceKind: this.deviceKind }
+        this.invalidate()
+        return
+      }
+      this.recovered = typeof keptAs === 'string' && keptAs !== '' ? keptAs : 'a copy beside the library file'
       this.doc = emptyDocument()
     }
     this.doc.deviceKind = this.deviceKind
