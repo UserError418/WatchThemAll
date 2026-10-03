@@ -62,8 +62,10 @@ export async function syncResults(
   backend: SyncBackend<ResultsDocument>,
   now = Date.now(),
 ): Promise<ResultsOutcome> {
-  const local = host.read()
   const remote = await backend.pull()
+  // After the pull, for the reason `syncOnce` gives: a result recorded during
+  // the request would otherwise be dropped before it was ever written.
+  const local = host.read()
   // Anything malformed is dropped rather than merged: the file is in the
   // user's own Drive, where anything can be edited (`isSourceResult`).
   const incoming = Array.isArray(remote?.document?.items) ? remote.document.items.filter(isSourceResult) : []

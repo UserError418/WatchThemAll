@@ -99,8 +99,11 @@ export async function syncPositions(
   backend: SyncBackend<PositionsDocument>,
   now = Date.now(),
 ): Promise<PositionsOutcome> {
-  const local = host.read()
   const remote = await backend.pull()
+  // After the pull, for the reason `syncOnce` gives: a position saved or
+  // forgotten during the request would otherwise be replaced by the copy read
+  // before it, and a finished episode would come back as resumable.
+  const local = host.read()
   const incoming = Array.isArray(remote?.document?.resumePoints)
     ? remote.document.resumePoints.filter(isPoint)
     : []

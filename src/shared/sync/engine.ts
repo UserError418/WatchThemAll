@@ -59,8 +59,18 @@ export async function syncOnce(
   backend: SyncBackend,
   now = Date.now(),
 ): Promise<SyncOutcome> {
-  const local = host.read()
   const remote = await backend.pull()
+  /**
+   * This device's copy is read after the pull, not before it.
+   *
+   * From here to `host.write` everything is synchronous, so nothing written
+   * while the request was out can be lost. Read before the pull, as it was
+   * until 2.0.12, the merge was built from the copy as it stood then, and
+   * keeping it replaced whatever had happened during the round trip: an
+   * import that finished meanwhile vanished, and the push carried the library
+   * without it to every device.
+   */
+  const local = host.read()
 
   if (remote === null) {
     // First sync for this account: nothing to merge, everything to upload.
