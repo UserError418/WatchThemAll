@@ -36,7 +36,7 @@ beforeEach(() => {
   events.length = 0
 })
 
-function runner() {
+function freshRunner() {
   return createScanRunner({
     providers: () => [provider],
     suspendPlayback: () => events.push('suspend'),
@@ -47,8 +47,34 @@ function runner() {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** A runner past its start-up clean-up, so a test sees only its own scans. */
+async function runner() {
+  const scans = freshRunner()
+  releaseClose()
+  await tick()
+  events.length = 0
+  return scans
+}
+
+it('closes the probe sessions a previous page left running, before its first scan', async () => {
+  const scans = freshRunner()
+  expect(events).toEqual(['closeAll'])
+
+  // The first scan waits for it: closing every session mid-scan is what
+  // turned a scan's own probes into a row of reds.
+  const first = scans.run('movie:1', film)
+  await tick()
+  expect(events).toEqual(['closeAll'])
+
+  releaseClose()
+  await tick()
+  expect(events).toEqual(['closeAll', 'suspend', 'closeAll'])
+  releaseClose()
+  await first
+})
+
 it('starts a new scan only after the one it replaced has cleaned up', async () => {
-  const scans = runner()
+  const scans = await runner()
 
   const first = scans.run('movie:1', film)
   await tick()
@@ -70,7 +96,7 @@ it('starts a new scan only after the one it replaced has cleaned up', async () =
 })
 
 it('measures nothing for a scan cancelled before it began', async () => {
-  const scans = runner()
+  const scans = await runner()
   const first = scans.run('movie:1', film)
   await tick()
   const second = scans.run('movie:1', film)

@@ -194,6 +194,19 @@ interface Measured {
   requests?: Candidate[]
 }
 
+/**
+ * Close the probe sessions a previous page of the app left open.
+ *
+ * A native session outlives the page that opened it. When the page reloads
+ * (a provider can send the window back to the app's own page after a tap), the
+ * JavaScript that knew the sessions' names is gone, and each is a hidden
+ * WebView still decoding video until the activity ends. The first scan waits
+ * for this, as every scan waits for the cleanup of the one before it.
+ */
+function closeLeftoverProbes(): Promise<unknown> {
+  return closeAllProbes().catch(() => 0)
+}
+
 export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
   /** Identifies the run, so a cancelled scan's stragglers cannot write. */
   let token = 0
@@ -206,7 +219,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
    * ran while the new run's probes were loading — killing them, which read as
    * a row of reds stored for days, and restarting the video mid-scan.
    */
-  let lastRun: Promise<unknown> = Promise.resolve()
+  let lastRun: Promise<unknown> = closeLeftoverProbes()
 
   return {
     busy: () => running,
