@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Episode, ReleaseTracker, StoreShape } from '@shared/types'
-import { checkAll, checkTracker, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
+import { checkAll, checkTracker, describeNotice, needsSchedule, scheduleWindow, startReleaseTimer, sweepDueIn, type SweepableStore } from './releases'
 import { NOTHING_AIRED_YET } from '@shared/aired'
 import * as tmdb from './tmdb'
 
@@ -248,6 +248,24 @@ describe('checkTracker', () => {
 
     expect(await checkTracker(tracker)).toBeNull()
     expect(tracker.lastNotified).toMatchObject({ season: 2, episode: 8 })
+  })
+})
+
+describe('describeNotice', () => {
+  const notice = (kind: 'new_season' | 'new_episode', season: number, episode: number, name: string) =>
+    describeNotice({ tracker: {} as ReleaseTracker, kind, episode: { season, episode, name, airDate: null } })
+
+  it('names a new episode by its code and title', () => {
+    expect(notice('new_episode', 2, 5, 'The Fifth')).toBe('S02E05 — The Fifth')
+  })
+
+  it('names a season that has just begun by its first episode', () => {
+    expect(notice('new_season', 2, 1, 'Pilot')).toBe('Season 2 has begun — Pilot')
+  })
+
+  /** The bug: a season released whole was announced with its finale's name as the beginning. */
+  it('counts the episodes of a season first seen several episodes in', () => {
+    expect(notice('new_season', 2, 8, 'The Finale')).toBe('Season 2: 8 episodes are out')
   })
 })
 

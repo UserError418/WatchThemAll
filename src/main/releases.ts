@@ -323,7 +323,11 @@ export function describeNotice(notice: ReleaseNotice): string {
   const { episode, kind } = notice
   const code = `S${String(episode.season).padStart(2, '0')}E${String(episode.episode).padStart(2, '0')}`
   const name = episode.name ? ` — ${episode.name}` : ''
-  return kind === 'new_season' ? `Season ${episode.season} has begun${name}` : `${code}${name}`
+  if (kind === 'new_episode') return `${code}${name}`
+  // Seen several episodes in: a season released whole, or weeks the sweep
+  // did not run. The latest episode's name would read as the premiere's.
+  if (episode.episode > 1) return `Season ${episode.season}: ${episode.episode} episodes are out`
+  return `Season ${episode.season} has begun${name}`
 }
 
 /**
