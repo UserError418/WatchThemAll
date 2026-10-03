@@ -190,14 +190,16 @@ export function isSourceResult(value: unknown): value is SourceResult {
 /**
  * The history bounded: nothing older than `KEEP_MS`, the newest
  * `KEEP_PER_EPISODE` per source, episode and kind, the newest `MAX_RESULTS`
- * overall. Duplicates (the same id from two syncs) are kept once. Oldest
- * first, as it is stored.
+ * overall. Duplicates (the same id from two syncs) are kept once, as the copy
+ * that knows more (`knowsMore`). Oldest first, as it is stored.
  */
 export function pruneResults(results: readonly SourceResult[], now: number): SourceResult[] {
   const byKey = new Map<string, SourceResult>()
   for (const result of results) {
     if (now - result.at > KEEP_MS) continue
-    byKey.set(resultKey(result), result)
+    const key = resultKey(result)
+    const held = byKey.get(key)
+    byKey.set(key, held === undefined ? result : knowsMore(held, result))
   }
   // Ties broken by key, so the stored order is the same whichever device pruned.
   const newestFirst = [...byKey.entries()]
@@ -214,6 +216,25 @@ export function pruneResults(results: readonly SourceResult[], now: number): Sou
     if (kept.length >= MAX_RESULTS) break
   }
   return kept.reverse()
+}
+
+/**
+ * Of two copies of one result, the one that knows more.
+ *
+ * A result is filed again under its own key only to add what was learned
+ * later: the desktop re-files a play with the best picture of its first
+ * minute. Which copy survived used to be whichever came second, and in a sync
+ * that is the other device's file, so a play uploaded before its quality was
+ * known came back over the re-filed copy and stayed. Decided by content, both
+ * devices keep the same copy in either order: the higher quality, then the
+ * one with a time, and for two that still differ any fixed rule (the larger
+ * text) so that they agree.
+ */
+function knowsMore(a: SourceResult, b: SourceResult): SourceResult {
+  const quality = (result: SourceResult): number => result.quality ?? -1
+  if (quality(a) !== quality(b)) return quality(a) > quality(b) ? a : b
+  if ((a.ms === undefined) !== (b.ms === undefined)) return a.ms === undefined ? b : a
+  return JSON.stringify(a) >= JSON.stringify(b) ? a : b
 }
 
 /** Both devices' histories as one: every result either had, bounded. */
