@@ -64,18 +64,17 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
             return true;
         }
 
-        // The app's own document, served from the Capacitor scheme host.
-        if (isAppHost(url)) {
-            return false;
-        }
-
         // The player's frame navigating itself: let it, and let it stay here.
         if (!request.isForMainFrame()) {
             return false;
         }
 
-        // A third party trying to take the whole window. Refuse and stay put.
-        return true;
+        // The main frame may only ever hold the app's own page. Anything else
+        // is a third party trying to take the whole window, and so is any other
+        // address on the app's host, which used to pass on the host alone:
+        // `/_capacitor_file_/` serves the app's private files there, under the
+        // app's origin. Refuse and stay put.
+        return !isAppDocument(url);
     }
 
     /**
@@ -112,6 +111,16 @@ public class PlayerNavigationClient extends BridgeWebViewClient {
     private String appHost() {
         String serverUrl = bridge.getServerUrl();
         return serverUrl != null ? Uri.parse(serverUrl).getHost() : "localhost";
+    }
+
+    /**
+     * The app's own page: its index on the Capacitor host, over https because
+     * `capacitor.config.ts` sets `androidScheme: 'https'`.
+     */
+    private boolean isAppDocument(Uri url) {
+        String path = url.getPath();
+        boolean index = path == null || path.isEmpty() || "/".equals(path) || "/index.html".equals(path);
+        return index && "https".equals(url.getScheme()) && isAppHost(url);
     }
 
     private boolean isAppHost(Uri url) {
