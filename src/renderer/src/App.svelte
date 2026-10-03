@@ -435,7 +435,7 @@
 {/if}
 
 {#if selected}
-  <DetailOverlay media={selected} onclose={() => (selected = null)} />
+  <DetailOverlay media={selected} playerUp={playing !== null && !mini} onclose={() => (selected = null)} />
 {/if}
 
 <!--

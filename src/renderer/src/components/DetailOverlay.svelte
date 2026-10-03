@@ -36,9 +36,14 @@
   interface Props {
     media: MediaSummary
     onclose: () => void
+    /**
+     * A full-size player is up over this view. Its keys are the player's
+     * then, Escape included: this view is where the viewer comes back to.
+     */
+    playerUp?: boolean
   }
 
-  const { media, onclose }: Props = $props()
+  const { media, onclose, playerUp = false }: Props = $props()
 
   /**
    * The title actually being shown.
@@ -503,9 +508,12 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    // While the preview stands in for the player, Escape is the player's
-    // (PlayerFrame sends it to main, which shows the player and shrinks it).
-    if (event.key === 'Escape' && !carrying.active) onclose()
+    // While a player is up, or the preview stands in for one, Escape is the
+    // player's: PlayerFrame sends it to main, which leaves fullscreen or
+    // shrinks the player. This listener hears the same key (the app window
+    // keeps the focus after Play), and closing here took the detail view away
+    // behind the player, so the mini player came back over Browse.
+    if (event.key === 'Escape' && !carrying.active && !playerUp) onclose()
   }
   /**
    * The one episode in this season that gets a live countdown, and the clock
