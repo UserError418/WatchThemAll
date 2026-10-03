@@ -343,6 +343,17 @@ export interface ReleaseTracker {
    * failed — the timeline falls back to `nextEpisode` alone.
    */
   schedule?: EpisodeStub[]
+  /**
+   * The last season listing the sweep fetched that had nothing near now, and
+   * when: a series between seasons, ended, or announced months ahead.
+   *
+   * `schedule` is empty for those, and an empty list cannot tell "never
+   * fetched" from "fetched, nothing to draw", so every sweep asked TMDB for the
+   * same season again (half the trackers of a real library, every hour). With
+   * this the sweep asks again once a day, or at once when the season changes.
+   * Optional, like `schedule` and for the same reason.
+   */
+  emptyListing?: { season: number; checkedAt: number }
   addedAt: number
   lastChecked: number
 }

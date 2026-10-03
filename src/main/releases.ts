@@ -52,6 +52,9 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const SCHEDULE_BACK_DAYS = 45
 const SCHEDULE_AHEAD_DAYS = 90
 
+/** How long a season listing with nothing near now is believed; see `needsSchedule`. */
+const EMPTY_LISTING_RECHECK_MS = DAY_MS
+
 export interface ReleaseNotice {
   tracker: ReleaseTracker
   episode: EpisodeStub
@@ -89,18 +92,28 @@ export function scheduleWindow(episodes: readonly Episode[], now = Date.now()): 
  *
  * A season's air dates do not change once published, so re-fetching every
  * hour would double the sweep's cost to re-learn the same answer. It is worth
- * paying when there is nothing stored, when the series has moved on to a
+ * paying when nothing has been fetched yet, when the series has moved on to a
  * season the stored list does not cover, or when everything stored has already
  * aired — that last one being how a schedule that has simply run out is told
  * apart from one that is still current.
+ *
+ * A listing that had nothing near now stores nothing, which looks exactly like
+ * never having fetched; `emptyListing` is what tells the two apart, so such a
+ * season is asked for once a day rather than on every sweep.
  */
 export function needsSchedule(
-  tracker: Pick<ReleaseTracker, 'schedule'>,
+  tracker: Pick<ReleaseTracker, 'schedule' | 'emptyListing'>,
   season: number,
   now = Date.now(),
 ): boolean {
   const stored = tracker.schedule
-  if (!stored || stored.length === 0) return true
+  if (!stored || stored.length === 0) {
+    const empty = tracker.emptyListing
+    if (!empty || empty.season !== season) return true
+    // A stamp from the future (another device's clock) is not trusted.
+    const age = now - empty.checkedAt
+    return age < 0 || age >= EMPTY_LISTING_RECHECK_MS
+  }
   if (!stored.some((episode) => episode.season === season)) return true
 
   const today = new Date(now)
@@ -152,6 +165,7 @@ export async function checkTracker(tracker: ReleaseTracker): Promise<ReleaseNoti
       await new Promise((resolve) => setTimeout(resolve, REQUEST_SPACING_MS))
       const season = await tmdb.season(tracker.tmdbId, current)
       tracker.schedule = scheduleWindow(season.episodes)
+      tracker.emptyListing = tracker.schedule.length === 0 ? { season: current, checkedAt: Date.now() } : undefined
     } catch (err) {
       console.error(`[releases] season ${current} unavailable for "${tracker.title}":`, err)
     }
@@ -222,6 +236,7 @@ const CHECKED_FIELDS = [
   'nextEpisode',
   'lastNotified',
   'schedule',
+  'emptyListing',
   'lastChecked',
 ] as const satisfies ReadonlyArray<keyof ReleaseTracker>
 

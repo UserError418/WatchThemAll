@@ -69,9 +69,27 @@ describe('scheduleWindow', () => {
 })
 
 describe('needsSchedule', () => {
-  it('fetches when nothing is stored', () => {
+  it('fetches when nothing has been fetched', () => {
     expect(needsSchedule({}, 2, NOW)).toBe(true)
     expect(needsSchedule({ schedule: [] }, 2, NOW)).toBe(true)
+  })
+
+  /**
+   * The bug: an empty list read as "never fetched", so a series between
+   * seasons had the same listing asked for on every sweep.
+   */
+  it('asks once a day for a season whose listing had nothing near now', () => {
+    const quiet = { schedule: [], emptyListing: { season: 2, checkedAt: NOW - 2 * 60 * 60 * 1000 } }
+    expect(needsSchedule(quiet, 2, NOW)).toBe(false)
+    expect(needsSchedule(quiet, 2, NOW + DAY)).toBe(true)
+  })
+
+  it('asks at once when the series has moved on to another season', () => {
+    expect(needsSchedule({ schedule: [], emptyListing: { season: 2, checkedAt: NOW } }, 3, NOW)).toBe(true)
+  })
+
+  it('does not believe an empty listing stamped in the future', () => {
+    expect(needsSchedule({ schedule: [], emptyListing: { season: 2, checkedAt: NOW + DAY } }, 2, NOW)).toBe(true)
   })
 
   it('fetches when the series has moved to a season it does not cover', () => {
@@ -167,6 +185,26 @@ describe('checkTracker', () => {
 
     expect(await checkTracker(tracker)).toBeNull()
     expect(tracker.lastNotified).toEqual(NOTHING_AIRED_YET)
+  })
+
+  it('asks for the listing of a season between airings once, not on every sweep', async () => {
+    const tracker = tracked({
+      status: 'Returning Series',
+      nextEpisode: null,
+      lastNotified: { season: 3, episode: 10, name: 'Ten', airDate: '2024-03-01' },
+    })
+    tmdbSays({ lastEpisode: { season: 3, episode: 10, name: 'Ten', airDate: '2024-03-01' } })
+    vi.mocked(tmdb.season).mockResolvedValue({
+      season: 3,
+      name: 'Season 3',
+      episodes: [episode({ season: 3, episode: 10, airDate: '2024-03-01' })],
+    })
+    vi.mocked(tmdb.season).mockClear()
+
+    for (let sweep = 0; sweep < 3; sweep += 1) await checkTracker(tracker)
+
+    expect(tracker.schedule).toEqual([])
+    expect(vi.mocked(tmdb.season)).toHaveBeenCalledTimes(1)
   })
 
   /** `YYYY-MM-DD` some days before today by the real clock, which is what `checkTracker` reads. */
