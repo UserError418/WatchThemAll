@@ -25,6 +25,7 @@ import { createAppWindow } from './windows'
 import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
 import { applyBrowserIdentity, CHROME_UA } from './identity'
+import { APP_PERMISSIONS, restrictPermissions, SOURCE_PERMISSIONS } from './permissions'
 import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from './segmentstore'
 import { nodeCacheFiles } from './segmentfiles'
@@ -98,6 +99,17 @@ const BUNDLED_PROVIDERS = (bundledCatalog as ProviderCatalog).providers
  * cannot.
  */
 app.userAgentFallback = CHROME_UA
+
+/**
+ * Every session refuses what its pages have no use for (`permissions.ts`):
+ * Electron would otherwise grant a source's page the microphone, the camera
+ * and the clipboard without asking. Here rather than where each surface makes
+ * its partition, so that no surface can be added without it. The app's own
+ * session is created lazily after `ready`, so the comparison is safe.
+ */
+app.on('session-created', (created) => {
+  restrictPermissions(created, created === session.defaultSession ? APP_PERMISSIONS : SOURCE_PERMISSIONS)
+})
 
 /**
  * Chromium flags. Must be set before `app.whenReady`.
