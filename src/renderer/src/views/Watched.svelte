@@ -38,6 +38,7 @@
   import type { MediaSummary, RatingValue, WatchedEntry } from '@shared/types'
   import type { RatingBand } from '@shared/rating'
   import { library } from '../lib/library.svelte'
+  import { removeWatched } from '../lib/undo'
   import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { titleFacts, whenVisible } from '../lib/titlefacts.svelte'
   import type { TitleFacts } from '../lib/titlefacts'
@@ -56,6 +57,7 @@
     summarise,
     summaryLabel,
     WATCHED_SORTS,
+    watchedIdsToRemove,
     type TitleGroup,
     type WatchedSort,
   } from '../lib/watchedgroups'
@@ -583,7 +585,15 @@
 
               <button
                 class="drop"
-                onclick={() => library.removeFromWatched({ type: group.type, tmdbId: group.tmdbId || 0 }, undefined)}
+                onclick={() =>
+                  removeWatched(
+                    watchedIdsToRemove(library.watched, {
+                      type: group.type,
+                      tmdbId: group.tmdbId,
+                      entryId: group.seasons[0]!.entry.id,
+                    }),
+                    group.title,
+                  )}
                 aria-label="Remove {group.title} from watched"
                 title={group.flat ? 'Remove from watched' : 'Remove every season'}>✕</button
               >
@@ -606,7 +616,17 @@
                     <button
                       class="drop"
                       onclick={() =>
-                        library.removeFromWatched(season.entry, season.entry.season)}
+                        removeWatched(
+                          watchedIdsToRemove(library.watched, {
+                            type: season.entry.type,
+                            tmdbId: season.entry.tmdbId,
+                            entryId: season.entry.id,
+                            season: season.entry.season,
+                          }),
+                          season.entry.season === null
+                            ? group.title
+                            : `${group.title} season ${season.entry.season}`,
+                        )}
                       aria-label="Remove {group.title} season from watched"
                       title="Remove this season">✕</button
                     >

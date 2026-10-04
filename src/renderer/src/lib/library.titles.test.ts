@@ -82,3 +82,17 @@ describe('a film and a series with the same TMDB number', () => {
     expect(library.isTracked(film)).toBe(false)
   })
 })
+
+describe('removeWatchedEntries', () => {
+  it('removes exactly the records named, and its undo puts them back', () => {
+    library.addToWatched(series, 'user', 1)
+    library.addToWatched(series, 'user', 2)
+    const [second, first] = library.watched
+
+    const undo = library.removeWatchedEntries([first!.id])
+    expect(library.watched.map((w) => w.id)).toEqual([second!.id])
+
+    undo()
+    expect(library.watched.map((w) => w.id).sort()).toEqual([first!.id, second!.id].sort())
+  })
+})

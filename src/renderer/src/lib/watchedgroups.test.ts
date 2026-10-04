@@ -11,6 +11,7 @@ import {
   seasonsToGo,
   summarise,
   summaryLabel,
+  watchedIdsToRemove,
 } from './watchedgroups'
 
 let seq = 0
@@ -397,5 +398,37 @@ describe('ribbon', () => {
     const groups = groupWatched([entry({ season: 2 })], none)
     expect(ribbon(groups[0]!).segments).toHaveLength(1)
     expect(seasonsToGo(groups[0]!, null)).toBe(0)
+  })
+})
+
+describe('watchedIdsToRemove', () => {
+  /** The ✕ on one unresolved import used to remove every unresolved import. */
+  it('removes only the unresolved record whose row was pressed', () => {
+    const first = entry({ tmdbId: 0, title: 'First unmatched', season: null })
+    const second = entry({ tmdbId: 0, title: 'Second unmatched', season: null })
+
+    expect(watchedIdsToRemove([first, second], { type: 'tv', tmdbId: 0, entryId: first.id })).toEqual([first.id])
+  })
+
+  it("removes every season of a title from its row, the ones a filter hides included", () => {
+    const s1 = entry({ season: 1 })
+    const s2 = entry({ season: 2 })
+    const other = entry({ tmdbId: 2316, season: 1 })
+
+    expect(watchedIdsToRemove([s1, s2, other], { type: 'tv', tmdbId: 1396, entryId: s1.id })).toEqual([s1.id, s2.id])
+  })
+
+  it("removes one season from that season's row", () => {
+    const s1 = entry({ season: 1 })
+    const s2 = entry({ season: 2 })
+
+    expect(watchedIdsToRemove([s1, s2], { type: 'tv', tmdbId: 1396, entryId: s2.id, season: 2 })).toEqual([s2.id])
+  })
+
+  it('leaves a film with the same TMDB number alone', () => {
+    const series = entry({ tmdbId: 1399, type: 'tv', season: 1 })
+    const film = entry({ tmdbId: 1399, type: 'movie', season: null })
+
+    expect(watchedIdsToRemove([series, film], { type: 'tv', tmdbId: 1399, entryId: series.id })).toEqual([series.id])
   })
 })

@@ -375,3 +375,34 @@ export function seasonsToGo(group: TitleGroup, airedSeasons: number | null): num
   return ribbon(group, Number.MAX_SAFE_INTEGER, airedSeasons).segments.filter((s) => s.pending)
     .length
 }
+
+/** What a Watched row's ✕ is about: the title, the record the row was built from, and a season if it is a season's row. */
+export interface WatchedRemoval {
+  type: MediaType
+  tmdbId: number
+  entryId: string
+  /** A season's row; absent for the title's row, which removes every season. */
+  season?: number | null
+}
+
+/**
+ * Which Watched records a row's ✕ removes, by id.
+ *
+ * Every season of a resolved title (or the one season, for a season's row),
+ * from the whole list rather than from the rows on screen: under a filter a
+ * title's row holds only the seasons that match, and "Remove every season"
+ * means every one. An unresolved import is only its own record. Those all
+ * carry tmdbId 0, and removing by that number took every unresolved title out
+ * at once, though each has a row of its own.
+ */
+export function watchedIdsToRemove(watched: readonly WatchedEntry[], row: WatchedRemoval): string[] {
+  if (row.tmdbId === 0) return [row.entryId]
+  return watched
+    .filter(
+      (w) =>
+        w.type === row.type &&
+        w.tmdbId === row.tmdbId &&
+        (row.season === undefined || (w.season ?? null) === row.season),
+    )
+    .map((w) => w.id)
+}

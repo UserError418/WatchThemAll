@@ -1177,6 +1177,25 @@ class Library {
     void this.persist({ watched: this.watched })
   }
 
+  /**
+   * Remove these Watched records, by id; returns the undo, which puts them back.
+   *
+   * By id, because a title or a season is not always enough to name a record:
+   * unresolved imports all carry tmdbId 0. See `watchedIdsToRemove`.
+   */
+  removeWatchedEntries(ids: readonly string[]): () => void {
+    const removed = this.watched.filter((w) => ids.includes(w.id))
+    if (removed.length === 0) return () => {}
+    this.watched = this.watched.filter((w) => !ids.includes(w.id))
+    void this.persist({ watched: this.watched })
+
+    return () => {
+      const back = removed.filter((w) => !this.watched.some((kept) => kept.id === w.id))
+      this.watched = [...back, ...this.watched]
+      void this.persist({ watched: this.watched })
+    }
+  }
+
   /* ── Ratings ─────────────────────────────────────────────────────────── */
 
   /**

@@ -30,6 +30,12 @@ export function unmarkSeen(media: MediaSummary | MediaDetail, season: number | n
   toast.show(`Took ${seenScope(media.title, season)} out of Watched`, { label: 'Undo', run: undo })
 }
 
+/** Remove Watched records (a title's row, or a season's), with an Undo. */
+export function removeWatched(ids: readonly string[], what: string): void {
+  const undo = library.removeWatchedEntries(ids)
+  toast.show(`Removed ${what} from Watched`, { label: 'Undo', run: undo })
+}
+
 /** Take a title off the watchlist, with an Undo that puts it back where it stood. */
 export function removeFromWatchlist(title: TitleRef & { title: string }): void {
   const undo = library.removeFromWatchlist(title)
