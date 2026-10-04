@@ -148,10 +148,24 @@
     void settlePickUp(entry).then((at) => loadListing(entry.tmdbId, at.season))
   }
 
-  /** The caption names where Resume goes, so it is settled once the card is near the screen. */
-  function settleCaption(): void {
-    if (isSeries && entry.tmdbId) void settlePickUp(entry)
+  /** The card has come near the screen; from then on its caption is kept settled. */
+  let nearScreen = $state(false)
+  function noticeNearScreen(): void {
+    nearScreen = true
   }
+
+  /**
+   * Fetch what the caption still needs, whenever it needs it: when the card
+   * first comes near the screen, and again whenever a change moves where the
+   * series picks up — marking a season from this card ends it on a finished
+   * episode until the next season's listing is in. It stops by itself: each
+   * listing is fetched once a session, and then the answer is settled.
+   */
+  $effect(() => {
+    if (!nearScreen || !isSeries || !entry.tmdbId) return
+    const need = seriesPickUp(entry).need
+    if (need !== null) void loadListing(entry.tmdbId, need)
+  })
 
   function hide(): void {
     clearIntent()
@@ -237,7 +251,7 @@
   onfocusout={(e) => {
     if (canHover() && !e.currentTarget.contains(e.relatedTarget as Node)) hide()
   }}
-  use:whenVisible={settleCaption}
+  use:whenVisible={noticeNearScreen}
   role="group"
 >
   <button class="art" onclick={onArtClick} aria-label={entry.title}>
