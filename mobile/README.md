@@ -8,9 +8,11 @@ a Capacitor WebView.
 npm run build:mobile     # web bundle -> out/mobile
 npm run sync:mobile      # copy it into the Gradle project
 npm run apk              # both of the above, then assembleDebug
+npm run apk:release      # the same, then assembleRelease: the APK a release carries
 ```
 
-The APK lands at `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+The APK lands at `mobile/android/app/build/outputs/apk/debug/app-debug.apk`
+(`…/release/app-release.apk` for the release build; see "Icons and signing").
 Building needs JDK 21 and the Android SDK; `scripts/provision-android.sh`
 installs both.
 
@@ -325,6 +327,12 @@ every density with `rsvg-convert`, including the adaptive-icon foreground and a
 monochrome layer for Android 13 themed icons. The output is committed so a clone
 does not need librsvg.
 
-The APK is debug-signed, which is enough to sideload and is what `assembleDebug`
-produces. Debug keys are per machine, so an APK built here cannot upgrade one
-built elsewhere without uninstalling first.
+`npm run apk` builds the debug APK, for development: debuggable, so the
+emulator's DevTools and `adb shell run-as` reach it. `npm run apk:release` builds
+the one attached to releases (`app/build/outputs/apk/release/app-release.apk`):
+not debuggable, so nothing with USB access can read the library or the sync
+sign-in out of it, and signed with the same debug key every released APK has
+carried, so installed copies upgrade in place. That key is per machine
+(`~/.android/debug.keystore`). An APK signed elsewhere cannot upgrade one signed
+here without an uninstall, which deletes the library on the phone, so the key is
+worth a backup.

@@ -48,6 +48,21 @@ android {
     }
     buildTypes {
         release {
+            /*
+             * The APK attached to a release (`npm run apk:release`). Not
+             * debuggable, unlike the debug build `npm run apk` makes for
+             * development: on a debuggable app anyone with USB debugging can
+             * `adb shell run-as` into its private storage, the library and the
+             * sync sign-in included, with no root.
+             *
+             * Signed with the debug key all the same, the key every APK
+             * released so far carries, so installed copies upgrade in place. A
+             * new key would make Android refuse the upgrade, and uninstalling
+             * first deletes the library on the phone. The key is the building
+             * machine's (`~/.android/debug.keystore`), so losing it means that
+             * same uninstall: it is worth a backup.
+             */
+            signingConfig signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

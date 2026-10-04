@@ -21,6 +21,7 @@
     "build:mobile": "vite build --config mobile/vite.config.ts",
     "sync:mobile": "cap sync android",
     "apk": "scripts/build-apk.sh",
+    "apk:release": "scripts/build-apk.sh --release",
     "probe:streams": "electron-vite build && electron . --no-sandbox --extract-streams",
     "probe:playback": "scripts/probe-playback.py",
     "probe:ui": "electron-vite build && electron . --no-sandbox --probe-ui",
