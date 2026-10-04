@@ -121,6 +121,34 @@ describe('DownloadManager', () => {
     expect(w.net.counts.get('https://good/seg0')).toBe(1)
   })
 
+  it('passes over a source whose stream is refused straight after capture, instead of capturing it again', async () => {
+    const w = world(() => ({ status: 403, body: new Uint8Array() }))
+    const manager = new DownloadManager(w.platform, { publishEveryMs: 0 })
+    await manager.load()
+    await manager.start({ ...request, providerId: 'good' })
+    await settled(manager)
+    expect(w.captures).toEqual(['good', 'clipper'])
+    expect(manager.status().downloads[0]!.refusals[0]).toEqual({ providerId: 'good', reason: "Good's stream refused the download" })
+  })
+
+  it('passes over a source whose stream will not download at all, and downloads from the next', async () => {
+    const w = world()
+    w.platform.sources = async () => [SOURCES[0]!, SOURCES[1]!]
+    w.platform.capture = async (_subject, source) => {
+      w.captures.push(source.id)
+      return [{ url: source.id === 'good' ? 'https://good/ep.m3u8' : 'https://mangled/ep.m3u8', headers: {} }]
+    }
+    w.net.routes['https://mangled/ep.m3u8'] = { status: 200, body: mediaPlaylist('https://mangled', 6, 240) }
+    for (let i = 0; i < 6; i++) w.net.routes[`https://mangled/seg${i}`] = { status: 200, body: '<html>not video</html>' }
+    const manager = new DownloadManager(w.platform, { publishEveryMs: 0 })
+    await manager.load()
+    await manager.start(request)
+    await settled(manager)
+    expect(w.captures).toEqual(['clipper', 'good'])
+    expect(manager.status().downloads[0]).toMatchObject({ state: 'done', source: { id: 'good' } })
+    expect(manager.status().downloads[0]!.refusals[0]!.reason).toMatch(/^Clipper: Segment \d of 6 would not download \(not video\)$/)
+  })
+
   it('says why when no source gives the film', async () => {
     const w = world()
     w.platform.sources = async () => [SOURCES[0]!]

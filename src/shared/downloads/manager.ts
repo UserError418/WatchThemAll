@@ -314,6 +314,8 @@ export class DownloadManager {
       if (signal.aborted || !this.record(id)) return
       const refused = new Set(this.record(id)!.refusals.map((r) => r.providerId))
 
+      // Whether this round's plan comes from a capture just made, rather than from disk.
+      const captured = !useKept
       if (!useKept) {
         const source = pending.shift()
         if (!source) {
@@ -356,10 +358,17 @@ export class DownloadManager {
         segmentsTotal: plan.segments.length,
       })
       await this.changed('state')
+      /** Segments in the folder when this transfer started, and whether it added any. */
+      let startedWith: number | null = null
+      let progressed = false
+      /** The refusal was the disk's, not the source's. */
+      let noRoom = false
       const outcome = await runTransfer(plan, files, {
         signal,
         sleep: (ms) => this.platform.sleep(ms),
         onProgress: (progress) => {
+          startedWith ??= progress.segmentsDone
+          if (progress.segmentsDone > startedWith) progressed = true
           this.patch(id, {
             segmentsDone: progress.segmentsDone,
             segmentsTotal: progress.segmentsTotal,
@@ -372,6 +381,7 @@ export class DownloadManager {
           const needed = bytes * ROOM_MARGIN
           this.free = await this.platform.freeBytes().catch(() => null)
           if (this.free === null || this.free >= needed) return null
+          noRoom = true
           return `Not enough space on this device: it needs ${describeBytes(needed)}, ${describeBytes(this.free)} is free`
         },
       })
@@ -393,11 +403,28 @@ export class DownloadManager {
         case 'aborted':
           await this.changed('state')
           return
-        case 'failed':
-          return this.fail(id, outcome.reason)
-        case 'expired': {
-          recaptures += 1
+        case 'failed': {
           const source = this.record(id)!.source
+          if (captured && !progressed && !noRoom && source !== null) {
+            // Nothing of a stream just captured would download: the source's
+            // stream, not the network (measured: a proxy serving the segments
+            // mangled into text). The next source may well give the film.
+            this.patch(id, { refusals: [...this.record(id)!.refusals, { providerId: source.id, reason: `${source.name}: ${outcome.reason}` }] })
+            continue
+          }
+          return this.fail(id, outcome.reason)
+        }
+        case 'expired': {
+          const source = this.record(id)!.source
+          if (captured && !progressed && source !== null) {
+            // Refused straight after a fresh capture: not links that aged, a
+            // stream that will not be fetched outside its player (measured: a
+            // CDN answering "domain forbidden" to the player's own headers).
+            // Capturing it again would only find the same stream.
+            this.patch(id, { refusals: [...this.record(id)!.refusals, { providerId: source.id, reason: `${source.name}'s stream refused the download` }] })
+            continue
+          }
+          recaptures += 1
           if (recaptures > MAX_RECAPTURES || source === null) return this.fail(id, `${source?.name ?? 'The source'}'s links kept expiring`)
           this.platform.log(`${id}: links expired, capturing ${source.name} again`)
           pending.unshift(source)
