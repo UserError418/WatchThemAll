@@ -281,9 +281,40 @@
     open = false
     onselect(providerId)
   }
+
+  let menu = $state<HTMLDivElement | null>(null)
+
+  /**
+   * A press anywhere outside the menu and its button closes it, as a menu
+   * does. It used to stay open over the detail view until its own button
+   * was pressed again. Capture, so a handler underneath that stops the event
+   * cannot keep the menu open by accident (as the rating strip does).
+   */
+  $effect(() => {
+    if (!open) return
+    const onPointer = (event: PointerEvent): void => {
+      const target = event.target as Node | null
+      if (target && (trigger?.contains(target) || menu?.contains(target))) return
+      open = false
+    }
+    document.addEventListener('pointerdown', onPointer, true)
+    return () => document.removeEventListener('pointerdown', onPointer, true)
+  })
+
+  /**
+   * Escape closes the menu and nothing else. Stopped here, so it does not go
+   * on to the detail view around it, which closed the whole view instead.
+   */
+  function onKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || !open) return
+    event.preventDefault()
+    event.stopPropagation()
+    open = false
+    trigger?.focus()
+  }
 </script>
 
-<div class="picker">
+<div class="picker" onkeydown={onKeydown} role="presentation">
   <button
     class="trigger"
     bind:this={trigger}
@@ -298,6 +329,7 @@
 
   {#if open}
     <div
+      bind:this={menu}
       class="menu"
       in:menuIn
       out:menuOut
