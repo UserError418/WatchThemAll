@@ -14,7 +14,8 @@
  * This module is the cutting, and nothing else: which playlist to trust, which
  * segments cover a stretch of time, and the playlist that names the copies. It
  * fetches nothing, so it is the same on both platforms and testable without a
- * network. `segmentsave.ts` does the fetching; `segmentcache.ts` keeps count.
+ * network. `main/segmentsave.ts` does the fetching; `main/segmentcache.ts`
+ * keeps count. Downloads (`shared/downloads/`) read playlists with it too.
  *
  * ## What makes a stream unfit
  *

@@ -23,7 +23,7 @@
  */
 
 import type { SkipOffer } from '@shared/ipc'
-import { lengthVerdict } from './runtimecheck'
+import { lengthVerdict } from '@shared/runtimecheck'
 import { chooseEachKind, isWithinOffer, skipTarget, vetSegment, type SkipSegment } from './skiptimes'
 
 /** Asked again after a lookup found nothing, in case that was a failure. */

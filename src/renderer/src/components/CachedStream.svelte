@@ -3,7 +3,7 @@
    * The preview cache's copy of the stream, played by the app's own `<video>`
    * (the owner, 2026-09-29): on screen the moment the detail view opens,
    * while the source's own preview (`StreamPreview`) loads out of sight and
-   * takes over at the same second. See `main/segmentwindow.ts` for what is
+   * takes over at the same second. See `shared/segmentwindow.ts` for what is
    * kept and why, and `DetailOverlay` for the handover.
    *
    * Everything it reports is in the kept video's own time (its 0 is the

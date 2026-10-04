@@ -35,7 +35,7 @@ import type { PlayRequest } from '@shared/ipc'
 import { createInlinePlayer } from './playerview'
 import { renderTemplate } from './providers'
 import type { ProbeSubject } from './streamprobe'
-import { checkRuntime, type RuntimeVerdict } from './runtimecheck'
+import { checkRuntime, type RuntimeVerdict } from '@shared/runtimecheck'
 
 /** How the player behaved for one provider and one title. */
 export interface UiProbeResult {

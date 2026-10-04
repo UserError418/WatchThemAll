@@ -54,7 +54,7 @@ import { renderTemplate } from '@main/providers'
 import { capture, PEEK_LIMIT_BYTES, type Candidate } from './cast'
 import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
 import { readStreamHeader, streamHeaderOf } from '@shared/streamheader'
-import { lengthVerdict } from '@main/runtimecheck'
+import { lengthVerdict } from '@shared/runtimecheck'
 import { closeAllProbes, openProbe, type ProbeDocumentError, type ProbeRequest } from './probeview'
 import { isScanCandidate, judgeMissedStream } from './scanjudge'
 

@@ -44,7 +44,7 @@ import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
 import { probeStream, streamReason, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
 import { isFalseWholeFile, WHOLE_FILE_URL } from './mediarequest'
-import { lengthVerdict } from './runtimecheck'
+import { lengthVerdict } from '@shared/runtimecheck'
 import {
   judgeQuality,
   readLadder,

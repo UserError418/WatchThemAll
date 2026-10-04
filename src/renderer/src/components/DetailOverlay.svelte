@@ -655,7 +655,7 @@
   /* ── The preview cache ───────────────────────────────────────────────────
    *
    * A window of the stream this device kept when the viewer last stopped
-   * (the owner, 2026-09-29; `main/segmentwindow.ts`), played by the page's
+   * (the owner, 2026-09-29; `shared/segmentwindow.ts`), played by the page's
    * own `<video>` the moment the plan says there is one. The source's own
    * preview loads behind it, held out of sight and silent, and takes over
    * at the copy's second: the handover is `CarryOver`'s, as for Resume, with

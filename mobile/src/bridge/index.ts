@@ -889,7 +889,7 @@ export async function createBridge(): Promise<WtaApi> {
   const castBridge = createCastBridge()
 
   /*
-   * The preview cache (the owner, 2026-09-29; `src/main/segmentwindow.ts`):
+   * The preview cache (the owner, 2026-09-29; `src/shared/segmentwindow.ts`):
    * a window of the stream kept when the player or the preview is left, for
    * the detail view to play at once next time. Null until the files are open,
    * and for good if they cannot be: the preview then starts from its source.

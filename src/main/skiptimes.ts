@@ -41,7 +41,7 @@
  * segment in the first half of the stream is not the credits.
  */
 
-import { checkRuntime } from './runtimecheck'
+import { checkRuntime } from '@shared/runtimecheck'
 
 /** Which database an answer came from. Carried so a bad one can be traced. */
 export type SkipSource = 'introdb' | 'skipdb' | 'aniskip'

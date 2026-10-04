@@ -900,7 +900,7 @@ export interface PreviewPlan {
   /**
    * A window of this source's stream kept on this device, covering
    * `startSeconds`: played at once by the page's own `<video>` while the
-   * source loads behind it (the preview cache, `main/segmentwindow.ts`).
+   * source loads behind it (the preview cache, `shared/segmentwindow.ts`).
    */
   cached: CachedPreview | null
 }

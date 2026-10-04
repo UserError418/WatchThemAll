@@ -18,7 +18,7 @@
  * player is closed, is the price.
  */
 
-import { lengthVerdict } from './runtimecheck'
+import { lengthVerdict } from '@shared/runtimecheck'
 import {
   WINDOW_SECONDS,
   masterVariants,
@@ -29,7 +29,7 @@ import {
   windowPlaylist,
   type MediaPlaylist,
   type StreamWindow,
-} from './segmentwindow'
+} from '@shared/segmentwindow'
 
 /** A request the source's page made, with the headers it was made with. */
 export interface CapturedRequest {

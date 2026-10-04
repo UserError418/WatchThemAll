@@ -19,7 +19,7 @@
  */
 
 import type { NextEpisode } from '@shared/episodesteps'
-import { lengthVerdict } from './runtimecheck'
+import { lengthVerdict } from '@shared/runtimecheck'
 
 /**
  * How close to the end counts as the end, in seconds.
