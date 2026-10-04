@@ -113,6 +113,7 @@ import { isOpenableExternally } from '@main/externalurl'
 import { readingEpisode, type PlayerReading } from '@main/playermessage'
 import {
   isWatchedEnough,
+  lengthToStore,
   resumeAction,
   resumeKey,
   resumeOfferFor,
@@ -1287,13 +1288,14 @@ export async function createBridge(): Promise<WtaApi> {
       writtenPositions.forget(resumeKey(context))
       return
     }
-    if (!writtenPositions.isChange(resumeKey(context), reading!.seconds, reading!.duration)) return
+    const duration = lengthToStore(reading!.duration, points.get(resumeKey(context))?.duration)
+    if (!writtenPositions.isChange(resumeKey(context), reading!.seconds, duration)) return
 
     points.put({
       key: resumeKey(context),
       tmdbId: context.tmdbId,
       seconds: reading!.seconds,
-      duration: reading!.duration,
+      duration,
     })
   }
 

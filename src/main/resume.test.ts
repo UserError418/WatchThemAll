@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   creditsTailSeconds,
   isWatchedEnough,
+  lengthToStore,
   resumeAction,
   resumeKey,
   ResumeSeek,
@@ -368,5 +369,18 @@ describe('a video far shorter than the title', () => {
     expect(resumeAction({ seconds: 600, duration: 70 * 60 }, 45)).toBe('store')
     // Nothing known about the title: only the advert floor applies.
     expect(resumeAction({ seconds: 146, duration: 272 }, null)).toBe('store')
+  })
+})
+
+describe('lengthToStore', () => {
+  it("keeps the stored length when a reading does not know it (the preview's kept copy)", () => {
+    expect(lengthToStore(0, 8348)).toBe(8348)
+    expect(lengthToStore(Number.NaN, 8348)).toBe(8348)
+  })
+
+  it("takes the reading's length when it has one, and 0 when nothing is known", () => {
+    expect(lengthToStore(2417, 8348)).toBe(2417)
+    expect(lengthToStore(0, undefined)).toBe(0)
+    expect(lengthToStore(0, null)).toBe(0)
   })
 })

@@ -65,7 +65,7 @@ import { createScanService } from './scanservice'
 import { progressIsAbout } from '@shared/scanprogress'
 import { createWatchlistTester, episodeToTest } from './watchlisttester'
 import { AUTO_TEST_TICK_MS, AutoTester } from './autotest'
-import { isWatchedEnough, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
+import { isWatchedEnough, lengthToStore, resumeAction, resumeKey, resumeOfferFor, WrittenPositions } from './resume'
 import {
   readCache,
   refreshCatalog,
@@ -860,13 +860,14 @@ function rememberPosition(context: PlayRequest, position: VideoPosition | null):
     writtenPositions.forget(key)
     return
   }
-  if (!writtenPositions.isChange(key, position!.seconds, position!.duration)) return
+  const duration = lengthToStore(position!.duration, points.get(key)?.duration)
+  if (!writtenPositions.isChange(key, position!.seconds, duration)) return
 
   points.put({
     key,
     tmdbId: context.tmdbId,
     seconds: position!.seconds,
-    duration: position!.duration,
+    duration,
   })
 }
 

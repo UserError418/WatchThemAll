@@ -139,6 +139,23 @@ export function isAdvertLength(duration: number, runtimeMinutes: number | null):
 }
 
 /**
+ * The length to store with a new place: the reading's, or, when the reading
+ * does not know it (0), the one already stored.
+ *
+ * Some readings carry a place and no length: the stream preview's kept copy
+ * plays a thirty-second window, not the film, so it hands back where it is in
+ * the film and 0. Stored as it came, that 0 replaced the film's length, and
+ * the film lost its progress bar and could no longer count as watched until a
+ * real reading came along (measured 2026-10-04: Fight Club's 8348 s became 0
+ * and stayed 0, because the only source playing served a clip, which is
+ * rightly refused).
+ */
+export function lengthToStore(readingDuration: number, storedDuration: number | null | undefined): number {
+  if (Number.isFinite(readingDuration) && readingDuration > 0) return readingDuration
+  return typeof storedDuration === 'number' && storedDuration > 0 ? storedDuration : 0
+}
+
+/**
  * Is this position worth writing down, or resuming to?
  *
  * Anything past the very start, and not past the point it counts as watched:
