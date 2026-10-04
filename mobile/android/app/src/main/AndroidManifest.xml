@@ -29,8 +29,14 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/AppTheme">
 
+        <!--
+          fontScale too: a change of the system font size while the app was in
+          the background rebuilt the activity, which reloads the whole app and
+          stops whatever was playing. The WebView picks the new size up the
+          next time the app starts.
+        -->
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density|fontScale"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
