@@ -26,6 +26,7 @@
   import { library } from '../lib/library.svelte'
   import { removeFromWatchlist } from '../lib/undo'
   import { settlePickUp } from '../lib/pickup.svelte'
+  import { playFromCard } from '../lib/play'
   import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
@@ -160,7 +161,7 @@
 
     // A series in the library: where it picks up, worked out while the
     // pointer decides, so the panel names the right episode (Continue
-    // Watching's "Up next").
+    // Watching's "Up next") and ▶ has it ready.
     const entry = media.type === 'tv' ? library.watchlistEntry(media) : undefined
     if (entry) void settlePickUp(entry)
 
@@ -327,7 +328,8 @@
     {#if expanded}
       <div class="panel">
         <div class="actions">
-          <button class="round primary" onclick={(e) => { stop(e); onselect?.(media) }} title="Play">
+          <!-- Plays where the detail view's Resume would; "More info" below opens it. -->
+          <button class="round primary" onclick={(e) => { stop(e); void playFromCard(media) }} title="Play" aria-label="Play {media.title}">
             ▶
           </button>
           <button class="round" onclick={toggleSaved} title={saved ? 'In your watchlist' : 'Add to watchlist'}>

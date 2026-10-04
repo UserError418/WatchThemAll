@@ -34,6 +34,7 @@
   import { canHover } from '../lib/pointer'
   import { findEpisode } from '../lib/episodecache'
   import { loadListing, peekListing, seriesPickUp, settlePickUp } from '../lib/pickup.svelte'
+  import { playFromCard } from '../lib/play'
   import { whenVisible } from '../lib/titlefacts.svelte'
   import { revealIn, revealOut } from '../lib/motion'
   import type { Activity } from '@shared/watchlistrank'
@@ -183,23 +184,9 @@
     event.stopPropagation()
   }
 
-  async function resume(event: MouseEvent): Promise<void> {
+  function resume(event: MouseEvent): void {
     stop(event)
-    // Settled first: before the listings are in, the target is where the user
-    // is, which is often an episode already watched.
-    const at = isSeries ? await settlePickUp(entry) : null
-    await window.wta.play({
-      tmdbId: entry.tmdbId,
-      imdbId: entry.imdbId,
-      type: entry.type,
-      title: entry.title,
-      season: at?.season ?? null,
-      episode: at?.episode ?? null,
-      providerId: entry.providerId,
-      // The episode's own runtime when the season listing supplied one; null
-      // otherwise, which is what main already expects when TMDB is silent.
-      runtimeMinutes: at ? (findEpisode(peekListing(entry.tmdbId, at.season) ?? [], at.season, at.episode)?.runtime ?? null) : null,
-    })
+    void playFromCard(media)
   }
 
   function markSeasonWatched(event: MouseEvent): void {
