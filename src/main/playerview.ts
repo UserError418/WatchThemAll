@@ -57,6 +57,7 @@ import { isProviderFailure, judgeSilence, mayAutoSwitch, type LoadEvidence, type
 import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
 import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
+import { loadFailureReason } from './loadfailure'
 import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, type PlayMeasurement } from './providerscan'
 import { CarryOver } from '@shared/carryover'
 import type { CarryAction, CarryReport } from '@shared/ipc'
@@ -1765,7 +1766,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       if (errorCode === -3 || errorCode === -105 || errorCode === -106) return
       if (!isMainFrame && !isProviderDocument(failedUrl, frameProcessId, frameRoutingId)) return
       console.error(`[player] ${failedUrl} failed: ${errorCode} ${errorDescription}`)
-      suggest(errorDescription, 'failure')
+      suggest(loadFailureReason(errorCode, errorDescription, currentCandidate()?.provider.name ?? 'The source'), 'failure')
     },
   )
 
