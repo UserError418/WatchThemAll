@@ -11,15 +11,17 @@
  * The renderer is not aware any of this is different. That is the point: 18
  * renderer files call `window.wta` and none of them change.
  *
- * ## What is genuinely missing, and why
+ * ## What differs, and why
  *
  * `player.*` is the exception. On desktop the video is a native
- * `WebContentsView` and main injects JavaScript into the provider's own frames
- * to read the `<video>` position and to notice a stall. Android's WebView
- * grants no equivalent cross-origin privilege, and neither does the iframe this
- * uses instead — see `playersurface.ts`. So playback, provider switching and
- * episode stepping all work; resume-to-position, stall detection and the
- * auto-switch countdown are absent rather than faked.
+ * `WebContentsView` and main runs script in the provider's own frames.
+ * Android's WebView grants no such privilege over a cross-origin iframe (see
+ * `playersurface.ts`), so the phone installs a relay into every frame of its
+ * WebView at document start instead (`mediarelay.ts`). It reports the film's
+ * time and plays, pauses and seeks it, which is what resume, watched
+ * detection, the skip buttons and auto-next run on here. What has no phone
+ * equivalent yet is the stall watch and the auto-switch countdown
+ * (`player.dismissSuggestion` is a no-op).
  */
 
 import type {

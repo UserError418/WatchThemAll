@@ -274,7 +274,9 @@ from the app. If notifications go quiet, check that flag first.
 
 ## Other platform behaviour
 
-- **Back** leaves the player, then closes an open overlay, then quits.
+- **Back** takes the player down one layer at a time (an open menu or panel,
+  then fullscreen, then into the mini player), then closes an open overlay of the
+  app, then stops the mini player, then quits.
   `enableOnBackInvokedCallback` opts into the platform back API so the predictive
   gesture animates, which is safe alongside the JS listener because Capacitor 8
   registers through AndroidX's `OnBackPressedDispatcher`.
@@ -297,28 +299,28 @@ from the app. If notifications go quiet, check that flag first.
 
 Differences from the desktop that are not closing soon.
 
-- **Seeking to a stored position.** Reading a number out of a provider's frame
-  and writing one back are not symmetric, and nothing here can write. Providers
-  that report progress generally restore it themselves, but that is their feature
-  and the app cannot correct it when they get it wrong.
-- **Stall detection and the auto-switch countdown.** Both need to know a video
-  *stopped* advancing, and a provider that never reports is indistinguishable from
-  one that stalled. `player.dismissSuggestion` is a no-op.
-- **Automatic watched detection on silent providers.** `isWatchedEnough` runs fine
-  here but has nothing to feed it, so those titles are marked by hand. Injecting a
-  script from a Kotlin `WebViewClient` is the only obvious route, and
-  `evaluateJavascript` reaches the main frame only — most providers nest their
-  player an iframe deeper.
-- **The release-check interval setting is inert.** Alarms come from known air
-  dates and the sweep runs on resume, so there is nothing for it to control.
+- **Stall detection and the auto-switch countdown.** Not built. Since the film
+  relay (`mediarelay.ts`, installed into every frame at document start) reports
+  the film's time, a stall is visible here as it is on the desktop; nothing
+  watches for it yet, and `player.dismissSuggestion` is a no-op. (Resume to a
+  stored position and automatic watched detection, once listed here, work
+  through the same relay: it reads the film's `<video>` in whatever frame it
+  is, and seeks it.)
+- **The release-check interval is a floor, not a timer.** Alarms come from known
+  air dates and the sweep runs on resume, at most as often as the setting says
+  and never more than every fifteen minutes.
 - **The refresh token is in `Preferences`, not the Android keystore** — private
   app storage, readable by this app and by root. The keystore needs a native
   Kotlin module and this project has none. The library file sits behind the same
-  boundary, so the token is no less protected than the data it unlocks.
+  boundary, so the token is no less protected than the data it unlocks. The
+  boundary holds because the released APK is not debuggable (see "Icons and
+  signing"), and the token is left out of Android's backups
+  (`res/xml/data_extraction_rules.xml`).
 - **Export goes through the system share sheet**, not a save dialog. There is no
   "save to this folder" without the Storage Access Framework.
-- **No keyboard shortcuts or menu bar.** The chrome bar's controls are the
-  substitute.
+- **No menu bar, and no app-wide keyboard shortcuts.** The player's keys work
+  with a keyboard, a remote or DeX (`playeraction.ts`); Back and Escape are
+  Android's back button.
 
 ## Icons and signing
 
