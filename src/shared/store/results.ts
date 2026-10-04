@@ -15,7 +15,7 @@
  */
 
 import { isSourceResult, mergeResults, pruneResults, withoutFutureResults, type SourceResult } from '../sourceresults'
-import type { StorePersistence } from './core'
+import { withoutByteOrderMark, type StorePersistence } from './core'
 
 /** The file's shape. `results` marks it and is bumped only if the shape ever changes. */
 interface ResultsFile {
@@ -57,7 +57,7 @@ export class ResultStore {
     }
     if (text === null) return
     try {
-      const parsed = JSON.parse(text) as Partial<ResultsFile>
+      const parsed = JSON.parse(withoutByteOrderMark(text)) as Partial<ResultsFile>
       const items = Array.isArray(parsed.items) ? parsed.items.filter(isSourceResult) : []
       this.items = pruneResults(items, this.now())
     } catch {

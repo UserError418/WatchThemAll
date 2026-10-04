@@ -88,6 +88,18 @@ export function unreadableLibrary(reason: string): string {
   return `Your library could not be read (${reason}). Nothing was changed. Close and reopen WatchThemAll to try again.`
 }
 
+/**
+ * The text without a leading byte-order mark.
+ *
+ * The desktop's library is pretty-printed so that people can open and repair
+ * it by hand, and some editors save UTF-8 with a byte-order mark, which
+ * `JSON.parse` refuses. Until 2.0.12 such a library was set aside as
+ * unreadable and the app started on an empty one.
+ */
+export function withoutByteOrderMark(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+}
+
 /** What the app says once, when the library would not open and a copy of it was kept. */
 export function recoveredLibrary(copy: string): string {
   return `Your library could not be read, so WatchThemAll started with an empty one. The unreadable file was kept, unchanged, as ${copy}.`
@@ -336,7 +348,7 @@ export class StoreCore {
     }
 
     try {
-      this.doc = pruneTombstones(this.migrate(JSON.parse(text)))
+      this.doc = pruneTombstones(this.migrate(JSON.parse(withoutByteOrderMark(text))))
     } catch {
       let keptAs: string | void
       try {
