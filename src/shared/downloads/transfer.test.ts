@@ -100,11 +100,22 @@ describe('runTransfer', () => {
     expect(outcome).toEqual({ kind: 'failed', reason: 'Segment 3 of 3 would not download (HTTP 404)' })
   })
 
-  it('refuses a page served in a segment\'s place', async () => {
-    const routes: Record<string, { status: number; body: string | Uint8Array }> = routesFor(2)
-    routes['https://cdn/seg1'] = { status: 200, body: '<html>busy</html>' }
-    const outcome = await runTransfer(planOf(mediaPlaylist('https://cdn', 2, 6)), memoryFolder(fakeNetwork(routes)), options())
-    expect(outcome).toEqual({ kind: 'failed', reason: 'Segment 2 of 2 would not download (not video)' })
+  it('refuses a stream where more than a few segments are pages, not video', async () => {
+    const routes: Record<string, { status: number; body: string | Uint8Array }> = routesFor(4)
+    for (const i of [1, 2, 3]) routes[`https://cdn/seg${i}`] = { status: 200, body: '<html>busy</html>' }
+    const outcome = await runTransfer(planOf(mediaPlaylist('https://cdn', 4, 6)), memoryFolder(fakeNetwork(routes)), options())
+    expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/^Segment \d of 4 would not download \(not video\)$/) })
+  })
+
+  it('plays past a segment the source never gives, as its own player does', async () => {
+    const routes: Record<string, { status: number; body: string | Uint8Array }> = routesFor(5)
+    routes['https://cdn/seg2'] = { status: 200, body: new Uint8Array(0) }
+    routes['https://cdn/seg3'] = { status: 200, body: '<html>busy</html>' }
+    const folder = memoryFolder(fakeNetwork(routes))
+    expect((await runTransfer(planOf(mediaPlaylist('https://cdn', 5, 6)), folder, options())).kind).toBe('done')
+    const playlist = new TextDecoder().decode(folder.files.get('index.m3u8'))
+    expect(playlist).not.toMatch(/s0000[23]\.ts/)
+    expect(playlist).toMatch(/#EXT-X-DISCONTINUITY\n#EXTINF:6\.000000,\ns00004\.ts/)
   })
 
   it('refuses to fill the disk, before the first segment when the bit rate is known', async () => {

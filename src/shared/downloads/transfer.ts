@@ -103,6 +103,17 @@ export const LANES = 3
 /** The pauses before each retry of a failed fetch: five tries in about forty seconds. */
 export const RETRY_DELAYS_MS = [1_000, 3_000, 9_000, 27_000]
 
+/**
+ * The share of a stream's segments that may be gaps: answered with success
+ * every time and never with video. Measured (Chernobyl S1E1 on VidSrc, 722
+ * segments): two playlist entries named one URL that answers 200 with an
+ * empty body, and the source's own player plays straight past them. Failing
+ * the whole film at 720 of 722 over that helps nobody; more than a few such
+ * holes is a broken stream, and the download fails as before.
+ */
+export const MAX_GAP_SHARE = 0.01
+const MIN_GAPS_ALLOWED = 2
+
 /** What a CDN answers once a signed URL has expired or been revoked. */
 const EXPIRED_STATUSES = new Set([401, 403, 410])
 
@@ -236,6 +247,9 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
   let roomAsked = false
   let failure: string | null = null
   let expired = false
+  /** Segments the source answered but never with video; see `MAX_GAP_SHARE`. */
+  const gaps = new Set<number>()
+  const gapsAllowed = Math.max(MIN_GAPS_ALLOWED, Math.floor(total * MAX_GAP_SHARE))
 
   const report = (): void => options.onProgress({ segmentsDone, segmentsTotal: total, bytesDone, estimatedBytes: estimate })
   report()
@@ -280,6 +294,10 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
       expired = true
       return halt.abort()
     }
+    if (got.kind === 'failed' && got.why === 'not video' && gaps.size < gapsAllowed) {
+      gaps.add(index)
+      return
+    }
     if (got.kind === 'failed') {
       failure ??= `Segment ${index + 1} of ${total} would not download (${got.why})`
       return halt.abort()
@@ -312,7 +330,7 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
   if (expired) return { kind: 'expired' }
   if (failure !== null) return { kind: 'failed', reason: failure }
 
-  await files.writeText(PLAYLIST_FILE, localPlaylist(plan))
+  await files.writeText(PLAYLIST_FILE, localPlaylist(plan, gaps))
   const bytes = (await files.list()).reduce((sum, f) => sum + f.bytes, 0)
   return { kind: 'done', bytes, height }
 }

@@ -298,19 +298,27 @@ export function estimateBytes(plan: DownloadPlan, sample: { bytes: number; secon
 /**
  * The playlist that plays the folder: every segment by its file name, the
  * initialisation segments likewise, and no key line, because the segments
- * were decrypted as they were saved.
+ * were decrypted as they were saved. `gaps` are segments the source itself
+ * could not give (see `MAX_GAP_SHARE` in `transfer.ts`): left out, with a
+ * discontinuity where they were, as the source's own player skips them.
  */
-export function localPlaylist(plan: DownloadPlan): string {
+export function localPlaylist(plan: DownloadPlan, gaps: ReadonlySet<number> = new Set()): string {
   const target = Math.max(1, Math.ceil(Math.max(...plan.segments.map((s) => s.seconds))))
   const lines = ['#EXTM3U', `#EXT-X-VERSION:${plan.format === 'fmp4' ? 7 : 3}`, `#EXT-X-TARGETDURATION:${target}`]
   lines.push('#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-PLAYLIST-TYPE:VOD')
   let map: number | null = null
+  let afterGap = false
   plan.segments.forEach((s, i) => {
+    if (gaps.has(i)) {
+      afterGap = true
+      return
+    }
     if (s.map !== null && s.map !== map) {
       lines.push(`#EXT-X-MAP:URI="${mapName(s.map)}"`)
       map = s.map
     }
-    if (s.discontinuity) lines.push('#EXT-X-DISCONTINUITY')
+    if (s.discontinuity || afterGap) lines.push('#EXT-X-DISCONTINUITY')
+    afterGap = false
     lines.push(`#EXTINF:${s.seconds.toFixed(6)},`, segmentName(i, plan.format))
   })
   lines.push('#EXT-X-ENDLIST', '')
