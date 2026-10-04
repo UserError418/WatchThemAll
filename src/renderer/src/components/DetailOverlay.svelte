@@ -11,6 +11,7 @@
    */
   import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import { removeFromWatchlist } from '../lib/undo'
   import PreviewSoundButton from './PreviewSoundButton.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
@@ -1087,9 +1088,7 @@
               <button
                 class="secondary"
                 onclick={() =>
-                  inWatchlist
-                    ? library.removeFromWatchlist(subject)
-                    : library.addToWatchlist(detail ?? subject)}
+                  inWatchlist ? removeFromWatchlist(subject) : library.addToWatchlist(detail ?? subject)}
               >
                 {inWatchlist ? '✓ In Watchlist' : '+ Watchlist'}
               </button>

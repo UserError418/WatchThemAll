@@ -303,8 +303,9 @@ export interface WatchlistEntry {
    * is stored on the entry — and creating a listed one for them put every
    * ticked or rated title on the watchlist. Decided 2026-09-26: only pressing
    * play should do that. Pressing play, "+ Watchlist" or a MyAnimeList import
-   * lists the entry; removing it from the watchlist deletes it, ticks and all,
-   * as before.
+   * lists the entry. Removing it from the watchlist unlists it again rather
+   * than deleting it: until 2.0.12 that deleted the ticks, position and source
+   * with it, to one click, on every device.
    *
    * What reads unlisted entries on purpose: anything after the title's own
    * records (ticks, positions, the chosen source, the TMDB score backfill) and

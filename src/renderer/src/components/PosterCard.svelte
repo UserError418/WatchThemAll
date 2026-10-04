@@ -13,6 +13,7 @@
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import { removeFromWatchlist } from '../lib/undo'
   import { posterSrcset, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import Score from './Score.svelte'
@@ -36,7 +37,7 @@
   function toggleSaved(event: MouseEvent): void {
     // The card itself opens the detail view; the quick action must not.
     event.stopPropagation()
-    if (saved) library.removeFromWatchlist(media)
+    if (saved) removeFromWatchlist(media)
     else library.addToWatchlist(media)
   }
 </script>

@@ -11,6 +11,7 @@
   import type { PlayerState } from '@shared/ipc'
   import { library } from './lib/library.svelte'
   import { previewAudio } from './lib/preview.svelte'
+  import { toast } from './lib/toast.svelte'
   import Browse from './views/Browse.svelte'
   import Search from './views/Search.svelte'
   import Watchlist from './views/Watchlist.svelte'
@@ -113,9 +114,6 @@
   let paletteOpen = $state(false)
   let ready = $state(false)
   let loadError = $state<string | null>(null)
-  let toast = $state<string | null>(null)
-  /** One timer for whichever toast is up, so a newer one gets its full six seconds. */
-  let toastTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * The nav floats over the hero and gains a background once the user scrolls.
    * Only Browse has a hero, so on every other surface it is solid immediately.
@@ -220,12 +218,11 @@
       window.wta.on.releaseFound((payload) => {
         const list = Array.isArray(payload) ? payload : [payload]
         if (list.length === 0) return
-        toast =
+        toast.show(
           list.length === 1
             ? `${list[0]?.title} has a new episode`
-            : `${list.length} tracked series have new episodes`
-        if (toastTimer) clearTimeout(toastTimer)
-        toastTimer = setTimeout(() => (toast = null), 6000)
+            : `${list.length} tracked series have new episodes`,
+        )
       }),
       window.wta.on.episodeWatched(({ tmdbId, type, season, episode }) => {
         /**
@@ -481,8 +478,13 @@
   <div class="toast error" role="alert">
     Changes are not being saved: {library.persistError}
   </div>
-{:else if toast}
-  <div class="toast" role="status">{toast}</div>
+{:else if toast.current}
+  <div class="toast" role="status">
+    <span>{toast.current.message}</span>
+    {#if toast.current.action}
+      <button class="toast-action" onclick={() => toast.act()}>{toast.current.action.label}</button>
+    {/if}
+  </div>
 {/if}
 
 <style>
@@ -789,6 +791,23 @@
     border: 1px solid var(--border-strong);
     box-shadow: var(--shadow-pop);
     font-size: var(--text-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  /* The undo on a toast: text-weight, in the accent, so it reads as the
+     one thing to press without competing with the sentence. */
+  .toast-action {
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .toast-action:hover {
+    background: var(--bg-hover);
   }
 
   @media (max-width: 720px) {

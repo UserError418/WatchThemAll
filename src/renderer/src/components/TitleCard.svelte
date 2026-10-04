@@ -24,6 +24,7 @@
    */
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import { removeFromWatchlist } from '../lib/undo'
   import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
@@ -231,7 +232,7 @@
 
   function toggleSaved(event: MouseEvent): void {
     stop(event)
-    if (saved) library.removeFromWatchlist(media)
+    if (saved) removeFromWatchlist(media)
     else library.addToWatchlist(media)
   }
 

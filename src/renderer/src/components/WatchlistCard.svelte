@@ -28,6 +28,7 @@
    */
   import type { Episode, MediaSummary, WatchlistEntry } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import { removeFromWatchlist } from '../lib/undo'
   import { posterUrl, stillUrl } from '../lib/images'
   import { episodeCode, runtime } from '../lib/format'
   import { canHover } from '../lib/pointer'
@@ -235,7 +236,7 @@
 
   function remove(event: MouseEvent): void {
     stop(event)
-    library.removeFromWatchlist(entry)
+    removeFromWatchlist(entry)
   }
 
   $effect(() => clearIntent)

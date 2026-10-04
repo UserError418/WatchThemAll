@@ -444,9 +444,39 @@ class Library {
     return this.watchlist[0]!
   }
 
-  removeFromWatchlist(title: TitleRef): void {
-    this.watchlist = this.watchlist.filter((w) => !isTitle(w, title))
+  /**
+   * Take a title off the watchlist, keeping what it recorded.
+   *
+   * Unlisted rather than deleted. The entry is where the title's episode
+   * ticks, position and chosen source live, so deleting it lost all of them
+   * to one click, and the deletion synced to every device. Unlisted, the
+   * title leaves the Watchlist tab, Continue Watching and everything else that
+   * reads the list (see `WatchlistEntry.listed`), and listing it again —
+   * "+ Watchlist", playing it, or the undo returned here — finds its progress
+   * where it was.
+   *
+   * Every listed copy goes: two devices that listed a title before they synced
+   * can leave two entries for it, and removing one would leave it on the list.
+   *
+   * Returns the undo, which lists the entries again with the dates they were
+   * added, so the Watchlist tab puts them back where they stood.
+   */
+  removeFromWatchlist(title: TitleRef): () => void {
+    const removed = this.watchlist
+      .filter((w) => isTitle(w, title) && isListed(w))
+      .map((entry) => ({ entry, addedAt: entry.addedAt }))
+    if (removed.length === 0) return () => {}
+
+    for (const { entry } of removed) entry.listed = false
     void this.persist({ watchlist: this.watchlist })
+
+    return () => {
+      for (const { entry, addedAt } of removed) {
+        delete entry.listed
+        entry.addedAt = addedAt
+      }
+      void this.persist({ watchlist: this.watchlist })
+    }
   }
 
   /** Record the IMDB id once the detail view has resolved it. */
