@@ -75,9 +75,9 @@ ones you point it at and keeps the part that matters: your library.
 | **macOS** | `.dmg`. |
 | **Android** | `.apk` — sideload it. See [`mobile/`](mobile/README.md). |
 
-Android runs the same app and the same library, laid out for a phone. The APK
-is debug-signed, which is fine for sideloading but cannot upgrade an install
-from another source. Uninstall first if you have one.
+Android runs the same app and the same library, laid out for a phone. Each
+release's APK installs over the previous one and keeps your library. It cannot
+upgrade a copy signed by someone else: uninstall that first if you have one.
 
 ## Notices
 
