@@ -2444,6 +2444,20 @@ export async function createBridge(): Promise<WtaApi> {
      * relay obeys. It is not the player's surface, so the player's controls
      * never mount over it.
      */
+    /**
+     * Downloads are desktop-only until the phone's native downloader is built
+     * on the shared core (`shared/downloads/`, its `DownloadPlatform`). Null
+     * status: the renderer then offers no download anywhere.
+     */
+    downloads: {
+      status: async () => null,
+      start: async () => ({ ok: false, error: 'Downloads are not on the phone yet' }),
+      pause: async () => {},
+      resume: async () => {},
+      remove: async () => {},
+      setQuality: async () => {},
+      reveal: async () => false,
+    },
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
         // A preview is a provider in a frame of this WebView too.
@@ -2607,6 +2621,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
       watchlistTest: () => () => {},
+      downloads: () => () => {},
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),
     },

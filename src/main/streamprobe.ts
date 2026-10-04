@@ -162,6 +162,12 @@ export interface ProbeOptions {
    * down. Must bound its own time: the page is hostile and still running.
    */
   inspect?: (contents: WebContents) => Promise<void>
+  /**
+   * Silence the page. A download's capture lets the film play for seconds
+   * while the viewer may be watching another; a test stops at the first
+   * request, before there is anything to hear.
+   */
+  muted?: boolean
 }
 
 /** One completed response, as `onResponse` sees it. */
@@ -210,7 +216,7 @@ export async function probeStream(
   subject: ProbeSubject,
   options: ProbeOptions = {},
 ): Promise<StreamProbeResult> {
-  const { timeoutMs = 12_000, verbose = false, frameUrl, onMedia, onResponse, lingerMs = 0, inspect } = options
+  const { timeoutMs = 12_000, verbose = false, frameUrl, onMedia, onResponse, lingerMs = 0, inspect, muted = false } = options
 
   /**
    * A watchdog the page cannot outlive.
@@ -233,7 +239,7 @@ export async function probeStream(
     runProbe(
       provider,
       subject,
-      { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect },
+      { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect, muted },
       partial,
     ),
     new Promise<StreamProbeResult>((resolve) =>
@@ -279,7 +285,7 @@ async function runProbe(
   options: Required<Omit<ProbeOptions, Hook>> & Pick<ProbeOptions, Hook>,
   partial: { current: StreamProbeResult | null },
 ): Promise<StreamProbeResult> {
-  const { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect } = options
+  const { timeoutMs, verbose, lingerMs, frameUrl, onMedia, onResponse, inspect, muted } = options
 
   const base: StreamProbeResult = {
     providerId: provider.id,
@@ -380,6 +386,7 @@ async function runProbe(
    * and eventually exhausts memory.
    */
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  if (muted) win.webContents.setAudioMuted(true)
 
   const startedAt = Date.now()
   /** When video first arrived; see `videoArrived`. A playlist alone does not set it. */

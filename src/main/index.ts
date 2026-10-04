@@ -7,7 +7,7 @@
  * downloader in one file, and there was no way to test any of it.
  */
 
-import { app, BrowserWindow, ipcMain, Notification, session } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { isListed } from '@shared/listed'
@@ -26,7 +26,10 @@ import { createInlinePlayer, type InlinePlayer } from './playerview'
 import * as tmdb from './tmdb'
 import { applyBrowserIdentity, CHROME_UA } from './identity'
 import { APP_PERMISSIONS, restrictPermissions, SOURCE_PERMISSIONS } from './permissions'
-import { playerShellUrl, serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
+import { playerShellUrl, serveCacheFrom, serveDownloadsFrom, startRendererServer, stopRendererServer } from './localserver'
+import { createDesktopDownloads, downloadPlayUrl } from './downloadplatform'
+import type { DownloadManager, DownloadSource } from '@shared/downloads/manager'
+import { DOWNLOADED_SOURCE_ID, DOWNLOADED_SOURCE_NAME, isDownloadedSource, type DownloadSubject } from '@shared/downloads/types'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from './segmentstore'
 import { nodeCacheFiles } from './segmentfiles'
 import { choosePreview, planPreview } from './previewplan'
@@ -254,6 +257,75 @@ async function createMainWindow(): Promise<void> {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+}
+
+/** The downloads (`shared/downloads/`, desktop IO in `downloadplatform.ts`); null until loaded. */
+let downloads: DownloadManager | null = null
+
+/**
+ * The sources a download tries, best first, as Resume would choose: the one
+ * chosen by hand, then the Automatic order (tests, outcomes, favourites, the
+ * user's order), enabled ones only.
+ */
+function downloadSources(subject: DownloadSubject, preferredProviderId: string | null): DownloadSource[] {
+  const req: PlayRequest = { ...subject, providerId: preferredProviderId }
+  const selection = buildPlayUrl(automaticOrderFor(req).providers, req)
+  return selection?.candidates.map((c) => ({ id: c.provider.id, name: c.provider.name })) ?? []
+}
+
+/**
+ * The episode's download as a source for the player: a page on the local
+ * server with our own `<video>` of the local playlist, framed by the player
+ * shell like a provider's page. Null when there is no finished download, or
+ * no local server to serve it (a dev build on Vite).
+ */
+function downloadedCandidate(req: PlayRequest): PlayCandidate | null {
+  if (downloads === null || rendererBaseUrl === null) return null
+  const found = downloads.playable({ tmdbId: req.tmdbId, type: req.type, season: req.season ?? null, episode: req.episode ?? null })
+  if (found === null) return null
+  return {
+    provider: { id: DOWNLOADED_SOURCE_ID, name: DOWNLOADED_SOURCE_NAME, rootUrl: rendererBaseUrl, tv: null, movie: null },
+    url: downloadPlayUrl(rendererBaseUrl, found.id),
+  }
+}
+
+function downloadsRoot(): string {
+  return join(app.getPath('userData'), 'downloads')
+}
+
+/** The download's .mp4 in the file manager, or its folder when it has none. */
+function revealDownload(id: string): boolean {
+  const found = downloads?.status().downloads.find((d) => d.id === id)
+  if (!found) return false
+  const folder = join(downloadsRoot(), id)
+  if (found.mp4 !== null) shell.showItemInFolder(join(folder, found.mp4))
+  else void shell.openPath(folder)
+  return true
+}
+
+/**
+ * Load the downloads and start the queue. After the window, because a
+ * capture frames its source in the local server's shell, as the tests do,
+ * and the server starts with the window.
+ */
+async function startDownloads(): Promise<void> {
+  try {
+    serveDownloadsFrom(downloadsRoot())
+    downloads = await createDesktopDownloads({
+      root: downloadsRoot(),
+      // Beside the library, never inside it: the library is synced, and
+      // these files are on this device only.
+      recordsFile: join(store.dir, 'downloads.json'),
+      sources: downloadSources,
+      provider: (id) => allProviders().find((p) => p.id === id) ?? null,
+      frameUrl: (providerUrl) =>
+        rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl, { bare: true }) : providerUrl,
+      baseUrl: () => rendererBaseUrl,
+      publish: (status) => send(EV.downloads, status),
+    })
+  } catch (error) {
+    console.log(`[downloads] unavailable: ${String(error)}`)
+  }
 }
 
 /**
@@ -700,13 +772,19 @@ function openPlayer(
     context,
     candidates,
     bounds: { x: 0, y: 0, width, height },
-    reportOutcome: (providerId, outcome) =>
+    reportOutcome: (providerId, outcome) => {
+      // A download is not a source: it always plays, and counting it would
+      // rank a source that does not exist (`DOWNLOADED_SOURCE_ID`).
+      if (isDownloadedSource(providerId)) return
       // What it shows now rather than the captured `context`: moving to
       // another episode reuses this view, and an outcome recorded against the
       // episode it opened on would credit the wrong key.
-      recordOutcome(showing(), providerId, outcome),
+      recordOutcome(showing(), providerId, outcome)
+    },
     // A test result from watching, filed under the episode playing, as above.
+    // Never for a download: Resume's source rule reads these results.
     reportResult: (providerId, seen) => {
+      if (isDownloadedSource(providerId)) return
       const playing = showing()
       const where = { device: testResults.device(), titleKey: titleKey(playing), episode: episodeOf(playing), providerId }
       testResults.record([playResult(where, 'play', warmStarts.measure(where.titleKey, providerId, seen))])
@@ -921,7 +999,7 @@ let notedPlaylistFor: string | null = null
  */
 function notePlayerPlaylist(): void {
   const providerId = player?.currentProviderId() ?? null
-  if (!player || providerId === null || segmentStore === null || onTv) return
+  if (!player || providerId === null || segmentStore === null || onTv || isDownloadedSource(providerId)) return
   const where = windowWhere(player.context, providerId)
   const key = `${where.titleKey}|${where.season}|${where.episode}|${providerId}`
   if (key === notedPlaylistFor) return
@@ -960,6 +1038,8 @@ function keepStreamWindow(
   requests: readonly { url: string; headers: Record<string, string> }[],
 ): void {
   if (segmentStore === null || providerId === null || position === null || requests.length === 0) return
+  // A download is on the device already; a window of it would be a copy of a copy.
+  if (isDownloadedSource(providerId)) return
   void segmentStore.save(windowWhere(req, providerId), requests, position, req.runtimeMinutes ?? null, saveNames(req, providerId))
 }
 
@@ -1176,7 +1256,9 @@ function navigatePlayer(season: number, episode: number): void {
     // going back to one you abandoned half-way lands in the right place.
     resumeOfferFor(store.read().resumePoints, next),
   )
-  if (!selection) return
+  const downloaded = downloadedCandidate(next)
+  const candidates = [...(downloaded ? [downloaded] : []), ...(selection?.candidates ?? [])]
+  if (candidates.length === 0) return
 
   // Settle the episode being left before the context is rewritten, or its time
   // would be credited to the one being moved to. After the check above, as on
@@ -1196,7 +1278,7 @@ function navigatePlayer(season: number, episode: number): void {
    * which already clears it.
    */
   cast.forget()
-  player.goToEpisode({ context: next, candidates: selection.candidates, url: selection.url })
+  player.goToEpisode({ context: next, candidates, url: candidates[0]!.url })
 
   sendPlayerState()
 }
@@ -1566,6 +1648,9 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       scan,
       warmStarts,
       scanFiled: cacheAfterTest,
+      downloads: () => downloads,
+      revealDownload,
+      downloadedCandidate,
     })
 
     // After the IPC is up, so its first status reaches a window that can ask.
@@ -1588,7 +1673,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
 
     buildMenu(menuDeps)
     createTray(dirname, menuDeps)
-    void createMainWindow()
+    void createMainWindow().then(startDownloads)
 
     stopReleaseTimer = startReleaseTimer(store, announce)
 

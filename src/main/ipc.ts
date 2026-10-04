@@ -31,6 +31,8 @@ import type {
   WatchlistTestStatus,
 } from '@shared/ipc'
 import type { MediaSummary, MediaType, StoreShape } from '@shared/types'
+import type { DownloadRequest, QualityCap } from '@shared/downloads/types'
+import type { DownloadManager } from '@shared/downloads/manager'
 import type { Store } from './store'
 import * as tmdb from './tmdb'
 import * as search from './search'
@@ -203,6 +205,15 @@ export interface IpcDeps {
   scanFiled: (media: TitleRef, episode: { season: number; episode: number } | null) => void
   /** The watchlist tester's state, for Settings. */
   backgroundStatus: () => WatchlistTestStatus
+  /** The downloads, once they are loaded; null before, and when they could not be. */
+  downloads: () => DownloadManager | null
+  /** Show a download's .mp4, or its folder, in the file manager. */
+  revealDownload: (id: string) => boolean
+  /**
+   * The download of this episode as the first source to play, or null when
+   * there is none: offline-capable, and played through the same player.
+   */
+  downloadedCandidate: (req: PlayRequest) => PlayCandidate | null
 }
 
 /**
@@ -376,6 +387,21 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   })
   ipcMain.handle(CH.previewCarryEnd, () => deps.preview.carryEnd())
   ipcMain.handle(CH.previewCacheStatus, () => deps.preview.cacheStatus())
+
+  /*
+    Downloads. Before they are loaded, `status` is null and the rest do
+    nothing: the first status reaches the renderer as an event once they are.
+  */
+  ipcMain.handle(CH.downloadsStatus, () => deps.downloads()?.status() ?? null)
+  ipcMain.handle(CH.downloadsStart, async (_e, request: DownloadRequest) => {
+    const downloads = deps.downloads()
+    return downloads ? downloads.start(request) : { ok: false, error: 'Downloads are not ready yet' }
+  })
+  ipcMain.handle(CH.downloadsPause, (_e, id: string) => deps.downloads()?.pause(id))
+  ipcMain.handle(CH.downloadsResume, (_e, id: string) => deps.downloads()?.resume(id))
+  ipcMain.handle(CH.downloadsRemove, (_e, id: string) => deps.downloads()?.remove(id))
+  ipcMain.handle(CH.downloadsSetQuality, (_e, quality: QualityCap) => deps.downloads()?.setQuality(quality))
+  ipcMain.handle(CH.downloadsReveal, (_e, id: string) => deps.revealDownload(id))
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const at = Date.now()
@@ -486,8 +512,10 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
      * user can act on.
      */
     const enabled = deps.automaticOrder(req).providers
+    // A download plays first, and plays with no source enabled at all.
+    const downloaded = deps.downloadedCandidate(req)
 
-    if (enabled.length === 0) {
+    if (enabled.length === 0 && downloaded === null) {
       return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }
     }
 
@@ -504,13 +532,15 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     // to a second and a half of waiting.
     await deps.freshenPositions()
     const selection = buildPlayUrl(enabled, req, resumeOfferFor(store.read().resumePoints, req))
-    if (selection) {
-      openPlayer(selection.url, req.title, req, selection.candidates, { held: options?.carry === true })
+    const candidates = [...(downloaded ? [downloaded] : []), ...(selection?.candidates ?? [])]
+    const first = candidates[0]
+    if (first) {
+      openPlayer(first.url, req.title, req, candidates, { held: options?.carry === true })
       return {
         ok: true,
-        url: selection.url,
-        providerId: selection.provider.id,
-        providerName: selection.provider.name,
+        url: first.url,
+        providerId: first.provider.id,
+        providerName: first.provider.name,
       }
     }
 

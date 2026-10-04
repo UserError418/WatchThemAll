@@ -77,6 +77,64 @@ async function serveCached(res: ServerResponse, pathname: string): Promise<boole
 }
 
 /**
+ * Downloads (`downloadplatform.ts`), under `/__downloads/`: their segments and
+ * playlists for the player, their posters for the app window, and a page per
+ * download that the player frames in a source's place. Null until the
+ * downloads are ready. As with the cache, only names of the downloads' own
+ * making are answered: an id, and a file name with a known extension.
+ */
+let downloadsRoot: string | null = null
+const DOWNLOAD_FILE = /^\/__downloads\/([a-z0-9-]+)\/([a-z0-9]+\.(m3u8|ts|m4s|mp4|jpg))$/
+const DOWNLOAD_PAGE = /^\/__downloads\/([a-z0-9-]+)\/play\.html$/
+const DOWNLOAD_MIME: Record<string, string> = { ...CACHE_MIME, jpg: 'image/jpeg' }
+
+export function serveDownloadsFrom(root: string | null): void {
+  downloadsRoot = root
+}
+
+/**
+ * The page a download plays in: our own `<video>` of its local playlist, and
+ * nothing else. The player frames it like a source's page, so the film relay,
+ * our controls, resume, the skip buttons and auto-next all work unchanged,
+ * and nothing here needs the network. Not muted: the overlay unmutes a film
+ * once per load anyway, and a download should simply play with sound.
+ */
+function downloadPage(): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Downloaded</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+</style>
+</head><body>
+<video src="index.m3u8" autoplay playsinline preload="auto"></video>
+</body></html>`
+}
+
+async function serveDownload(res: ServerResponse, pathname: string): Promise<boolean> {
+  if (downloadsRoot === null) return false
+  const page = DOWNLOAD_PAGE.exec(pathname)
+  if (page) {
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      // Framed by the player shell, which is this same origin.
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Content-Security-Policy': "default-src 'self'; style-src 'unsafe-inline'",
+    })
+    res.end(downloadPage())
+    return true
+  }
+  const match = DOWNLOAD_FILE.exec(pathname)
+  if (!match) return false
+  return sendFile(res, join(downloadsRoot, match[1]!, match[2]!), {
+    'Content-Type': DOWNLOAD_MIME[match[3]!]!,
+    'Cache-Control': 'no-store',
+  })
+}
+
+/**
  * Answer with a file, or return false, having written nothing, when it cannot
  * be opened or is not a file.
  *
@@ -261,6 +319,10 @@ export function startRendererServer(rendererDir: string): Promise<string> {
           }
           if (pathname.startsWith('/__cache/')) {
             if (!(await serveCached(res, pathname))) res.writeHead(404).end('Not found')
+            return
+          }
+          if (pathname.startsWith('/__downloads/')) {
+            if (!(await serveDownload(res, pathname))) res.writeHead(404).end('Not found')
             return
           }
           const requested = decodeURIComponent(pathname === '/' ? '/index.html' : pathname)

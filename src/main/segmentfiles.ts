@@ -23,7 +23,7 @@ const SEGMENT_TIMEOUT_MS = 20_000
 const HEAD_BYTES = 400
 
 /** A URL's text with the source's headers; with `limitBytes`, only its start, and the rest is never downloaded. */
-async function fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null> {
+export async function fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null> {
   try {
     const response = await fetch(url, { headers: replayableHeaders(headers), signal: AbortSignal.timeout(PLAYLIST_TIMEOUT_MS) })
     if (limitBytes === undefined || response.body === null) return { status: response.status, body: await response.text() }

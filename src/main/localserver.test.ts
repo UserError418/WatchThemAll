@@ -32,9 +32,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
-import { serveCacheFrom, startRendererServer, stopRendererServer } from './localserver'
+import { serveCacheFrom, serveDownloadsFrom, startRendererServer, stopRendererServer } from './localserver'
 
 const WINDOW = 'tv-tt0000001-1-1-abc'
+const DOWNLOAD = 'tv-1399-s1e1-abc'
 let root = ''
 let base = ''
 
@@ -42,12 +43,15 @@ beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'wta-localserver-'))
   mkdirSync(join(root, 'renderer'))
   mkdirSync(join(root, 'cache', WINDOW), { recursive: true })
+  mkdirSync(join(root, 'downloads', DOWNLOAD), { recursive: true })
   base = await startRendererServer(join(root, 'renderer'))
   serveCacheFrom(join(root, 'cache'))
+  serveDownloadsFrom(join(root, 'downloads'))
 })
 afterAll(() => {
   stopRendererServer()
   serveCacheFrom(null)
+  serveDownloadsFrom(null)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -134,5 +138,25 @@ describe('serving a preview cache window', () => {
     writeFileSync(join(root, 'cache', WINDOW, 'index.m3u8'), '#EXTM3U\n')
     expect(await statusOf(`${base}/__cache/${WINDOW}/index.m3u8`, 1_000)).toBe(200)
     expect(await statusOf(`${base}/__cache/${WINDOW}/missing.ts`, 1_000)).toBe(404)
+  })
+})
+
+describe('serving a download', () => {
+  it('serves its playlist, segments and poster, and the page the player frames', async () => {
+    writeFileSync(join(root, 'downloads', DOWNLOAD, 'index.m3u8'), '#EXTM3U\n')
+    writeFileSync(join(root, 'downloads', DOWNLOAD, 's00000.ts'), 'x')
+    writeFileSync(join(root, 'downloads', DOWNLOAD, 'poster.jpg'), 'x')
+    for (const file of ['index.m3u8', 's00000.ts', 'poster.jpg', 'play.html']) {
+      expect(await statusOf(`${base}/__downloads/${DOWNLOAD}/${file}`, 1_000)).toBe(200)
+    }
+    const page = await (await fetch(`${base}/__downloads/${DOWNLOAD}/play.html`)).text()
+    expect(page).toContain('<video src="index.m3u8"')
+  })
+
+  it('answers nothing it did not make: no plan, no traversal, no missing file', async () => {
+    writeFileSync(join(root, 'downloads', DOWNLOAD, 'plan.json'), '{}')
+    expect(await statusOf(`${base}/__downloads/${DOWNLOAD}/plan.json`, 1_000)).toBe(404)
+    expect(await statusOf(`${base}/__downloads/../cache/${WINDOW}/index.m3u8`, 1_000)).not.toBe(200)
+    expect(await statusOf(`${base}/__downloads/${DOWNLOAD}/s00009.ts`, 1_000)).toBe(404)
   })
 })

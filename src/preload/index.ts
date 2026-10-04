@@ -15,9 +15,11 @@ import { CH, EV } from '@shared/ipc'
 import type {
   CarryReport,
   DiscoverRequest,
+  DownloadRequest,
   GenreRowRequest,
   MalDecisions,
   PlayRequest,
+  QualityCap,
   RowRequest,
   ForYouPlanRequest,
   ForYouRowRequest,
@@ -52,6 +54,15 @@ const api: WtaApi = {
   },
   search: (query: string, page: number) => ipcRenderer.invoke(CH.search, query, page),
   resolve: (item: MediaSummary) => ipcRenderer.invoke(CH.searchResolve, item),
+  downloads: {
+    status: () => ipcRenderer.invoke(CH.downloadsStatus),
+    start: (request: DownloadRequest) => ipcRenderer.invoke(CH.downloadsStart, request),
+    pause: (id: string) => ipcRenderer.invoke(CH.downloadsPause, id),
+    resume: (id: string) => ipcRenderer.invoke(CH.downloadsResume, id),
+    remove: (id: string) => ipcRenderer.invoke(CH.downloadsRemove, id),
+    setQuality: (quality: QualityCap) => ipcRenderer.invoke(CH.downloadsSetQuality, quality),
+    reveal: (id: string) => ipcRenderer.invoke(CH.downloadsReveal, id),
+  },
   providers: {
     list: () => ipcRenderer.invoke(CH.providersList),
     outcomes: (media: TitleRef, episode?: { season: number; episode: number } | null) =>
@@ -123,6 +134,7 @@ const api: WtaApi = {
     playbackSettled: (cb) => subscribe(EV.playbackSettled, cb),
     storeChanged: (cb) => subscribe(EV.storeChanged, cb),
     playbackActive: (cb) => subscribe(EV.playbackActive, cb),
+    downloads: (cb) => subscribe(EV.downloads, cb),
     carryReleased: (cb) => subscribe(EV.carryReleased, () => cb()),
     carryAction: (cb) => subscribe(EV.carryAction, cb),
     playerState: (cb) => subscribe(EV.playerState, cb),

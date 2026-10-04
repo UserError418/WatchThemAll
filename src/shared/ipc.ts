@@ -40,6 +40,8 @@ export type { ProbeVerdict, ProviderScan, ScanReason }
 import type { SyncStatus } from './sync/types'
 import type { PlayerAction, TransportAction } from './playerkeys'
 import type { LoadedSubtitles, SubtitleLanguage } from './subtitles'
+import type { DownloadRequest, DownloadsStatus, QualityCap } from './downloads/types'
+export type { DownloadRequest, DownloadsStatus, DownloadView, QualityCap } from './downloads/types'
 
 /** Invoke channels: renderer → main, with a reply. */
 export const CH = {
@@ -145,6 +147,15 @@ export const CH = {
   previewCarryEnd: 'preview:carry-end',
   previewCacheStatus: 'preview:cache-status',
 
+  /** Downloads (the owner, 2026-10-04): see `shared/downloads/types.ts`. */
+  downloadsStatus: 'downloads:status',
+  downloadsStart: 'downloads:start',
+  downloadsPause: 'downloads:pause',
+  downloadsResume: 'downloads:resume',
+  downloadsRemove: 'downloads:remove',
+  downloadsSetQuality: 'downloads:set-quality',
+  downloadsReveal: 'downloads:reveal',
+
   /**
    * Cross-device sync.
    *
@@ -229,6 +240,8 @@ export const EV = {
    * nothing to click.
    */
   playbackActive: 'evt:playback-active',
+  /** The downloads changed: progress, a state, one added or deleted. Carries the whole `DownloadsStatus`. */
+  downloads: 'evt:downloads',
   /** The held player is showing: the preview that stood in for it can go. */
   carryReleased: 'evt:carry-released',
   /** A key for the player while the preview stands in for it; the preview obeys. */
@@ -1020,6 +1033,24 @@ export interface WtaApi {
     /** What the preview cache holds, for a line in Settings; null where there is none. */
     cacheStatus(): Promise<PreviewCacheStatus | null>
   }
+  /**
+   * Downloads (the owner, 2026-10-04; `shared/downloads/`): a film or an
+   * episode kept on this device, played by the player in a source's place.
+   * `status` is null on a platform without downloads (yet), and the UI then
+   * offers none.
+   */
+  downloads: {
+    status(): Promise<DownloadsStatus | null>
+    /** Queue a download. One per episode: asking again resumes a stopped one. */
+    start(request: DownloadRequest): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+    pause(id: string): Promise<void>
+    resume(id: string): Promise<void>
+    /** Delete it and its files, finished or not. */
+    remove(id: string): Promise<void>
+    setQuality(quality: QualityCap): Promise<void>
+    /** Show the download's .mp4 (or its folder) in the file manager; false where there is none. */
+    reveal(id: string): Promise<boolean>
+  }
   providers: {
     list(): Promise<Provider[]>
     /**
@@ -1233,6 +1264,8 @@ export interface WtaApi {
      */
     storeChanged(cb: (keys: Array<keyof StoreShape> | null) => void): () => void
     playbackActive(cb: (active: boolean) => void): () => void
+    /** The downloads changed. Never fires where `downloads.status` is null. */
+    downloads(cb: (status: DownloadsStatus) => void): () => void
     /** The held player is showing; see `play`'s `carry`. */
     carryReleased(cb: () => void): () => void
     /** A player key pressed while the preview stands in for it. */
