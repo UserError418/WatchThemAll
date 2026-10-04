@@ -11,6 +11,7 @@
  */
 
 import type {
+  Episode,
   HistoryEntry,
   MediaDetail,
   MediaSummary,
@@ -31,6 +32,7 @@ import { NOTHING_AIRED_YET } from '@shared/aired'
 import { indexRatings, legacyRatingOf, ratingScope } from '@shared/rating'
 import { chooseActiveProviders } from './activeproviders'
 import { DEFAULT_SETTINGS, nextStamp } from '@shared/store/core'
+import { hasAired } from './format'
 
 /**
  * The stored keys this library mirrors. A change to any other key (test
@@ -591,6 +593,61 @@ class Library {
     const keys = episodes.map((episode) => episodeKey(season, episode))
     if (!this.markEpisodes(entry, keys, watched)) return
     void this.persist({ watchlist: this.watchlist })
+  }
+
+  /**
+   * Tick every episode of a season that has aired: "Mark season watched",
+   * "+ Season N watched", and the Watchlist card's ✓.
+   *
+   * Only the aired ones. TMDB lists a season's announced episodes with their
+   * future dates, and ticking those too meant that a weekly show caught up and
+   * marked watched had its next episodes already ticked when they came out:
+   * shown as watched, and Resume (which follows the furthest tick) pointed at
+   * an episode that had not aired yet.
+   *
+   * Creates an unlisted entry if the title has none: recording what was
+   * watched is not adding it to the list.
+   */
+  markSeasonWatched(
+    media: MediaSummary | MediaDetail,
+    season: number,
+    episodes: ReadonlyArray<Pick<Episode, 'episode' | 'airDate'>>,
+    now = Date.now(),
+  ): void {
+    const aired = episodes.filter((e) => hasAired(e.airDate, now)).map((e) => e.episode)
+    if (aired.length === 0) return
+    this.entryFor(media)
+    this.setSeasonWatched(media, season, aired, true)
+  }
+
+  /**
+   * Tick what a season in the Watched list implies, where nothing says otherwise.
+   *
+   * Watched holds whole seasons and the episode list holds episodes, so a
+   * season filed as watched (a MyAnimeList import, "+ Season N watched") is
+   * filled in when it is next shown. Only aired episodes with no mark at all:
+   * an episode the user unticked carries a `watched: false` mark and is left
+   * alone. Filling every unticked episode put back, each time the title was
+   * opened, every episode the user had unticked or cleared, with a newer
+   * stamp than their untick, so the sync carried it to the other devices too.
+   */
+  fillWatchedSeason(
+    media: MediaSummary | MediaDetail,
+    season: number,
+    episodes: ReadonlyArray<Pick<Episode, 'episode' | 'airDate'>>,
+    now = Date.now(),
+  ): void {
+    const entry = this.watchlistEntry(media)
+    const missing = episodes
+      .filter((e) => hasAired(e.airDate, now))
+      .map((e) => e.episode)
+      .filter((episode) => {
+        const key = episodeKey(season, episode)
+        return entry?.episodeMarks?.[key] === undefined && !entry?.watchedEpisodes.includes(key)
+      })
+    if (missing.length === 0) return
+    this.entryFor(media)
+    this.setSeasonWatched(media, season, missing, true)
   }
 
   watchedCount(title: TitleRef): number {

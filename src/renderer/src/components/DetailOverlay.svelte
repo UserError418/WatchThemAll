@@ -263,9 +263,10 @@
    * to see. Here the list is already loaded because it is on screen.
    *
    * It writes real episode keys rather than deriving the answer, so unticking
-   * one afterwards behaves normally. `reconciled` is what makes that stick: the
-   * effect re-runs when the watchlist changes, and without the guard it would
-   * put back every episode the user had just unticked.
+   * one afterwards behaves normally. What makes an untick stick is that it
+   * leaves a mark, and only episodes with no mark are filled (see
+   * `library.fillWatchedSeason`); `reconciled` only saves doing the work again
+   * each time the watchlist changes.
    */
   $effect(() => {
     const loaded = season
@@ -276,16 +277,10 @@
     if (reconciled[key]) return
     reconciled[key] = true
 
-    const missing = loaded.episodes
-      .filter((e) => !library.isWatched(subject, e.season, e.episode))
-      .map((e) => e.episode)
-    if (missing.length === 0) return
-
     // Episode state lives on the watchlist entry, so a title that reached
-    // Watched without ever being in the watchlist needs one to write into —
+    // Watched without ever being in the watchlist gets one to write into —
     // an unlisted one, since opening a title is not adding it.
-    library.entryFor(detail ?? subject)
-    library.setSeasonWatched(subject, loaded.season, missing, true)
+    library.fillWatchedSeason(detail ?? subject, loaded.season, loaded.episodes)
   })
 
   /**
@@ -497,15 +492,12 @@
 
   function toggleSeasonWatched(watched: boolean): void {
     if (!season) return
-    // Unlisted if new: marking a season seen — which is also how a series
-    // gets rated — records what was watched, it is not adding to the list.
-    library.entryFor(detail ?? subject)
-    library.setSeasonWatched(
-      subject,
-      selectedSeason,
-      season.episodes.map((e) => e.episode),
-      watched,
-    )
+    // Marking ticks the aired episodes only, in an unlisted entry if the title
+    // has none: marking a season seen — which is also how a series gets rated
+    // — records what was watched, it is not adding to the list. Clearing takes
+    // every tick off, an unaired one ticked by an older build included.
+    if (watched) library.markSeasonWatched(detail ?? subject, selectedSeason, season.episodes)
+    else library.setSeasonWatched(subject, selectedSeason, season.episodes.map((e) => e.episode), false)
   }
 
   function onKeydown(event: KeyboardEvent): void {

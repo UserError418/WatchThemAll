@@ -122,13 +122,19 @@
     {/if}
   </div>
 
+  <!--
+    Not for an episode that has not aired: nobody has watched it, and a tick
+    there moves Resume onto it. One already ticked (by an older build) can
+    still be unticked.
+  -->
   <button
     class="check"
     class:on={watched}
     onclick={() => ontoggleWatched(episode, !watched)}
+    disabled={!aired && !watched}
     aria-pressed={watched}
-    aria-label={watched ? 'Mark as unwatched' : 'Mark as watched'}
-    title={watched ? 'Mark as unwatched' : 'Mark as watched'}
+    aria-label={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
+    title={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
   >
     ✓
   </button>
@@ -344,6 +350,11 @@
     color: var(--text-tertiary);
     font-size: var(--text-xs);
     line-height: 1;
+  }
+
+  .check:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   .check.on {
