@@ -343,3 +343,30 @@ describe('ResumeSeek', () => {
     expect(new ResumeSeek(0, 48).done).toBe(true)
   })
 })
+
+/**
+ * Measured 2026-10-04: a source served a 272 s clip in a 139-minute film's
+ * place, and the film's place (40:21) became the clip's 2:26.
+ */
+describe('a video far shorter than the title', () => {
+  const FILM_MINUTES = 139
+
+  it('is not saved over the place, nor allowed to forget it at its end', () => {
+    expect(resumeAction({ seconds: 146, duration: 272 }, FILM_MINUTES)).toBe('keep')
+    expect(resumeAction({ seconds: 272, duration: 272, ended: true }, FILM_MINUTES)).toBe('keep')
+  })
+
+  it('does not count as having watched the title', () => {
+    const clip = { seconds: 270, duration: 272, playedMs: 270_000, runtimeMinutes: FILM_MINUTES, fallbackMs: 60_000 }
+    expect(isWatchedEnough({ ...clip, ended: true })).toBe(false)
+    expect(isWatchedEnough(clip)).toBe(false)
+  })
+
+  it('still lets a short real episode, or a longer cut, through', () => {
+    // A 20-minute special of a 45-minute show, and a finale longer than usual.
+    expect(resumeAction({ seconds: 600, duration: 20 * 60 }, 45)).toBe('store')
+    expect(resumeAction({ seconds: 600, duration: 70 * 60 }, 45)).toBe('store')
+    // Nothing known about the title: only the advert floor applies.
+    expect(resumeAction({ seconds: 146, duration: 272 }, null)).toBe('store')
+  })
+})

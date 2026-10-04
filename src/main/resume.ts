@@ -113,10 +113,29 @@ import { resumeKey } from '@shared/types'
  */
 const ADVERT_SECONDS = 180
 
+/**
+ * How short, against TMDB's runtime, a video can be and still be the title.
+ *
+ * The floor above stopped adverts and nothing longer. Measured 2026-10-04: a
+ * source served a 272 s clip in the film's place, and the 139-minute film's
+ * place (40:21) was overwritten with the clip's 2:26; the next source then
+ * started the film there. A third is far below any real episode or cut (a
+ * short special of a 45-minute show is still 15 minutes) and far above a
+ * clip. Only shorter counts: a stream *longer* than TMDB says is still the
+ * title, as above.
+ */
+const TITLE_FRACTION = 1 / 3
+
+/**
+ * Not the title: an advert's length, or far shorter than the title TMDB
+ * describes. A reading of such a video is neither saved, nor resumed into,
+ * nor allowed to say the title was watched.
+ */
 export function isAdvertLength(duration: number, runtimeMinutes: number | null): boolean {
   if (!Number.isFinite(duration) || duration <= 0) return false
   if (runtimeMinutes !== null && runtimeMinutes > 0 && runtimeMinutes < 10) return false
-  return duration < ADVERT_SECONDS
+  if (duration < ADVERT_SECONDS) return true
+  return runtimeMinutes !== null && runtimeMinutes > 0 && duration < runtimeMinutes * 60 * TITLE_FRACTION
 }
 
 /**
@@ -350,11 +369,16 @@ export function isWatchedEnough(args: {
 }): boolean {
   const { seconds, duration, playedMs, runtimeMinutes, fallbackMs, ended } = args
 
+  // A reading of something that is not the title (an advert, a clip in the
+  // film's place) says nothing about the title: its end is not the title's.
+  // What was played is all that is left to go on.
+  const notTheTitle = duration !== null && isAdvertLength(duration, runtimeMinutes)
+
   // A video that fired its own `ended` was watched to the last frame by
   // definition; no threshold should get to argue with that.
-  if (ended) return true
+  if (ended && !notTheTitle) return true
 
-  if (seconds !== null && duration !== null && duration > 0) {
+  if (!notTheTitle && seconds !== null && duration !== null && duration > 0) {
     return seconds >= watchedThresholdSeconds(duration)
   }
 
