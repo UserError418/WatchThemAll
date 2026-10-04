@@ -112,6 +112,7 @@ export class DownloadManager {
   private lastPublish = 0
   private publishTimer: ReturnType<typeof setTimeout> | null = null
   private lastSave = 0
+  private writing: Promise<void> = Promise.resolve()
   private readonly publishEveryMs: number
   private readonly saveEveryMs: number
 
@@ -234,11 +235,20 @@ export class DownloadManager {
     this.file.downloads = this.file.downloads.map((r) => (r.id === id ? { ...r, ...change, updatedAt: this.platform.now() } : r))
   }
 
-  private async save(): Promise<void> {
+  /**
+   * Write the file: one write at a time, each of the records as they are when
+   * its turn comes. Two at once raced over the platform's temporary file
+   * (measured on the desktop: a progress save and a state save overlapped,
+   * and one rename failed with ENOENT).
+   */
+  private save(): Promise<void> {
     this.lastSave = this.platform.now()
-    await this.platform.writeRecords(writeDownloadsFile(this.file)).catch((error: unknown) => {
-      this.platform.log(`could not write the downloads file: ${String(error)}`)
-    })
+    this.writing = this.writing.then(() =>
+      this.platform.writeRecords(writeDownloadsFile(this.file)).catch((error: unknown) => {
+        this.platform.log(`could not write the downloads file: ${String(error)}`)
+      }),
+    )
+    return this.writing
   }
 
   private publishNow(): void {

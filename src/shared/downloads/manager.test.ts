@@ -200,6 +200,28 @@ describe('DownloadManager', () => {
     expect(manager.status().downloads[0]!.error).toMatch(/^Not enough space on this device: it needs .* is free$/)
   })
 
+  it('never writes the file twice at once, and the last write holds the last state', async () => {
+    const w = world()
+    let writing = 0
+    let overlapped = false
+    let last: string | null = null
+    w.platform.writeRecords = async (text) => {
+      writing += 1
+      if (writing > 1) overlapped = true
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      last = text
+      writing -= 1
+    }
+    const manager = new DownloadManager(w.platform, { publishEveryMs: 0, saveEveryMs: 0 })
+    await manager.load()
+    await manager.start({ ...request, providerId: 'good' })
+    await settled(manager)
+    await manager.setQuality(720)
+    expect(overlapped).toBe(false)
+    expect(JSON.parse(last!).downloads[0].state).toBe('done')
+    expect(JSON.parse(last!).quality).toBe(720)
+  })
+
   it('removes folders no record names', async () => {
     const w = world()
     await w.platform.folder('orphan')
