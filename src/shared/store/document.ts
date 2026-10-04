@@ -119,6 +119,39 @@ export const COLLECTIONS: { [K in CollectionKey]: (record: InputOf<K>) => string
 
 export const COLLECTION_KEYS = Object.keys(COLLECTIONS) as CollectionKey[]
 
+/**
+ * Every top-level field this build knows; listed as a record so the compiler
+ * says when a field is added to the document and not here.
+ *
+ * Anything else in a document was added by a newer build, and is carried as
+ * it came (`migrate`, `mergeDocuments`). Until 2.0.12 it was dropped on every
+ * load and pull, and the next push wrote the file without it, so a phone a
+ * release behind stripped whatever the desktop's newer build had added.
+ */
+const KNOWN_FIELDS: Record<keyof StoreShape, true> = {
+  schemaVersion: true,
+  deviceId: true,
+  preferenceUpdatedAt: true,
+  watchlist: true,
+  trackers: true,
+  history: true,
+  watched: true,
+  ratings: true,
+  resumePoints: true,
+  streamOutcomes: true,
+  customProviders: true,
+  activeProviderIds: true,
+  knownProviderIds: true,
+  favouriteProviderIds: true,
+  providerOrder: true,
+  providerScans: true,
+  sharedScans: true,
+  deviceKind: true,
+  settings: true,
+}
+
+export const DOCUMENT_FIELDS: ReadonlySet<string> = new Set(Object.keys(KNOWN_FIELDS))
+
 /** The identity of one record, chosen by its collection's rule. */
 export function identify<K extends CollectionKey>(key: K, record: InputOf<K>): string {
   return COLLECTIONS[key](record)

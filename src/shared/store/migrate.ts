@@ -30,7 +30,7 @@ import type {
   TitleRating,
 } from '../types'
 import { isLegacyRating, isRatingValue, legacyRatingOf, valueOfLegacy } from '../rating'
-import { SCHEMA_VERSION } from './document'
+import { DOCUMENT_FIELDS, SCHEMA_VERSION } from './document'
 import type { CollectionKey, StoreDocument, Synced } from './document'
 import { DEFAULT_SETTINGS, emptyDocument } from './core'
 import { withOneTrackerPerSeries } from './trackers'
@@ -246,6 +246,11 @@ function fromTyped(
     lastEpisode: entry.type === 'movie' ? null : clampPosition(entry.lastEpisode),
     }
   })
+
+  // Fields a newer build added, carried as they came: see `DOCUMENT_FIELDS`.
+  for (const [field, value] of Object.entries(raw)) {
+    if (!DOCUMENT_FIELDS.has(field)) (doc as unknown as Record<string, unknown>)[field] = value
+  }
 
   return doc
 }

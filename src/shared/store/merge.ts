@@ -52,6 +52,7 @@ import type { EpisodeMark, EpisodeStub, PreferenceKey, Settings, StoreShape, Syn
 import { mergeSharedScans } from '../scanshare'
 import {
   COLLECTION_KEYS,
+  DOCUMENT_FIELDS,
   PREFERENCE_KEYS,
   identify,
   type CollectionKey,
@@ -414,6 +415,17 @@ export function mergeDocuments(local: StoreDocument, remote: StoreDocument): Sto
       local[key] as RecordOf<typeof key>[],
       remote[key] as RecordOf<typeof key>[],
     )
+  }
+
+  // Fields this build does not know (`DOCUMENT_FIELDS`), from whichever side
+  // has them, and from the side with the newer schema where both do. The
+  // spread of `local` above would otherwise drop the remote's.
+  const newer = remote.schemaVersion > local.schemaVersion ? remote : local
+  const older = newer === remote ? local : remote
+  for (const side of [older, newer]) {
+    for (const [field, value] of Object.entries(side)) {
+      if (!DOCUMENT_FIELDS.has(field)) (merged as unknown as Record<string, unknown>)[field] = value
+    }
   }
 
   return merged
