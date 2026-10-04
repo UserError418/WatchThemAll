@@ -20,13 +20,46 @@
 
 import { segmentExtension } from '../segmentwindow'
 import { readStreamHeader } from '../streamheader'
-import { decryptSegment, importAesKey, ivFor } from './aes'
+import { ivFor } from './aes'
 import { localPlaylist, mapName, PLAYLIST_FILE, segmentName, estimateBytes, type DownloadPlan } from './plan'
+
+/** How a segment is decrypted: HLS's AES-128, CBC with PKCS#7 padding. */
+export interface SegmentCrypt {
+  key: Uint8Array
+  iv: Uint8Array
+}
+
+/** A segment fetched into the folder and not yet under its name, as `stageSegment` reports it. */
+export interface StagedSegment {
+  status: number
+  /** Its size in the clear; 0 when it did not decrypt or the status was not a success. */
+  bytes: number
+  /** Its first bytes in the clear (`HEAD_BYTES` in `staging.ts`), which is what the core judges it by. */
+  head: Uint8Array
+}
 
 /** A platform's network and files for one download's folder. */
 export interface DownloadFiles {
-  /** A URL's bytes, fetched with these headers; null when it could not be reached (or was aborted). */
+  /** A URL's bytes, fetched with these headers; null when it could not be reached (or was aborted). For keys and init segments, which are small. */
   fetchBytes(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<{ status: number; bytes: Uint8Array } | null>
+  /**
+   * Fetch a segment with these headers into the folder, decrypted when
+   * `crypt` is given, and hold it aside until `commitSegment` or
+   * `discardSegment`. Only the head comes back: on the phone the core runs
+   * in the WebView, and a segment's megabytes stay on the native side.
+   * Null when it could not be reached (or was aborted).
+   */
+  stageSegment(
+    url: string,
+    headers: Record<string, string>,
+    name: string,
+    crypt: SegmentCrypt | null,
+    signal: AbortSignal,
+  ): Promise<StagedSegment | null>
+  /** Put the staged segment under `name`, whole, without its first `skip` bytes; its size. */
+  commitSegment(name: string, skip: number): Promise<number>
+  /** Drop the staged segment, if any. */
+  discardSegment(name: string): Promise<void>
   /** The complete files in the folder, with their sizes. Files still being written are not listed. */
   list(): Promise<Array<{ name: string; bytes: number }>>
   /** Write `bytes` as `name`, whole or not at all: a crash must never leave half a file under the name. */
@@ -73,21 +106,35 @@ export const RETRY_DELAYS_MS = [1_000, 3_000, 9_000, 27_000]
 /** What a CDN answers once a signed URL has expired or been revoked. */
 const EXPIRED_STATUSES = new Set([401, 403, 410])
 
-type Fetched = { kind: 'ok'; bytes: Uint8Array } | { kind: 'expired' } | { kind: 'failed'; why: string } | { kind: 'aborted' }
+/** One try at a fetch: done, expired, or worth another try for this reason. */
+type Attempt<T> = { kind: 'ok'; value: T } | { kind: 'expired' } | { kind: 'retry'; why: string }
+
+type Fetched<T> = { kind: 'ok'; value: T } | { kind: 'expired' } | { kind: 'failed'; why: string } | { kind: 'aborted' }
 
 /**
- * An MPEG-TS segment, from its first sync byte. Some sources disguise
+ * Where an MPEG-TS segment starts: its first sync byte. Some sources disguise
  * segments as images, a PNG header in front of the transport stream, which
  * their own players skip and a native player does not. Three sync bytes 188
- * apart within the first few kilobytes are the stream's start.
+ * apart within the first few kilobytes are the stream's start; 0 when there
+ * is no disguise, or no stream to find.
  */
-export function transportStreamStart(bytes: Uint8Array): Uint8Array {
-  if (bytes[0] === 0x47) return bytes
+export function transportStreamOffset(bytes: Uint8Array): number {
+  if (bytes[0] === 0x47) return 0
   const limit = Math.min(bytes.length - 377, 4096)
   for (let i = 1; i < limit; i++) {
-    if (bytes[i] === 0x47 && bytes[i + 188] === 0x47 && bytes[i + 376] === 0x47) return bytes.subarray(i)
+    if (bytes[i] === 0x47 && bytes[i + 188] === 0x47 && bytes[i + 376] === 0x47) return i
   }
-  return bytes
+  return 0
+}
+
+/** The segment from its stream's start; see `transportStreamOffset`. */
+export function transportStreamStart(bytes: Uint8Array): Uint8Array {
+  const offset = transportStreamOffset(bytes)
+  return offset === 0 ? bytes : bytes.subarray(offset)
+}
+
+function isSuccess(status: number): boolean {
+  return status === 200 || status === 206
 }
 
 function describe(status: number | null): string {
@@ -123,24 +170,26 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
       })
     })
 
-  async function fetchWithRetry(url: string, check: (bytes: Uint8Array) => Promise<Uint8Array | null>): Promise<Fetched> {
-    let why: string
-    for (let attempt = 0; ; attempt++) {
+  /** Try `attempt` until it succeeds or expires, with the growing pauses, five tries in all. */
+  async function withRetry<T>(attempt: () => Promise<Attempt<T>>): Promise<Fetched<T>> {
+    for (let tries = 0; ; tries++) {
       if (signal.aborted) return { kind: 'aborted' }
-      const got = await files.fetchBytes(url, plan.headers, signal)
+      const got = await attempt()
       if (signal.aborted) return { kind: 'aborted' }
-      if (got !== null && EXPIRED_STATUSES.has(got.status)) return { kind: 'expired' }
-      if (got !== null && (got.status === 200 || got.status === 206) && got.bytes.length > 0) {
-        const checked = await check(got.bytes)
-        if (checked !== null) return { kind: 'ok', bytes: checked }
-        why = 'not video'
-      } else {
-        why = describe(got?.status ?? null)
-      }
-      if (attempt >= RETRY_DELAYS_MS.length) return { kind: 'failed', why }
-      await wait(RETRY_DELAYS_MS[attempt]!)
+      if (got.kind !== 'retry') return got
+      if (tries >= RETRY_DELAYS_MS.length) return { kind: 'failed', why: got.why }
+      await wait(RETRY_DELAYS_MS[tries]!)
     }
   }
+
+  /** A small file's bytes, through `fetchBytes`, kept when `accept` says so. */
+  const fetchSmall = (url: string, accept: (bytes: Uint8Array) => boolean): Promise<Fetched<Uint8Array>> =>
+    withRetry<Uint8Array>(async () => {
+      const got = await files.fetchBytes(url, plan.headers, signal)
+      if (got !== null && EXPIRED_STATUSES.has(got.status)) return { kind: 'expired' }
+      if (got === null || !isSuccess(got.status) || got.bytes.length === 0) return { kind: 'retry', why: describe(got?.status ?? null) }
+      return accept(got.bytes) ? { kind: 'ok', value: got.bytes } : { kind: 'retry', why: 'not video' }
+    })
 
   const present = new Map((await files.list()).map((f) => [f.name, f.bytes]))
   let bytesDone = [...present.values()].reduce((sum, n) => sum + n, 0)
@@ -152,26 +201,27 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
   for (const [i, url] of plan.maps.entries()) {
     const name = mapName(i)
     if (present.has(name)) continue
-    const got = await fetchWithRetry(url, async (bytes) => bytes)
+    const got = await fetchSmall(url, () => true)
     // Nothing else stops a run before the segments start: this is the viewer's pause.
     if (got.kind === 'aborted') return { kind: 'aborted' }
     if (got.kind === 'expired') return got
     if (got.kind === 'failed') return { kind: 'failed', reason: `The stream's start would not download (${got.why})` }
-    await files.write(name, got.bytes)
-    present.set(name, got.bytes.length)
-    bytesDone += got.bytes.length
-    if (i === 0 && height === null) height = readStreamHeader('init', got.bytes)?.height ?? null
+    await files.write(name, got.value)
+    present.set(name, got.value.length)
+    bytesDone += got.value.length
+    if (i === 0 && height === null) height = readStreamHeader('init', got.value)?.height ?? null
   }
 
-  // Keys, fetched once each, when a segment first needs one.
-  const keys = new Map<string, Promise<CryptoKey | 'expired' | string>>()
-  const keyFor = (url: string): Promise<CryptoKey | 'expired' | string> => {
+  // Keys, fetched once each, when a segment first needs one: 16 raw bytes,
+  // since the platform decrypts (natively, on the phone).
+  const keys = new Map<string, Promise<Uint8Array | 'expired' | string>>()
+  const keyFor = (url: string): Promise<Uint8Array | 'expired' | string> => {
     let key = keys.get(url)
     if (!key) {
-      key = fetchWithRetry(url, async (bytes) => (bytes.length === 16 ? bytes : null)).then(async (got) => {
+      key = fetchSmall(url, (bytes) => bytes.length === 16).then((got) => {
         if (got.kind === 'expired') return 'expired'
-        if (got.kind !== 'ok') return got.kind === 'failed' ? got.why : 'stopped'
-        return (await importAesKey(got.bytes)) ?? 'not a key'
+        if (got.kind === 'ok') return got.value
+        return got.kind === 'failed' ? (got.why === 'not video' ? 'not a key' : got.why) : 'stopped'
       })
       keys.set(url, key)
     }
@@ -198,7 +248,8 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
 
   async function fetchSegment(index: number): Promise<void> {
     const segment = plan.segments[index]!
-    let key: CryptoKey | null = null
+    const name = segmentName(index, plan.format)
+    let key: Uint8Array | null = null
     if (segment.keyUrl !== null) {
       const found = await keyFor(segment.keyUrl)
       if (found === 'expired') {
@@ -211,17 +262,20 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
       }
       key = found
     }
-    const got = await fetchWithRetry(segment.url, async (bytes) => {
-      let clear = bytes
-      if (key !== null) {
-        const decrypted = await decryptSegment(bytes, key, ivFor(segment))
-        if (decrypted === null) return null
-        clear = decrypted
+    const crypt = key === null ? null : { key, iv: ivFor(segment) }
+    const got = await withRetry<{ skip: number; head: Uint8Array }>(async () => {
+      const staged = await files.stageSegment(segment.url, plan.headers, name, crypt, signal)
+      if (staged === null) return { kind: 'retry', why: describe(null) }
+      if (isSuccess(staged.status) && staged.bytes > 0) {
+        const skip = expected === 'ts' ? transportStreamOffset(staged.head) : 0
+        const head = staged.head.subarray(skip)
+        if (segmentExtension(head.subarray(0, 400)) === expected) return { kind: 'ok', value: { skip, head } }
       }
-      if (expected === 'ts') clear = transportStreamStart(clear)
-      return segmentExtension(clear.subarray(0, 400)) === expected ? clear : null
+      await files.discardSegment(name)
+      if (EXPIRED_STATUSES.has(staged.status)) return { kind: 'expired' }
+      return { kind: 'retry', why: isSuccess(staged.status) ? 'not video' : describe(staged.status) }
     })
-    if (got.kind === 'aborted') return
+    if (got.kind === 'aborted') return void (await files.discardSegment(name))
     if (got.kind === 'expired') {
       expired = true
       return halt.abort()
@@ -230,12 +284,12 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
       failure ??= `Segment ${index + 1} of ${total} would not download (${got.why})`
       return halt.abort()
     }
-    if (signal.aborted) return
-    await files.write(segmentName(index, plan.format), got.bytes)
-    if (index === 0 && height === null && plan.format === 'ts') height = readStreamHeader('segment', got.bytes)?.height ?? null
+    if (signal.aborted) return void (await files.discardSegment(name))
+    const size = await files.commitSegment(name, got.value.skip)
+    if (index === 0 && height === null && plan.format === 'ts') height = readStreamHeader('segment', got.value.head)?.height ?? null
     segmentsDone += 1
-    bytesDone += got.bytes.length
-    sample = { bytes: sample.bytes + got.bytes.length, seconds: sample.seconds + segment.seconds }
+    bytesDone += size
+    sample = { bytes: sample.bytes + size, seconds: sample.seconds + segment.seconds }
     if (plan.bandwidth === null) estimate = Math.max(bytesDone, estimateBytes(plan, sample) ?? 0)
     report()
     if (!roomAsked && estimate !== null) {

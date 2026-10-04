@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import type { Provider } from '@shared/types'
 import type { CapturedRequest } from '@shared/streamfetch'
 import { DownloadManager, type DownloadPlatform, type DownloadSource } from '@shared/downloads/manager'
+import { memoryStaging } from '@shared/downloads/staging'
 import type { DownloadFiles } from '@shared/downloads/transfer'
 import type { DownloadsStatus, DownloadSubject } from '@shared/downloads/types'
 import { replayableHeaders } from './castproxy'
@@ -83,6 +84,8 @@ async function writeWhole(path: string, data: Uint8Array | string): Promise<void
 function folderFiles(dir: string): DownloadFiles {
   return {
     fetchBytes,
+    // A segment is a few megabytes: held in memory while the core judges it, then written whole.
+    ...memoryStaging(fetchBytes, (name, bytes) => writeWhole(join(dir, name), bytes)),
     async list() {
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
       const files = entries.filter((e) => e.isFile() && !e.name.endsWith(PART))

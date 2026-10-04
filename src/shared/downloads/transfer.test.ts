@@ -67,6 +67,18 @@ describe('runTransfer', () => {
     expect(new TextDecoder().decode(folder.files.get('index.m3u8'))).not.toMatch(/KEY/)
   })
 
+  it('saves a segment disguised as an image from its stream\'s start', async () => {
+    const routes: Record<string, { status: number; body: Uint8Array }> = routesFor(2)
+    const ts = tsSegment(1, 752)
+    const disguised = new Uint8Array(8 + ts.length)
+    disguised.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    disguised.set(ts, 8)
+    routes['https://cdn/seg1'] = { status: 200, body: disguised }
+    const folder = memoryFolder(fakeNetwork(routes))
+    expect((await runTransfer(planOf(mediaPlaylist('https://cdn', 2, 6)), folder, options())).kind).toBe('done')
+    expect(folder.files.get('s00001.ts')).toEqual(ts)
+  })
+
   it('ends as expired on a 403, so the source is captured again', async () => {
     const routes = routesFor(6)
     routes['https://cdn/seg4'] = { status: 403, body: new Uint8Array() }

@@ -4,6 +4,7 @@
  * run end to end without a socket or a disk.
  */
 
+import { memoryStaging } from './staging'
 import type { DownloadFiles } from './transfer'
 
 /** A clear MPEG-TS segment: sync bytes every 188, tagged so tests can tell segments apart. */
@@ -46,9 +47,11 @@ export function fakeNetwork(routes: Record<string, Route>) {
 /** A download folder in memory, fetching through `network`. */
 export function memoryFolder(network: ReturnType<typeof fakeNetwork>): DownloadFiles & { files: Map<string, Uint8Array> } {
   const files = new Map<string, Uint8Array>()
+  const fetchBytes: DownloadFiles['fetchBytes'] = (url) => network.fetchBytes(url)
   return {
     files,
-    fetchBytes: (url) => network.fetchBytes(url),
+    fetchBytes,
+    ...memoryStaging(fetchBytes, async (name, bytes) => void files.set(name, bytes.slice())),
     async list() {
       return [...files.entries()].map(([name, bytes]) => ({ name, bytes: bytes.length }))
     },
