@@ -139,3 +139,27 @@ describe('tolerating an undocumented shape', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 })
+
+describe('the response cache', () => {
+  /** The bug: answers were never dropped, so every distinct query stayed for the life of the app. */
+  it('drops the oldest answers past its size, rather than keeping every query', async () => {
+    respond([{ id: 'tt1', l: 'One', qid: 'movie' }])
+    await search('cache bound first query')
+    for (let i = 0; i < 200; i += 1) await search(`cache bound filler ${i}`)
+    const fetched = vi.mocked(fetch).mock.calls.length
+
+    await search('cache bound first query')
+
+    expect(vi.mocked(fetch).mock.calls.length).toBe(fetched + 1)
+  })
+
+  it('answers a recent query from the cache', async () => {
+    respond([{ id: 'tt1', l: 'One', qid: 'movie' }])
+    await search('cache hit query')
+    const fetched = vi.mocked(fetch).mock.calls.length
+
+    await search('cache hit query')
+
+    expect(vi.mocked(fetch).mock.calls.length).toBe(fetched)
+  })
+})

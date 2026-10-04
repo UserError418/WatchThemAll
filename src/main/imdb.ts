@@ -31,6 +31,13 @@ const REQUEST_TIMEOUT_MS = 8_000
 
 const cache = new Map<string, { at: number; value: ImdbResponse }>()
 
+/**
+ * Answers kept before expired and then oldest ones are dropped, as `tmdb.ts`
+ * does. Expired answers used to be skipped and never removed, so every
+ * distinct query stayed in memory for as long as the app ran.
+ */
+const MAX_CACHE_ENTRIES = 200
+
 /* ── Response shape ─────────────────────────────────────────────────────── */
 
 interface ImdbSuggestion {
@@ -120,8 +127,25 @@ async function get(path: string): Promise<ImdbResponse> {
   if (!res.ok) throw new Error(`IMDB suggestion responded ${res.status}`)
   const value = (await res.json()) as ImdbResponse
 
-  cache.set(url, { at: Date.now(), value })
+  remember(url, value)
   return value
+}
+
+function remember(url: string, value: ImdbResponse): void {
+  // Deleted first so the entry moves to the end: the map's order is then the
+  // order answers arrived in, and the oldest is the first key.
+  cache.delete(url)
+  cache.set(url, { at: Date.now(), value })
+  if (cache.size <= MAX_CACHE_ENTRIES) return
+
+  const now = Date.now()
+  for (const [stored, entry] of cache) {
+    if (now - entry.at >= CACHE_TTL_MS) cache.delete(stored)
+  }
+  for (const stored of cache.keys()) {
+    if (cache.size <= MAX_CACHE_ENTRIES) break
+    cache.delete(stored)
+  }
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
