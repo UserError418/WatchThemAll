@@ -166,11 +166,7 @@
     // say so, and where the unreadable file was kept (`StoreCore.recovered`).
     // Longer than other toasts, because it carries a path to note down.
     const recovered = await window.wta.store.recovered().catch(() => null)
-    if (recovered !== null) {
-      toast = recovered
-      if (toastTimer) clearTimeout(toastTimer)
-      toastTimer = setTimeout(() => (toast = null), 20_000)
-    }
+    if (recovered !== null) toast.show(recovered, null, 20_000)
   }
 
   /**

@@ -40,7 +40,7 @@ describe('episode marks', () => {
     const ahead = Date.now() + 60 * 60_000
     library.watchlist = [show({ '1:1': { watched: true, at: ahead } })]
 
-    library.setWatched(1396, 1, 1, false)
+    library.setWatched({ type: 'tv', tmdbId: 1396 }, 1, 1, false)
 
     expect(library.watchlist[0]!.episodeMarks['1:1']).toEqual({ watched: false, at: ahead + 1 })
     expect(library.watchlist[0]!.watchedEpisodes).toEqual([])

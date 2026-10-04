@@ -33,16 +33,14 @@ class Toasts {
   private timer: ReturnType<typeof setTimeout> | null = null
   private count = 0
 
-  show(message: string, action: ToastAction | null = null): void {
+  /** `ms` for a toast that needs longer than the usual, e.g. one carrying a path to note down. */
+  show(message: string, action: ToastAction | null = null, ms = action ? ACTION_TOAST_MS : TOAST_MS): void {
     this.clearTimer()
     const id = ++this.count
     this.current = { id, message, action }
-    this.timer = setTimeout(
-      () => {
-        if (this.current?.id === id) this.current = null
-      },
-      action ? ACTION_TOAST_MS : TOAST_MS,
-    )
+    this.timer = setTimeout(() => {
+      if (this.current?.id === id) this.current = null
+    }, ms)
   }
 
   /** Run the action of the toast showing, once, and take the toast down. */
