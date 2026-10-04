@@ -86,9 +86,14 @@ export class FakeDrive {
     this.failures.push({ status, reason })
   }
 
-  /** The real backend, on this Drive. */
+  /** The real backend, on this Drive, retrying without the pause a real one takes. */
   backend<T = StoreDocument>(name?: string): SyncBackend<T> {
-    return createDriveBackend<T>({ accessToken: () => Promise.resolve('token'), fetchImpl: this.fetch, name })
+    return createDriveBackend<T>({
+      accessToken: () => Promise.resolve('token'),
+      fetchImpl: this.fetch,
+      name,
+      retryDelayMs: 0,
+    })
   }
 
   readonly fetch: FetchLike = async (input, init = {}) => {

@@ -78,6 +78,7 @@ const UNAVAILABLE_SYNC_STATUS: SyncStatus = {
   lastSyncedAt: null,
   error: NO_CLIENT_REASON,
   challenge: null,
+  notice: null,
 }
 
 export interface IpcDeps {

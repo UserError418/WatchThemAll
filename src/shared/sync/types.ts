@@ -119,6 +119,11 @@ export interface SyncStatus {
   lastSyncedAt: number | null
   /** Human-readable, and only set when `state` is `error`. */
   error: string | null
+  /**
+   * A passing condition the app is handling by itself, such as a busy Drive
+   * it will try again; shown without alarm. Null otherwise.
+   */
+  notice: string | null
   /** Present only while `state` is `pairing`. */
   challenge: Pick<DeviceCodeChallenge, 'userCode' | 'verificationUrl' | 'expiresAt'> | null
 }

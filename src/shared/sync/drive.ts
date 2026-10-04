@@ -47,28 +47,77 @@ export class DriveError extends Error {
 /** Raised when Drive rejects the credential, so the caller can re-authorise. */
 export class DriveUnauthorized extends DriveError {}
 
+/** The user's Drive has no room for the file. Signing in again cannot help with that. */
+export class DriveFull extends DriveError {}
+
+/**
+ * Drive is up but not taking requests just now: one of its rate limits, a 429
+ * or a server error. Worth trying again shortly, and nothing for the user to do.
+ */
+export class DriveBusy extends DriveError {}
+
+/** Drive's 403 reasons that mean "not now" rather than "not you". */
+const RATE_LIMITS = new Set(['userRateLimitExceeded', 'rateLimitExceeded', 'dailyLimitExceeded', 'sharingRateLimitExceeded'])
+
+/** The pause before the one more try a busy Drive gets. */
+const RETRY_DELAY_MS = 2_000
+
+const SIGN_IN_AGAIN = 'Drive refused the credential; sign in again to resume syncing.'
+const DRIVE_FULL = 'Your Google Drive is full, so the library cannot be saved there. Free up some space and syncing carries on by itself.'
+const DRIVE_BUSY = 'Google Drive is busy right now; WatchThemAll will try again in a minute.'
+
+/** The reason Drive gives in an error body (`error.errors[0].reason`), or null. */
+async function refusalReason(response: Response): Promise<string | null> {
+  const body = (await response.json().catch(() => null)) as { error?: { errors?: Array<{ reason?: unknown }> } } | null
+  const reason = body?.error?.errors?.[0]?.reason
+  return typeof reason === 'string' ? reason : null
+}
+
+/**
+ * The error a response that is not ok stands for.
+ *
+ * A 403 is told apart by its reason. Every 401 and 403 used to read "sign in
+ * again", but Drive answers 403 for a full Drive and for its rate limits as
+ * well, and signing in again helps with neither: with a full Drive the user
+ * went round in circles while the library stopped syncing.
+ */
+async function refusal(response: Response, url: string): Promise<DriveError> {
+  if (response.status === 401) return new DriveUnauthorized(SIGN_IN_AGAIN, 401)
+  if (response.status === 403) {
+    const reason = await refusalReason(response)
+    if (reason === 'storageQuotaExceeded') return new DriveFull(DRIVE_FULL, 403)
+    if (reason !== null && RATE_LIMITS.has(reason)) return new DriveBusy(DRIVE_BUSY, 403)
+    return new DriveUnauthorized(SIGN_IN_AGAIN, 403)
+  }
+  if (response.status === 429 || response.status >= 500) return new DriveBusy(DRIVE_BUSY, response.status)
+  return new DriveError(`Drive answered ${response.status} for ${url}`, response.status)
+}
+
 async function driveFetch(
   fetchImpl: FetchLike,
   accessToken: string,
   url: string,
   init: RequestInit = {},
+  retryDelayMs = RETRY_DELAY_MS,
 ): Promise<Response> {
-  const response = await fetchImpl(url, {
-    ...init,
-    headers: { ...init.headers, Authorization: `Bearer ${accessToken}` },
-  })
+  const send = (): Promise<Response> =>
+    fetchImpl(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${accessToken}` } })
 
-  if (response.status === 401 || response.status === 403) {
-    throw new DriveUnauthorized(
-      'Drive refused the credential; sign in again to resume syncing.',
-      response.status,
-    )
-  }
-  if (!response.ok) {
-    throw new DriveError(`Drive answered ${response.status} for ${url}`, response.status)
-  }
-  return response
+  const response = await send()
+  if (response.ok) return response
+  const failure = await refusal(response, url)
+  // A busy Drive gets one more try after a pause, but only a request that is
+  // safe to send twice: a create that reached Drive before it failed would
+  // leave two files of the same name.
+  if (!(failure instanceof DriveBusy) || init.method === 'POST') throw failure
+  await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+  const again = await send()
+  if (again.ok) return again
+  throw await refusal(again, url)
 }
+
+/** One request to Drive, as a backend makes it: see `driveFetch`. */
+type DriveRequest = (accessToken: string, url: string, init?: RequestInit) => Promise<Response>
 
 export interface DriveBackendOptions {
   /** Called before every request; returns a token that is valid *now*. */
@@ -79,6 +128,8 @@ export interface DriveBackendOptions {
    * small positions file (`positions.ts`), which syncs on its own schedule.
    */
   name?: string
+  /** The pause before a busy Drive's one more try; the tests set it to nothing. */
+  retryDelayMs?: number
 }
 
 /** The document's file, as a listing or an upload describes it. */
@@ -96,7 +147,7 @@ interface DriveFile {
  * user signs in as somebody else or clears the app folder from Drive's
  * settings. One listing per sync is a fair price for having no stale-id case.
  */
-async function findFile(fetchImpl: FetchLike, accessToken: string, name: string): Promise<DriveFile | null> {
+async function findFile(request: DriveRequest, accessToken: string, name: string): Promise<DriveFile | null> {
   // No `spaces` filter is needed and none would help: under `drive.file` a
   // listing only ever contains files this app created, so the name is already
   // searched within our own small world.
@@ -105,7 +156,7 @@ async function findFile(fetchImpl: FetchLike, accessToken: string, name: string)
     fields: 'files(id,md5Checksum)',
     pageSize: '1',
   })
-  const response = await driveFetch(fetchImpl, accessToken, `${FILES_URL}?${query}`)
+  const response = await request(accessToken, `${FILES_URL}?${query}`)
   const body = (await response.json()) as { files?: Partial<DriveFile>[] }
   const file = body.files?.[0]
   return file?.id ? { id: file.id, md5Checksum: file.md5Checksum } : null
@@ -115,7 +166,8 @@ async function findFile(fetchImpl: FetchLike, accessToken: string, name: string)
 const UPLOAD_FIELDS = 'fields=id,md5Checksum'
 
 export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptions): SyncBackend<T> {
-  const { accessToken, fetchImpl = fetch, name = DOCUMENT_NAME } = options
+  const { accessToken, fetchImpl = fetch, name = DOCUMENT_NAME, retryDelayMs = RETRY_DELAY_MS } = options
+  const request: DriveRequest = (token, url, init) => driveFetch(fetchImpl, token, url, init, retryDelayMs)
 
   /**
    * The file as this backend last saw it: found by the pull, and then what the
@@ -151,7 +203,7 @@ export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptio
 
   const upload = async (token: string, id: string | null, payload: string): Promise<DriveFile | null> => {
     if (id !== null) {
-      const response = await driveFetch(fetchImpl, token, `${UPLOAD_URL}/${id}?uploadType=media&${UPLOAD_FIELDS}`, {
+      const response = await request(token, `${UPLOAD_URL}/${id}?uploadType=media&${UPLOAD_FIELDS}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
@@ -172,7 +224,7 @@ export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptio
       `--${boundary}\r\nContent-Type: application/json\r\n\r\n${payload}\r\n` +
       `--${boundary}--`
 
-    const response = await driveFetch(fetchImpl, token, `${UPLOAD_URL}?uploadType=multipart&${UPLOAD_FIELDS}`, {
+    const response = await request(token, `${UPLOAD_URL}?uploadType=multipart&${UPLOAD_FIELDS}`, {
       method: 'POST',
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
       body,
@@ -183,7 +235,7 @@ export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptio
   return {
     async pull(): Promise<RemoteDocument<T> | null> {
       const token = await accessToken()
-      const file = await findFile(fetchImpl, token, name)
+      const file = await findFile(request, token, name)
       pulledId = file?.id ?? null
       if (file === null) return null
 
@@ -191,7 +243,7 @@ export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptio
       if (lastSeen && lastSeen.id === file.id && lastSeen.md5Checksum === file.md5Checksum) {
         text = lastSeen.text
       } else {
-        const response = await driveFetch(fetchImpl, token, `${FILES_URL}/${file.id}?alt=media`)
+        const response = await request(token, `${FILES_URL}/${file.id}?alt=media`)
         text = await response.text()
         // The listing's checksum, which the file may have moved past between
         // the two requests. That only makes the next sync download again.
@@ -219,7 +271,7 @@ export function createDriveBackend<T = StoreDocument>(options: DriveBackendOptio
       // The pull that always precedes a push found the file seconds ago, so it
       // is not listed a second time. Deleted since then, the update 404s and
       // the file is created afresh, as a listing would have concluded.
-      const id = pulledId !== undefined ? pulledId : ((await findFile(fetchImpl, token, name))?.id ?? null)
+      const id = pulledId !== undefined ? pulledId : ((await findFile(request, token, name))?.id ?? null)
 
       let file: DriveFile | null
       try {

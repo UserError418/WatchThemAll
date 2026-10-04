@@ -38,6 +38,7 @@ import {
 import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
+import { RETRY_AFTER_MS, afterFailure } from '@shared/sync/failure'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
 import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import { dualStackFetch } from './net'
@@ -89,12 +90,15 @@ export function createMobileSync(options: MobileSyncOptions) {
   let positionsChannel: PositionsChannel | null = null
   let resultsChannel: ResultsChannel | null = null
   let pairing: AbortController | null = null
+  /** The sync that follows a busy Drive by itself; see `afterFailure`. */
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
 
   let state: SyncStatus = {
     state: 'off',
     accountEmail: null,
     lastSyncedAt: null,
     error: oauthClient() === null ? NO_CLIENT_REASON : null,
+    notice: null,
     challenge: null,
   }
 
@@ -139,7 +143,7 @@ export function createMobileSync(options: MobileSyncOptions) {
     update({ state: 'syncing', error: null })
     try {
       const outcome = await currentRunner().request()
-      update({ state: 'idle', lastSyncedAt: outcome.at, error: null })
+      update({ state: 'idle', lastSyncedAt: outcome.at, error: null, notice: null })
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -148,7 +152,16 @@ export function createMobileSync(options: MobileSyncOptions) {
         update({ state: 'error', error: message })
         return { ok: false, error: message }
       }
-      update({ state: 'error', error: message })
+      const failure = afterFailure(error)
+      update(failure.status)
+      if (failure.retry && retryTimer === null) {
+        retryTimer = setTimeout(() => {
+          retryTimer = null
+          void now()
+          void positions()
+          void results()
+        }, RETRY_AFTER_MS)
+      }
       return { ok: false, error: message }
     }
   }
@@ -179,13 +192,15 @@ export function createMobileSync(options: MobileSyncOptions) {
 
   const disconnect = async (): Promise<void> => {
     pairing?.abort()
+    if (retryTimer !== null) clearTimeout(retryTimer)
+    retryTimer = null
     credentials = null
     access = null
     runner = null
     positionsChannel = null
     resultsChannel = null
     await Preferences.remove({ key: TOKEN_KEY })
-    update({ state: 'off', accountEmail: null, error: null, challenge: null })
+    update({ state: 'off', accountEmail: null, error: null, notice: null, challenge: null })
   }
 
   return {

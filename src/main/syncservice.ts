@@ -27,6 +27,7 @@ import {
 import { NO_CLIENT_REASON, oauthClient } from '@shared/sync/credentials'
 import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
+import { RETRY_AFTER_MS, afterFailure } from '@shared/sync/failure'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
 import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
@@ -51,12 +52,15 @@ export class SyncService {
   private positionsChannel: PositionsChannel | null = null
   private resultsChannel: ResultsChannel | null = null
   private pairing: AbortController | null = null
+  /** The sync that follows a busy Drive by itself; see `afterFailure`. */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
 
   private state: SyncStatus = {
     state: 'off',
     accountEmail: null,
     lastSyncedAt: null,
     error: null,
+    notice: null,
     challenge: null,
   }
 
@@ -200,13 +204,15 @@ export class SyncService {
 
   async disconnect(): Promise<void> {
     this.cancel()
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer)
+    this.retryTimer = null
     this.credentials = null
     this.access = null
     this.runner = null
     this.positionsChannel = null
     this.resultsChannel = null
     await this.options.tokens.clear()
-    this.update({ state: 'off', accountEmail: null, error: null, challenge: null })
+    this.update({ state: 'off', accountEmail: null, error: null, notice: null, challenge: null })
   }
 
   /** Sync now. Safe to call from several triggers at once; the runner coalesces. */
@@ -216,7 +222,7 @@ export class SyncService {
     this.update({ state: 'syncing', error: null })
     try {
       const outcome = await this.backendRunner().request()
-      this.update({ state: 'idle', lastSyncedAt: outcome.at, error: null })
+      this.update({ state: 'idle', lastSyncedAt: outcome.at, error: null, notice: null })
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -234,9 +240,20 @@ export class SyncService {
         return { ok: false, error: message }
       }
 
-      this.update({ state: 'error', error: message })
+      const failure = afterFailure(error)
+      this.update(failure.status)
+      if (failure.retry) this.retryLater()
       return { ok: false, error: message }
     }
+  }
+
+  /** One more sync in a while, after a failure that passes by itself. */
+  private retryLater(): void {
+    if (this.retryTimer !== null) return
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      this.syncSoon()
+    }, RETRY_AFTER_MS)
   }
 
   /**

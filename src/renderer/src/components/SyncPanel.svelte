@@ -20,6 +20,7 @@
     lastSyncedAt: null,
     error: null,
     challenge: null,
+    notice: null,
   })
 
   /**
@@ -138,6 +139,7 @@
       {:else}
         Not synced yet.
       {/if}
+      {#if status.notice !== null}{status.notice}{/if}
     </p>
     <div class="actions">
       <button
