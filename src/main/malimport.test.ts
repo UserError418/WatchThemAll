@@ -17,7 +17,7 @@ function entry(fields: Record<string, string | number>): string {
 function doc(...blocks: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8" ?>
 <myanimelist>
-  <myinfo><user_name>PredixBeats</user_name></myinfo>
+  <myinfo><user_name>example-viewer</user_name></myinfo>
   ${blocks.join('\n')}
 </myanimelist>`
 }
@@ -38,7 +38,7 @@ describe('parseMalExport', () => {
 
     const result = parseMalExport(xml)
 
-    expect(result.userName).toBe('PredixBeats')
+    expect(result.userName).toBe('example-viewer')
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0]).toMatchObject({
       malId: 38735,
