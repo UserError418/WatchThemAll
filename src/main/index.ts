@@ -1352,14 +1352,37 @@ function announce(notices: ReleaseNotice[]): void {
   }
 }
 
+/**
+ * Notifications still on screen, held so they are not garbage-collected
+ * while the user can click them.
+ *
+ * Electron drops the events of a notification nothing references (and on
+ * macOS removes it from Notification Center), so a click on a release notice
+ * a minute after it appeared did nothing. Checked with Electron 42: a shown
+ * notification with a click listener and no reference was collected within
+ * two seconds of a forced collection. Kept to the last few, because a
+ * notification that times out is not guaranteed to say it closed.
+ */
+const shownNotifications = new Set<Notification>()
+const SHOWN_NOTIFICATIONS_KEPT = 10
+
 function show(title: string, body: string): void {
   const notification = new Notification({ title, body, urgency: 'normal' })
+  const forget = (): void => void shownNotifications.delete(notification)
   notification.on('click', () => {
+    forget()
     const win = getMainWindow()
     if (!win) void createMainWindow()
     getMainWindow()?.focus()
     send(EV.navigate, 'releases')
   })
+  notification.on('close', forget)
+  notification.on('failed', forget)
+  shownNotifications.add(notification)
+  for (const oldest of shownNotifications) {
+    if (shownNotifications.size <= SHOWN_NOTIFICATIONS_KEPT) break
+    shownNotifications.delete(oldest)
+  }
   notification.show()
 }
 
