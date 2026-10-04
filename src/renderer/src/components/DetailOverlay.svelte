@@ -1134,7 +1134,8 @@
                 downloaded={resumeDownload !== null && downloads.of(resumeDownload)?.state === 'done'}
                 onselect={chooseProvider}
               />
-              {#if resumeDownload !== null}
+              <!-- Films only: a series has a download on every episode row and "Download season". -->
+              {#if resumeDownload !== null && subject.type === 'movie'}
                 <DownloadButton request={resumeDownload} />
               {/if}
               <button

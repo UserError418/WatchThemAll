@@ -78,7 +78,6 @@
   class:current
   class:unaired={!aired}
   class:next-up={remaining}
-  class:with-download={showDownload}
 >
   <button
     class="thumb"
@@ -131,26 +130,32 @@
     {/if}
   </div>
 
-  {#if showDownload && download}
-    <div class="download"><DownloadButton request={download} compact /></div>
-  {/if}
-
   <!--
-    Not for an episode that has not aired: nobody has watched it, and a tick
-    there moves Resume onto it. One already ticked (by an older build) can
-    still be unticked.
+    The row's two controls in one column, the same size and shape, so the
+    row keeps three columns at every width (as four, the tick wrapped onto a
+    line of its own under the still on the phone).
   -->
-  <button
-    class="check"
-    class:on={watched}
-    onclick={() => ontoggleWatched(episode, !watched)}
-    disabled={!aired && !watched}
-    aria-pressed={watched}
-    aria-label={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
-    title={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
-  >
-    ✓
-  </button>
+  <div class="row-actions">
+    <!--
+      Not for an episode that has not aired: nobody has watched it, and a tick
+      there moves Resume onto it. One already ticked (by an older build) can
+      still be unticked.
+    -->
+    <button
+      class="check"
+      class:on={watched}
+      onclick={() => ontoggleWatched(episode, !watched)}
+      disabled={!aired && !watched}
+      aria-pressed={watched}
+      aria-label={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
+      title={watched ? 'Mark as unwatched' : aired ? 'Mark as watched' : 'Not yet aired'}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+    </button>
+    {#if showDownload && download}
+      <DownloadButton request={download} compact />
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -166,10 +171,6 @@
 
   .episode:hover {
     background: var(--bg-raised);
-  }
-
-  .episode.with-download {
-    grid-template-columns: 150px 1fr auto auto;
   }
 
   .episode.current {
@@ -359,14 +360,42 @@
     overflow: hidden;
   }
 
+  .row-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* Matches DownloadButton's compact circle: 32px, a hairline ring, a drawn glyph. */
   .check {
-    width: 26px;
-    height: 26px;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     border-radius: var(--radius-full);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--border-subtle);
     color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    line-height: 1;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+
+  .check svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .check:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
   }
 
   .check:disabled {
@@ -378,6 +407,5 @@
     background: var(--success);
     border-color: var(--success);
     color: var(--bg-base);
-    font-weight: 700;
   }
 </style>
