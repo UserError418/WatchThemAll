@@ -280,7 +280,7 @@ const MAX_PLAYLIST_DEPTH = 3
  * device there could walk the whole stream by trying them in order, so the
  * ids hid the upstream URLs and not the stream itself.
  */
-function unguessableId(prefix: string): string {
+export function unguessableId(prefix: string): string {
   const bytes = new Uint8Array(16)
   crypto.getRandomValues(bytes)
   return prefix + Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')

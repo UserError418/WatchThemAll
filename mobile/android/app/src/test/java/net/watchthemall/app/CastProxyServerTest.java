@@ -183,6 +183,33 @@ public class CastProxyServerTest {
 
     /* ── Helpers ─────────────────────────────────────────────────────────── */
 
+    @Test
+    public void aDownloadsFileIsServedWholeOrByRangeAndNothingElseIs() throws Exception {
+        java.io.File file = java.io.File.createTempFile("s00000", ".ts");
+        file.deleteOnExit();
+        byte[] content = new byte[300_000];
+        for (int i = 0; i < content.length; i++) content[i] = (byte) (i * 31);
+        java.nio.file.Files.write(file.toPath(), content);
+        int port = proxy.start(InetAddress.getLoopbackAddress());
+        proxy.load(new HashMap<>(), new HashMap<>(), new HashMap<>());
+        proxy.serveFiles(Collections.singletonMap("f1", file));
+
+        Reply whole = get(port, "/f1");
+        assertEquals(200, whole.status);
+        assertEquals("video/mp2t", whole.headers.get("content-type"));
+        assertEquals(content.length, whole.body.length);
+        assertEquals(content[123_456], whole.body[123_456]);
+
+        Reply part = send(port, "GET /f1 HTTP/1.1\r\nHost: receiver\r\nRange: bytes=1000-1999\r\n\r\n");
+        assertEquals(206, part.status);
+        assertEquals("bytes 1000-1999/" + content.length, part.headers.get("content-range"));
+        assertEquals(1000, part.body.length);
+        assertEquals(content[1500], part.body[500]);
+
+        assertEquals(404, get(port, "/f2").status);
+        assertNull(uncaught.get());
+    }
+
     private int startServing(Map<String, String> targets) throws IOException {
         int port = proxy.start(InetAddress.getLoopbackAddress());
         proxy.load(new HashMap<>(), new HashMap<>(targets), new HashMap<>());

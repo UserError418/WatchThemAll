@@ -35,6 +35,8 @@ import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle, isPlaylist, isWholeVideoFile } from '@main/hlsrewrite'
 import { isCastableFileType } from '@shared/castability'
+import { downloadCastBundle } from '@shared/downloads/castbundle'
+import { unguessableId } from '@main/hlsrewrite'
 
 /** One request the player made, as the native side recorded it. */
 export interface Candidate {
@@ -63,6 +65,8 @@ interface CastNative {
     playlists: Record<string, string>
     targets: Record<string, string>
     headers: Record<string, string>
+    /** id -> a download's file, as a path under `files/downloads/`. */
+    files?: Record<string, string>
   }): Promise<{ base: string }>
   stopProxy(): Promise<void>
   startDiscovery(): Promise<void>
@@ -322,6 +326,11 @@ export interface NowPlaying {
   providerName: string
   /** Where to start on the television, if the app knows a position. */
   startSeconds: number
+  /**
+   * The download the player is on, with its local playlist: then its files
+   * are served from the phone and nothing is captured. Absent for a source.
+   */
+  download?: { id: string; playlist: string } | null
 }
 
 export interface CastBridge {
@@ -359,6 +368,38 @@ export interface CastProgress {
   finished: boolean
 }
 
+/**
+ * Cast a download: its playlist with every file named by an id, the files
+ * served by the native proxy from `files/downloads/<id>/`
+ * (`shared/downloads/castbundle.ts`). No source is involved, so nothing is
+ * learned about one.
+ */
+async function beamDownload(now: NowPlaying, download: { id: string; playlist: string }): Promise<PhoneBeamResult> {
+  let proxyLoaded = false
+  try {
+    const bundle = downloadCastBundle(download.playlist, unguessableId)
+    if (bundle === null) return { ok: false, error: 'This download is damaged; download it again.' }
+    const { base } = await Cast.startProxy({
+      playlists: bundle.playlists,
+      targets: {},
+      headers: {},
+      files: Object.fromEntries(Object.entries(bundle.files).map(([id, name]) => [id, `${download.id}/${name}`])),
+    })
+    proxyLoaded = true
+    await Cast.loadMedia({
+      url: `${base}${bundle.rootId}.m3u8`,
+      title: now.title,
+      subtitle: now.subtitle,
+      contentType: 'application/x-mpegurl',
+      startSeconds: now.startSeconds,
+    })
+    return { ok: true, providerName: now.providerName }
+  } catch (error) {
+    if (proxyLoaded) await Cast.stopProxy().catch(() => {})
+    return { ok: false, error: messageOf(error) }
+  }
+}
+
 export function createCastBridge(): CastBridge {
   return {
     async available(): Promise<boolean> {
@@ -392,6 +433,7 @@ export function createCastBridge(): CastBridge {
     disconnect: () => Cast.disconnect(),
 
     async beam(now: NowPlaying): Promise<PhoneBeamResult> {
+      if (now.download) return beamDownload(now, now.download)
       /** How the identified stream arrived, once there is one. */
       let delivery: PhoneBeamResult['delivery']
       /** This attempt has replaced what the proxy serves; see the catch. */

@@ -124,7 +124,7 @@ import {
 import { capture, createCastBridge, type Candidate } from './cast'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
-import { createPhoneDownloads, downloadedProvider } from './downloads'
+import { createPhoneDownloads, downloadedProvider, readDownloadPlaylist } from './downloads'
 import type { DownloadManager } from '@shared/downloads/manager'
 import { DOWNLOADED_SOURCE_ID, DOWNLOADED_SOURCE_NAME, isDownloadedSource } from '@shared/downloads/types'
 import { App as CapacitorApp } from '@capacitor/app'
@@ -993,8 +993,20 @@ export async function createBridge(): Promise<WtaApi> {
    * picker all stay where they are and `restore` can bring the picture back.
    */
   const beamToTv = async (): Promise<{ ok: boolean; error?: string; providerName?: string; final?: boolean }> => {
-    const now = nowPlaying()
-    if (now === null) return { ok: false, error: 'Nothing is playing.' }
+    const playing = nowPlaying()
+    if (playing === null) return { ok: false, error: 'Nothing is playing.' }
+    // On a download: cast its files from the phone (`beamDownload` in cast.ts).
+    const found =
+      session && isDownloadedSource(session.candidates[session.index]?.provider.id)
+        ? (downloads?.manager.playable({
+            tmdbId: session.req.tmdbId,
+            type: session.req.type,
+            season: session.req.season ?? null,
+            episode: session.req.episode ?? null,
+          }) ?? null)
+        : null
+    const playlist = found ? await readDownloadPlaylist(found.id) : null
+    const now = found && playlist ? { ...playing, download: { id: found.id, playlist } } : playing
 
     const result = await castBridge.beam(now)
     if (result.ok) {

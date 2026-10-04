@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { idFromPath, mediaContentType, pickLanAddress, replayableHeaders } from './castproxy'
+import { byteRange, idFromPath, mediaContentType, pickLanAddress, replayableHeaders } from './castproxy'
 
 describe('idFromPath', () => {
   it('strips the .m3u8 the receiver sniffs for', () => {
@@ -109,5 +109,20 @@ describe('pickLanAddress', () => {
 
   it('answers null rather than guessing when there is no address', () => {
     expect(pickLanAddress([])).toBeNull()
+  })
+})
+
+describe('byteRange', () => {
+  it('reads the ranges a receiver asks for, within the file', () => {
+    expect(byteRange('bytes=0-99', 1000)).toEqual({ start: 0, end: 99 })
+    expect(byteRange('bytes=900-', 1000)).toEqual({ start: 900, end: 999 })
+    expect(byteRange('bytes=-100', 1000)).toEqual({ start: 900, end: 999 })
+    expect(byteRange('bytes=0-5000', 1000)).toEqual({ start: 0, end: 999 })
+  })
+
+  it('sends the whole file for no range, or one it cannot serve', () => {
+    expect(byteRange(undefined, 1000)).toBeNull()
+    expect(byteRange('bytes=2000-', 1000)).toBeNull()
+    expect(byteRange('items=0-1', 1000)).toBeNull()
   })
 })

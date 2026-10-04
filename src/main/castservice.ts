@@ -29,7 +29,11 @@ import type { Session } from 'electron'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import type { CastOutcome } from '@shared/types'
 import { isCastableFileType } from '@shared/castability'
-import { buildCastBundle, isPlaylist, isWholeVideoFile } from './hlsrewrite'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { buildCastBundle, isPlaylist, isWholeVideoFile, unguessableId } from './hlsrewrite'
+import { downloadCastBundle } from '@shared/downloads/castbundle'
+import { PLAYLIST_FILE } from '@shared/downloads/plan'
 import { createCastCapture, type Candidate, type CastCapture } from './castcapture'
 import { createCastProxy, replayableHeaders } from './castproxy'
 import { discover } from './castdiscovery'
@@ -59,6 +63,11 @@ export interface NowPlaying {
   providerId: string | null
   /** The episode being cast, null for a film: a cast's result is filed under it. */
   episode: { season: number; episode: number } | null
+  /**
+   * The download's folder when the player is on a download: then the files
+   * are served from it, and nothing is captured. Null for a source.
+   */
+  downloadDir?: string | null
 }
 
 /**
@@ -196,6 +205,36 @@ export function createCastService(): CastService {
     proxy.stop()
   }
 
+  /**
+   * Cast a download: its playlist with every file named by an id, the files
+   * served from its folder (`shared/downloads/castbundle.ts`). Nothing is
+   * learned about any source, since none is involved.
+   */
+  const beamDownload = async (live: CastSession, now: NowPlaying, dir: string): Promise<BeamResult> => {
+    try {
+      const playlist = await readFile(join(dir, PLAYLIST_FILE), 'utf8')
+      const bundle = downloadCastBundle(playlist, unguessableId)
+      if (bundle === null) return { ok: false, error: 'This download is damaged; download it again.' }
+      const base = await proxy.start({
+        playlists: bundle.playlists,
+        targets: {},
+        headers: {},
+        files: Object.fromEntries(Object.entries(bundle.files).map(([id, name]) => [id, join(dir, name)])),
+      })
+      await live.load({
+        url: `${base}${bundle.rootId}.m3u8`,
+        contentType: 'application/x-mpegurl',
+        title: now.title,
+        subtitle: now.subtitle,
+        startSeconds: now.startSeconds,
+      })
+      return { ok: true }
+    } catch (error) {
+      proxy.stop()
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   const refresh = async (): Promise<void> => {
     const found = await discover(3000)
     for (const device of found) routes.set(device.id, { address: device.address, port: device.port, name: device.name })
@@ -254,6 +293,7 @@ export function createCastService(): CastService {
 
     async beam(now): Promise<BeamResult> {
       if (!session) return { ok: false, error: 'Not connected to a TV.' }
+      if (now.downloadDir) return beamDownload(session, now, now.downloadDir)
 
       const candidates = capture.candidates()
       if (candidates.length === 0) {

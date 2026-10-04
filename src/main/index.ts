@@ -293,6 +293,13 @@ function downloadsRoot(): string {
   return join(app.getPath('userData'), 'downloads')
 }
 
+/** The folder of the download the player is on, for casting it; null on a source. */
+function downloadDirFor(providerId: string | null, req: PlayRequest): string | null {
+  if (!isDownloadedSource(providerId) || downloads === null) return null
+  const found = downloads.playable({ tmdbId: req.tmdbId, type: req.type, season: req.season ?? null, episode: req.episode ?? null })
+  return found === null ? null : join(downloadsRoot(), found.id)
+}
+
 
 /**
  * Load the downloads and start the queue. After the window, because a
@@ -1622,6 +1629,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
           titleKey: titleKey(context),
           providerId: provider?.id ?? null,
           episode: episodeOf(context),
+          downloadDir: downloadDirFor(provider?.id ?? null, context),
         }
       },
       checkReleases,

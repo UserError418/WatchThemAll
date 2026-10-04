@@ -275,6 +275,11 @@ export async function createPhoneDownloads(deps: PhoneDownloadDeps): Promise<{
   }
 }
 
+/** A download's local playlist, for casting it; null when it cannot be read. */
+export function readDownloadPlaylist(id: string): Promise<string | null> {
+  return readText(`${ROOT}/${id}/${PLAYLIST_FILE}`)
+}
+
 /** A provider as the player's candidate list needs it, for a finished download. */
 export function downloadedProvider(id: string, name: string): Provider {
   return { id, name, rootUrl: location.origin, tv: null, movie: null }

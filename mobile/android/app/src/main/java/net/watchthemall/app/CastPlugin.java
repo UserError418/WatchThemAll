@@ -427,6 +427,21 @@ public class CastPlugin extends Plugin {
 
             int port = PROXY.start(address);
             PROXY.load(toMap(playlistsIn), toMap(targetsIn), toMap(headersIn));
+            // A download's files, by path under files/downloads/; anything else is refused.
+            JSObject filesIn = call.getObject("files", new JSObject());
+            java.io.File downloads = new java.io.File(getContext().getFilesDir(), "downloads");
+            String root = downloads.getCanonicalPath() + java.io.File.separator;
+            Map<String, java.io.File> files = new HashMap<>();
+            for (Map.Entry<String, String> entry : toMap(filesIn).entrySet()) {
+                java.io.File file = new java.io.File(downloads, entry.getValue());
+                if (!file.getCanonicalPath().startsWith(root)) {
+                    call.reject("a cast file must be under downloads/");
+                    PROXY.stop();
+                    return;
+                }
+                files.put(entry.getKey(), file);
+            }
+            PROXY.serveFiles(files);
             CastKeepAliveService.start(getContext());
             startProgress();
 

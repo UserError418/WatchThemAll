@@ -461,6 +461,8 @@
    * A test run from the list itself fills the list in as each source settles.
    */
   function castabilityOf(id: string): Castability {
+    // A download is a playlist and segments served from this device: it casts.
+    if (isDownloadedSource(id)) return 'yes'
     return deliveryCastability(scanDelivery[id]) ?? sourceState.castability[id] ?? 'unknown'
   }
 

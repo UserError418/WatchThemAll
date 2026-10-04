@@ -25,6 +25,8 @@
  * the cast, and `stop()` on every path that ends one.
  */
 
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 
@@ -138,6 +140,52 @@ export interface CastBundleForProxy {
   targets: Record<string, string>
   /** Replayed upstream, already filtered by `replayableHeaders`. */
   headers: Record<string, string>
+  /**
+   * id -> absolute path of a file on this machine: a download's segments
+   * (`shared/downloads/castbundle.ts`). The only files this server will read.
+   */
+  files?: Record<string, string>
+}
+
+/** What a download's file is, by its extension (names are the download's own). */
+function fileContentType(path: string): string {
+  if (path.endsWith('.ts')) return 'video/mp2t'
+  if (path.endsWith('.m4s') || path.endsWith('.mp4')) return 'video/mp4'
+  return 'application/octet-stream'
+}
+
+/** `bytes=a-b`, `bytes=a-`, within `size`; null when absent or unreadable (the whole file is sent). */
+export function byteRange(header: string | undefined, size: number): { start: number; end: number } | null {
+  const match = header ? /^bytes=(\d*)-(\d*)$/.exec(header.trim()) : null
+  if (!match || (match[1] === '' && match[2] === '')) return null
+  if (match[1] === '') {
+    const length = Math.min(Number(match[2]), size)
+    return { start: size - length, end: size - 1 }
+  }
+  const start = Number(match[1])
+  const end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1)
+  return start <= end && start < size ? { start, end } : null
+}
+
+/** Serve one of a download's files, honouring a range: the receiver may ask for part of a segment. */
+async function serveFile(request: IncomingMessage, response: ServerResponse, path: string): Promise<void> {
+  const size = (await stat(path)).size
+  const range = byteRange(typeof request.headers.range === 'string' ? request.headers.range : undefined, size)
+  const start = range?.start ?? 0
+  const end = range?.end ?? size - 1
+  response.writeHead(range ? 206 : 200, {
+    'Content-Type': fileContentType(path),
+    'Content-Length': end - start + 1,
+    ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
+    'Access-Control-Allow-Origin': '*',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+  })
+  if (request.method === 'HEAD' || size === 0) {
+    response.end()
+    return
+  }
+  createReadStream(path, { start, end }).on('error', () => response.destroy()).pipe(response)
 }
 
 export interface CastProxy {
@@ -159,12 +207,13 @@ export function createCastProxy(): CastProxy {
   let server: Server | null = null
   let playlists = new Map<string, string>()
   let targets = new Map<string, string>()
+  let files = new Map<string, string>()
   let headers: Record<string, string> = {}
   let servedCount = 0
 
   const handle = (request: IncomingMessage, response: ServerResponse): void => {
     const id = idFromPath(request.url ?? '/')
-    if (playlists.has(id) || targets.has(id)) servedCount += 1
+    if (playlists.has(id) || targets.has(id) || files.has(id)) servedCount += 1
 
     const playlist = playlists.get(id)
     if (playlist !== undefined) {
@@ -175,6 +224,16 @@ export function createCastProxy(): CastProxy {
         'Cache-Control': 'no-store',
       })
       response.end(request.method === 'HEAD' ? undefined : playlist)
+      return
+    }
+
+    const file = files.get(id)
+    if (file !== undefined) {
+      void serveFile(request, response, file).catch(() => {
+        if (response.headersSent) return void response.destroy()
+        response.writeHead(404, { 'Access-Control-Allow-Origin': '*' })
+        response.end('gone')
+      })
       return
     }
 
@@ -223,6 +282,7 @@ export function createCastProxy(): CastProxy {
     start(bundle): Promise<string> {
       playlists = new Map(Object.entries(bundle.playlists))
       targets = new Map(Object.entries(bundle.targets))
+      files = new Map(Object.entries(bundle.files ?? {}))
       headers = bundle.headers
       servedCount = 0
 
@@ -250,6 +310,7 @@ export function createCastProxy(): CastProxy {
     stop(): void {
       playlists.clear()
       targets.clear()
+      files.clear()
       headers = {}
       server?.close()
       server = null

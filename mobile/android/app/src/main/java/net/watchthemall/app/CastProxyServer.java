@@ -137,6 +137,12 @@ public final class CastProxyServer {
     private final Map<String, String> upstreamHeaders = new ConcurrentHashMap<>();
 
     /**
+     * id -> a download's file on this phone (`shared/downloads/castbundle.ts`).
+     * The only files this server will read; set by `serveFiles` after `load`.
+     */
+    private final Map<String, java.io.File> files = new ConcurrentHashMap<>();
+
+    /**
      * Start listening on `address`, returning the bound port. Idempotent for
      * the same address; a new one means the phone changed networks, where the
      * old address reaches nobody, so the server moves to it.
@@ -170,6 +176,7 @@ public final class CastProxyServer {
     public synchronized void stop() {
         playlists.clear();
         targets.clear();
+        files.clear();
         upstreamHeaders.clear();
         try {
             if (socket != null) socket.close();
@@ -190,8 +197,15 @@ public final class CastProxyServer {
         return port;
     }
 
+    /** The files a download's cast reads, replacing any earlier; call after `load`. */
+    public void serveFiles(Map<String, java.io.File> newFiles) {
+        files.clear();
+        files.putAll(newFiles);
+    }
+
     /** Replace everything this server is willing to serve. */
     public void load(Map<String, String> newPlaylists, Map<String, String> newTargets, Map<String, String> headers) {
+        files.clear();
         playlists.clear();
         playlists.putAll(newPlaylists);
         targets.clear();
@@ -329,6 +343,12 @@ public final class CastProxyServer {
                 writeHead(out, 200, "OK", "application/vnd.apple.mpegurl", body.length, null);
                 if (!"HEAD".equalsIgnoreCase(method)) out.write(body);
                 out.flush();
+                return;
+            }
+
+            java.io.File file = files.get(id);
+            if (file != null) {
+                serveFile(file, requestHeaders.get("range"), method, out);
                 return;
             }
 
@@ -505,6 +525,58 @@ public final class CastProxyServer {
         if (path.endsWith(".aac")) return "audio/aac";
         if (path.endsWith(".webm")) return "video/webm";
         return "application/octet-stream";
+    }
+
+    /**
+     * One of a download's files, honouring a `bytes=a-b` range: a receiver may
+     * ask for part of a segment. A range it cannot serve gets the whole file.
+     */
+    private static void serveFile(java.io.File file, String range, String method, OutputStream out) throws IOException {
+        if (!file.isFile()) {
+            writeStatus(out, 404, "gone");
+            return;
+        }
+        long size = file.length();
+        long start = 0;
+        long end = size - 1;
+        boolean partial = false;
+        if (range != null) {
+            java.util.regex.Matcher match = java.util.regex.Pattern.compile("^bytes=(\\d*)-(\\d*)$").matcher(range.trim());
+            if (match.matches() && !(match.group(1).isEmpty() && match.group(2).isEmpty())) {
+                long a;
+                long b;
+                if (match.group(1).isEmpty()) {
+                    a = Math.max(0, size - Long.parseLong(match.group(2)));
+                    b = size - 1;
+                } else {
+                    a = Long.parseLong(match.group(1));
+                    b = match.group(2).isEmpty() ? size - 1 : Math.min(Long.parseLong(match.group(2)), size - 1);
+                }
+                if (a <= b && a < size) {
+                    start = a;
+                    end = b;
+                    partial = true;
+                }
+            }
+        }
+        String name = file.getName();
+        String type = name.endsWith(".ts") ? "video/mp2t" : (name.endsWith(".m4s") || name.endsWith(".mp4")) ? "video/mp4" : "application/octet-stream";
+        writeHead(out, partial ? 206 : 200, partial ? "Partial Content" : "OK", type, end - start + 1,
+            partial ? "bytes " + start + "-" + end + "/" + size : null);
+        if (!"HEAD".equalsIgnoreCase(method) && size > 0) {
+            try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(file, "r")) {
+                in.seek(start);
+                byte[] buffer = new byte[BUFFER_BYTES];
+                long left = end - start + 1;
+                while (left > 0) {
+                    int read = in.read(buffer, 0, (int) Math.min(buffer.length, left));
+                    if (read < 0) break;
+                    out.write(buffer, 0, read);
+                    left -= read;
+                }
+            }
+        }
+        out.flush();
     }
 
     /* ── Wire format ────────────────────────────────────────────────────── */
