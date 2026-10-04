@@ -57,6 +57,11 @@ class FakeReceiver {
   readonly ignoredForNoRequestId: string[] = []
   /** Set to answer GET_STATUS as a receiver that played the media to its end. */
   finished = false
+  /**
+   * Set to stop answering anything, PINGs included, with the connection left
+   * open: a television switched off at the wall, which sends no FIN.
+   */
+  silent = false
 
   async listen(): Promise<number> {
     const server = createServer({ key: TEST_KEY, cert: TEST_CERT }, (socket) => {
@@ -65,6 +70,7 @@ class FakeReceiver {
 
       socket.on('error', () => {})
       socket.on('data', (chunk: Buffer) => {
+        if (this.silent) return
         pending = Buffer.concat([pending, chunk])
         const { messages, rest } = unframe(pending)
         pending = rest
@@ -337,6 +343,37 @@ describe('CastSession', () => {
 
     receiver.finished = true
     expect(await session.status()).toMatchObject({ playing: false, finished: true, duration: 8348.5 })
+  })
+
+  /**
+   * The bug: the heartbeat only ever sent. A television gone without closing
+   * the connection was noticed only by TCP, about fifteen minutes later, and
+   * until then the cast read as connected and the picture here stayed muted.
+   */
+  it('gives up on a television that stops answering without hanging up', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+    // Heartbeats every 50 ms, so three missed take 150 ms rather than 15 s.
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer', 50)
+    let ended = false
+    session.onDisconnect(() => (ended = true))
+    await session.connect()
+
+    receiver.silent = true
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    expect({ ended, connected: session.isConnected() }).toEqual({ ended: true, connected: false })
+  })
+
+  it('stays connected while the television answers its heartbeats', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer', 50)
+    await session.connect()
+
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    expect(session.isConnected()).toBe(true)
   })
 
   it('answers a PING from the receiver, or the receiver hangs up on us', async () => {

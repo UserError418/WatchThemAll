@@ -55,6 +55,13 @@ const RECEIVER_ID = 'receiver-0'
 /** The receiver closes a socket that stops pinging; five seconds is its own default. */
 const HEARTBEAT_MS = 5000
 
+/**
+ * Heartbeats without a word from the television before it counts as gone.
+ * A receiver answers every PING with a PONG, so three missed is not a slow
+ * network; see `startHeartbeat`.
+ */
+const SILENT_HEARTBEATS = 3
+
 /** How long any one step may take before it is reported as that step failing. */
 const STEP_TIMEOUT_MS = 12_000
 
@@ -145,6 +152,8 @@ export class CastSession {
   private socket: TLSSocket | null = null
   private pending: Buffer = Buffer.alloc(0)
   private heartbeat: NodeJS.Timeout | null = null
+  /** When anything last arrived from the television: proof it is still there. */
+  private lastHeardAt = 0
   private requestId = 1
 
   /** Set once the receiver application is running. */
@@ -172,6 +181,8 @@ export class CastSession {
     readonly address: string,
     readonly port: number,
     readonly deviceName: string,
+    /** Overridable so a test can wait out three heartbeats in milliseconds, not fifteen seconds. */
+    private readonly heartbeatMs = HEARTBEAT_MS,
   ) {}
 
   /** Called when the receiver goes away for any reason. */
@@ -210,6 +221,7 @@ export class CastSession {
         () => {
           clearTimeout(timer)
           this.socket = socket
+          this.lastHeardAt = Date.now()
           resolve()
         },
       )
@@ -551,12 +563,25 @@ export class CastSession {
 
   private startHeartbeat(): void {
     this.heartbeat = setInterval(() => {
+      /*
+       * Silence for three heartbeats: the television went away without closing
+       * the connection — switched off at the wall, off the network, asleep.
+       * Until this check only TCP could notice, which with Linux's defaults
+       * takes about fifteen minutes of retransmitting, and all that time the
+       * cast read as connected and playing at a frozen second while the
+       * picture here stayed muted. Destroying the socket takes the ordinary
+       * close path: teardown, the session ended, the sound given back.
+       */
+      if (Date.now() - this.lastHeardAt > SILENT_HEARTBEATS * this.heartbeatMs) {
+        this.socket?.destroy()
+        return
+      }
       try {
         this.send(NS_HEARTBEAT, RECEIVER_ID, { type: 'PING' })
       } catch {
         // Socket gone; the close handler has already run or is about to.
       }
-    }, HEARTBEAT_MS)
+    }, this.heartbeatMs)
   }
 
   private send(namespace: string, destinationId: string, payload: Record<string, unknown>): void {
@@ -608,6 +633,7 @@ export class CastSession {
   }
 
   private receive(chunk: Buffer): void {
+    this.lastHeardAt = Date.now()
     this.pending = Buffer.concat([this.pending, chunk])
     const { messages, rest } = unframe(this.pending)
     this.pending = rest
