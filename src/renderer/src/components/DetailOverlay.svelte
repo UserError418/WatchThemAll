@@ -12,6 +12,7 @@
   import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
   import { markSeen, removeFromWatchlist, unmarkSeen } from '../lib/undo'
+  import { canPlay } from '../lib/detailplay'
   import PreviewSoundButton from './PreviewSoundButton.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
@@ -1066,7 +1067,7 @@
 
           <div class="action-bar">
             <div class="actions">
-              <button class="primary" onclick={resume} disabled={!detail}>
+              <button class="primary" onclick={resume} disabled={!canPlay({ detailLoaded: detail !== null, degraded })}>
                 ▶ {entry && detail?.type === 'tv' ? `Resume ${episodeCode(resumeAt.season, resumeAt.episode)}` : 'Play'}
               </button>
               <!--
@@ -1165,9 +1166,14 @@
         {/if}
 
         <p class="degraded-note">
-          TMDB has no entry for this title, so there are no episode listings or
-          air dates for it. It will still play — pick the episode below, or use
-          the arrow keys in the player window to move through them.
+          {#if subject.type === 'tv'}
+            TMDB has no entry for this title, so there are no episode listings or
+            air dates for it. It will still play — pick the episode below, or use
+            the arrow keys in the player window to move through them.
+          {:else}
+            TMDB has no entry for this film, so some details are missing. It will
+            still play: Play uses its IMDB id.
+          {/if}
         </p>
 
         {#if subject.type === 'tv'}
