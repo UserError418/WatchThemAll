@@ -87,8 +87,14 @@ export interface InlinePlayer {
   candidates: PlayCandidate[]
   /** Index into `candidates` of the provider currently loaded. */
   candidateIndex: number
-  /** Providers already tried and failed, with why — shown if all of them do. */
-  exhausted: Array<{ provider: string; reason: string }>
+  /**
+   * Sources that failed this episode, with why (shown if all of them do):
+   * `providerId` to skip them by, `provider` (the name) and `reason` to tell
+   * the viewer. Matched by id: two sources may share a display name (a custom
+   * one named after a catalogue entry), and by name the second was skipped
+   * without ever being tried.
+   */
+  exhausted: Array<{ providerId: string; provider: string; reason: string }>
   /** Switch to a named provider. Returns false if it cannot serve this title. */
   switchTo: (providerId: string) => boolean
   /** "Keep waiting": stop offering to leave the provider currently loading. */
@@ -1347,8 +1353,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
 
   /** The next provider we have not tried, or undefined if there is none. */
   const nextUntried = (): PlayCandidate | undefined => {
-    const tried = new Set(player.exhausted.map((e) => e.provider))
-    return player.candidates.find((c) => !tried.has(c.provider.name) && c !== currentCandidate())
+    const tried = new Set(player.exhausted.map((e) => e.providerId))
+    return player.candidates.find((c) => !tried.has(c.provider.id) && c !== currentCandidate())
   }
 
   /**
@@ -1510,7 +1516,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (!alive()) return true
     const failed = currentCandidate()
     if (failed) {
-      player.exhausted.push({ provider: failed.provider.name, reason })
+      player.exhausted.push({ providerId: failed.provider.id, provider: failed.provider.name, reason })
       // Guarded, because `suggest` records the same verdict and both can run
       // for one load — a failed API call offers, and a dead host then advances.
       if (!failureRecorded) {
@@ -1527,8 +1533,8 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
      * give up, while the providers ahead of it — which were never attempted —
      * sit there untouched.
      */
-    const tried = new Set(player.exhausted.map((e) => e.provider))
-    const nextIndex = player.candidates.findIndex((c) => !tried.has(c.provider.name))
+    const tried = new Set(player.exhausted.map((e) => e.providerId))
+    const nextIndex = player.candidates.findIndex((c) => !tried.has(c.provider.id))
     if (nextIndex < 0) return false
 
     // Before the index moves, same as a deliberate switch: this is still the

@@ -189,3 +189,25 @@ describe('a source that plays', () => {
   })
 })
 
+describe('two sources with the same name', () => {
+  it('are two sources: one failing does not mark the other as tried', () => {
+    const offers: Array<PlayerSuggestion | null> = []
+    const named = (id: string, name: string): ReturnType<typeof candidate> => {
+      const c = candidate(id)
+      return { ...c, provider: { ...c.provider, name } }
+    }
+    const player = createInlinePlayer(
+      options({
+        candidates: [named('a', 'VidSrc'), named('b', 'Other'), named('c', 'VidSrc')],
+        onSuggest: (offer) => void offers.push(offer),
+      }),
+    )
+    const contents = lastContents()
+    // A fails and is left for B; B fails too. C shares only A's name.
+    contents.emit('did-navigate', {}, 'http://127.0.0.1/__player', 500, 'Internal Server Error')
+    expect(player.acceptSuggestion()).toBe(true)
+    contents.emit('did-navigate', {}, 'http://127.0.0.1/__player', 500, 'Internal Server Error')
+    expect(offers.at(-1)?.nextProviderId).toBe('c')
+    player.destroy()
+  })
+})
