@@ -535,7 +535,8 @@ async function beamNextToTv(): Promise<void> {
 async function nextEpisodeAfter(place: UpNextPlace): Promise<NextEpisode | null> {
   const detail = await tmdb.detail(place.tmdbId, 'tv').catch(() => null)
   if (detail === null) return null
-  return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n))
+  // Capped at TMDB's own last aired episode: see `canStepTo` in episodesteps.ts.
+  return nextAiredEpisode(place, detail.seasonCount, (n) => tmdb.season(place.tmdbId, n), Date.now(), detail.lastEpisode)
 }
 
 const upNext = new UpNextController({

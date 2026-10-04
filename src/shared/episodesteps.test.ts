@@ -68,6 +68,36 @@ describe('nextAiredEpisode', () => {
   })
 })
 
+describe("nextAiredEpisode capped at TMDB's last aired episode", () => {
+  /**
+   * The bug: an episode counted as out from the viewer's local midnight of its
+   * broadcast date, a day early for a US evening show watched in Europe, and
+   * auto-next loaded an episode no source had.
+   */
+  it("does not step past TMDB's last aired episode, whatever the calendar says", async () => {
+    expect(await nextAiredEpisode({ season: 1, episode: 2 }, 2, fetchSeason, NOW, { season: 1, episode: 2 })).toBeNull()
+  })
+
+  it('rolls into the next season only once TMDB has its first episode as aired', async () => {
+    expect(await nextAiredEpisode({ season: 1, episode: 3 }, 2, fetchSeason, NOW, { season: 1, episode: 3 })).toBeNull()
+    expect(await nextAiredEpisode({ season: 1, episode: 3 }, 2, fetchSeason, NOW, { season: 2, episode: 1 })).toEqual({
+      season: 2,
+      episode: 1,
+      name: 'Return',
+    })
+  })
+
+  it('still needs the calendar when TMDB says more has aired than the dates do', async () => {
+    expect(await nextAiredEpisode({ season: 2, episode: 1 }, 2, fetchSeason, NOW, { season: 2, episode: 2 })).toBeNull()
+  })
+
+  it("goes by the calendar alone when TMDB's last aired is a special, or unknown", async () => {
+    const step = { season: 1, episode: 2, name: 'Episode 2' }
+    expect(await nextAiredEpisode({ season: 1, episode: 1 }, 2, fetchSeason, NOW, { season: 0, episode: 5 })).toEqual(step)
+    expect(await nextAiredEpisode({ season: 1, episode: 1 }, 2, fetchSeason, NOW, null)).toEqual(step)
+  })
+})
+
 describe('previousEpisode', () => {
   it('steps back within the season', async () => {
     expect(await previousEpisode({ season: 1, episode: 3 }, fetchSeason)).toEqual({ season: 1, episode: 2, name: 'Episode 2' })
