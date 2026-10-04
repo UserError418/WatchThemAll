@@ -825,7 +825,10 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     // The page being left, playing again before the new one took over.
     if (!committed) return
     const candidate = currentCandidate()
-    if (candidate) reportOutcome(candidate.provider.id, 'stream')
+    if (candidate && !streamReported) {
+      streamReported = true
+      reportOutcome(candidate.provider.id, 'stream')
+    }
     if (candidate) noteStreamed(candidate.provider.id)
     // It worked. Nothing pending against this provider is valid any more, and
     // any offer to leave it must be withdrawn — an offer still on screen after
@@ -1220,6 +1223,14 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * had nothing to colour and the ranking had nothing to learn from.
    */
   let failureRecorded = false
+  /**
+   * Whether this load has told the outcome log that it streams, reset by
+   * `beginLoad`. `media-started-playing` fires again on every resume after a
+   * pause, and each report was a record with a new time: a whole-library
+   * write and, eight seconds later, a whole-library upload to Drive, for
+   * every unpause. The log needs one per load; the phone already sent one.
+   */
+  let streamReported = false
   let silenceTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
@@ -1443,6 +1454,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const beginLoad = (): void => {
     playing = false
     failureRecorded = false
+    streamReported = false
     clearPendingVerdicts()
     // Every caller is navigating to a *different* URL, so any "keep waiting"
     // the user set is about a page that is no longer loaded. A page reloading

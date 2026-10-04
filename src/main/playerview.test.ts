@@ -163,3 +163,29 @@ describe('stepping to another episode', () => {
     player.destroy()
   })
 })
+
+describe('a source that plays', () => {
+  it('is recorded as streaming once per load, however often it is paused and resumed', () => {
+    const streamed: string[] = []
+    const player = createInlinePlayer(
+      options({ reportOutcome: (id, outcome) => void (outcome === 'stream' && streamed.push(id)) }),
+    )
+    const contents = lastContents()
+    contents.commit()
+    contents.emit('media-started-playing')
+    contents.emit('media-paused')
+    contents.emit('media-started-playing')
+    contents.emit('media-paused')
+    contents.emit('media-started-playing')
+    expect(streamed).toEqual(['a'])
+
+    // A new load (the next episode) is new evidence, and is recorded once too.
+    player.goToEpisode({ context: episodeRequest(4), candidates: [candidate('a')], url: 'https://a.example/tv/1/1/4' })
+    contents.commit()
+    contents.emit('media-started-playing')
+    contents.emit('media-started-playing')
+    expect(streamed).toEqual(['a', 'a'])
+    player.destroy()
+  })
+})
+
