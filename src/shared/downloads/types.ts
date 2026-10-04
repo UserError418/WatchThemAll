@@ -82,7 +82,7 @@ export interface DownloadRecord {
   refusals: Array<{ providerId: string; reason: string }>
   /** The picture's height in lines, when the playlist or the stream said. */
   height: number | null
-  /** MPEG-TS or fragmented MP4: only fMP4 also becomes a real .mp4 file. */
+  /** MPEG-TS or fragmented MP4 segments; either plays in the app's own player. */
   format: 'ts' | 'fmp4' | null
   durationSeconds: number | null
   segmentsTotal: number
@@ -91,8 +91,6 @@ export interface DownloadRecord {
   bytesDone: number
   /** What the whole will take, once the stream is known; null before. */
   estimatedBytes: number | null
-  /** The .mp4 file beside the playlist (fMP4 sources only), by name. */
-  mp4: string | null
   /** The poster image in the folder, by name. */
   poster: string | null
   /** Why it stopped, in words the viewer reads. */

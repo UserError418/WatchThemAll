@@ -37,7 +37,6 @@
       qualityLabel(download.height),
       download.durationSeconds !== null ? clock(download.durationSeconds) : null,
       download.source?.name ?? null,
-      download.mp4 !== null ? 'MP4' : null,
       new Date(download.finishedAt ?? download.createdAt).toLocaleDateString(),
     ].filter((fact): fact is string => fact !== null && fact !== '')
   }
@@ -108,9 +107,6 @@
           <div class="actions">
             {#if download.state === 'done'}
               <button class="primary" onclick={() => play(download)}>▶ Play</button>
-              {#if download.mp4 !== null}
-                <button onclick={() => downloads.reveal(download.id)} title="Show the .mp4 file in your file manager">Show file</button>
-              {/if}
             {:else if isUnderWay(download)}
               <button onclick={() => downloads.pause(download.id)}>Pause</button>
             {:else}

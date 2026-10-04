@@ -7,7 +7,7 @@
  * downloader in one file, and there was no way to test any of it.
  */
 
-import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { isListed } from '@shared/listed'
@@ -293,15 +293,6 @@ function downloadsRoot(): string {
   return join(app.getPath('userData'), 'downloads')
 }
 
-/** The download's .mp4 in the file manager, or its folder when it has none. */
-function revealDownload(id: string): boolean {
-  const found = downloads?.status().downloads.find((d) => d.id === id)
-  if (!found) return false
-  const folder = join(downloadsRoot(), id)
-  if (found.mp4 !== null) shell.showItemInFolder(join(folder, found.mp4))
-  else void shell.openPath(folder)
-  return true
-}
 
 /**
  * Load the downloads and start the queue. After the window, because a
@@ -1652,7 +1643,6 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
       warmStarts,
       scanFiled: cacheAfterTest,
       downloads: () => downloads,
-      revealDownload,
       downloadedCandidate,
     })
 

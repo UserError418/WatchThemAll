@@ -2456,7 +2456,6 @@ export async function createBridge(): Promise<WtaApi> {
       resume: async () => {},
       remove: async () => {},
       setQuality: async () => {},
-      reveal: async () => false,
     },
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {

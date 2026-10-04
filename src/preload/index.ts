@@ -61,7 +61,6 @@ const api: WtaApi = {
     resume: (id: string) => ipcRenderer.invoke(CH.downloadsResume, id),
     remove: (id: string) => ipcRenderer.invoke(CH.downloadsRemove, id),
     setQuality: (quality: QualityCap) => ipcRenderer.invoke(CH.downloadsSetQuality, quality),
-    reveal: (id: string) => ipcRenderer.invoke(CH.downloadsReveal, id),
   },
   providers: {
     list: () => ipcRenderer.invoke(CH.providersList),

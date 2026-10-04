@@ -17,7 +17,6 @@ function view(overrides: Partial<DownloadView> = {}): DownloadView {
     segmentsDone: 50,
     bytesDone: 100e6,
     estimatedBytes: 400e6,
-    mp4: null,
     poster: null,
     error: null,
     createdAt: 1,

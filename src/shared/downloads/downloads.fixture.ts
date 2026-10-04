@@ -14,15 +14,6 @@ export function tsSegment(tag: number, length = 564): Uint8Array {
   return bytes
 }
 
-/** An fMP4 media segment (`moof` box) or init segment (`ftyp`). */
-export function boxSegment(type: 'moof' | 'ftyp', tag: number, length = 64): Uint8Array {
-  const bytes = new Uint8Array(length)
-  bytes[3] = length
-  for (let i = 0; i < 4; i++) bytes[4 + i] = type.charCodeAt(i)
-  bytes[8] = tag
-  return bytes
-}
-
 export type Route = { status: number; body: string | Uint8Array } | ((count: number) => { status: number; body: string | Uint8Array } | null)
 
 /** A network answering from `routes`; unknown URLs are unreachable (null). Counts every request. */
@@ -73,16 +64,6 @@ export function memoryFolder(network: ReturnType<typeof fakeNetwork>): DownloadF
     },
     async remove(name) {
       files.delete(name)
-    },
-    async concat(names, name) {
-      const parts = names.map((n) => files.get(n)!)
-      const joined = new Uint8Array(parts.reduce((sum, p) => sum + p.length, 0))
-      let offset = 0
-      for (const part of parts) {
-        joined.set(part, offset)
-        offset += part.length
-      }
-      files.set(name, joined)
     },
   }
 }

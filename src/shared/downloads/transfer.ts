@@ -21,7 +21,7 @@
 import { segmentExtension } from '../segmentwindow'
 import { readStreamHeader } from '../streamheader'
 import { decryptSegment, importAesKey, ivFor } from './aes'
-import { joinsIntoMp4, localPlaylist, mapName, MP4_FILE, PLAYLIST_FILE, segmentName, estimateBytes, type DownloadPlan } from './plan'
+import { localPlaylist, mapName, PLAYLIST_FILE, segmentName, estimateBytes, type DownloadPlan } from './plan'
 
 /** A platform's network and files for one download's folder. */
 export interface DownloadFiles {
@@ -34,8 +34,6 @@ export interface DownloadFiles {
   readText(name: string): Promise<string | null>
   writeText(name: string, text: string): Promise<void>
   remove(name: string): Promise<void>
-  /** Join these files, in order, into `name`, whole or not at all. */
-  concat(names: readonly string[], name: string): Promise<void>
 }
 
 export interface TransferProgress {
@@ -60,7 +58,7 @@ export interface TransferOptions {
 }
 
 export type TransferOutcome =
-  | { kind: 'done'; bytes: number; height: number | null; mp4: string | null }
+  | { kind: 'done'; bytes: number; height: number | null }
   /** The signed URLs no longer open: capture the source again and resume. */
   | { kind: 'expired' }
   | { kind: 'failed'; reason: string }
@@ -261,11 +259,6 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
   if (failure !== null) return { kind: 'failed', reason: failure }
 
   await files.writeText(PLAYLIST_FILE, localPlaylist(plan))
-  let mp4: string | null = null
-  if (joinsIntoMp4(plan)) {
-    await files.concat([mapName(0), ...plan.segments.map((_, i) => segmentName(i, plan.format))], MP4_FILE)
-    mp4 = MP4_FILE
-  }
   const bytes = (await files.list()).reduce((sum, f) => sum + f.bytes, 0)
-  return { kind: 'done', bytes, height, mp4 }
+  return { kind: 'done', bytes, height }
 }

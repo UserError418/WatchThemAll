@@ -208,7 +208,6 @@ export interface IpcDeps {
   /** The downloads, once they are loaded; null before, and when they could not be. */
   downloads: () => DownloadManager | null
   /** Show a download's .mp4, or its folder, in the file manager. */
-  revealDownload: (id: string) => boolean
   /**
    * The download of this episode as the first source to play, or null when
    * there is none: offline-capable, and played through the same player.
@@ -401,7 +400,6 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.downloadsResume, (_e, id: string) => deps.downloads()?.resume(id))
   ipcMain.handle(CH.downloadsRemove, (_e, id: string) => deps.downloads()?.remove(id))
   ipcMain.handle(CH.downloadsSetQuality, (_e, quality: QualityCap) => deps.downloads()?.setQuality(quality))
-  ipcMain.handle(CH.downloadsReveal, (_e, id: string) => deps.revealDownload(id))
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const at = Date.now()

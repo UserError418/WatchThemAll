@@ -154,7 +154,6 @@ export const CH = {
   downloadsResume: 'downloads:resume',
   downloadsRemove: 'downloads:remove',
   downloadsSetQuality: 'downloads:set-quality',
-  downloadsReveal: 'downloads:reveal',
 
   /**
    * Cross-device sync.
@@ -1048,8 +1047,6 @@ export interface WtaApi {
     /** Delete it and its files, finished or not. */
     remove(id: string): Promise<void>
     setQuality(quality: QualityCap): Promise<void>
-    /** Show the download's .mp4 (or its folder) in the file manager; false where there is none. */
-    reveal(id: string): Promise<boolean>
   }
   providers: {
     list(): Promise<Provider[]>

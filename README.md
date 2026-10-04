@@ -36,10 +36,6 @@ ones you point it at and keeps the part that matters: your library.
   to jump ten seconds, and turn it sideways for fullscreen.
 - **Resume where you stopped**, at the real position in the episode, including
   when you switch provider mid-show.
-- **Download to watch offline** (desktop for now). Download a film, an
-  episode or a season, and it plays from your disk in the same player, with
-  the same controls, even with no connection. A Downloads tab lists them
-  with their size, quality and source; Settings caps the quality.
 - **Keep watching while you browse.** Back shrinks the player into a corner
   of the window, or a strip above the tabs on a phone, with play/pause,
   expand and close.
@@ -107,13 +103,6 @@ and it is where pop-ups and unsolicited navigation are denied.
 provider logic and the store are written once and run in both apps. The
 platform boundary is a single TypeScript interface, which is why the Android
 app is a port rather than a second product.
-
-**A download is the stream the source plays, saved.** The app loads the
-source out of sight, notes the playlist its player fetches, checks that its
-length is the film's, and then fetches the segments itself, decrypting them
-when the stream is AES-encrypted. They are kept as a playlist and segments
-that the app's own player reads, and, where the stream allows it, joined
-into one `.mp4` file too. Streams protected by DRM are refused.
 
 **Your library is one JSON file on your own machine.** No account, no server,
 no telemetry. Export it, import it, or open it in a text editor.

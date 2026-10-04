@@ -23,10 +23,8 @@
  * folder listing is what a resumed download trusts.
  */
 
-import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
 import type { Provider } from '@shared/types'
 import type { CapturedRequest } from '@shared/streamfetch'
 import { DownloadManager, type DownloadPlatform, type DownloadSource } from '@shared/downloads/manager'
@@ -97,16 +95,6 @@ function folderFiles(dir: string): DownloadFiles {
     writeText: (name, text) => writeWhole(join(dir, name), text),
     async remove(name) {
       await rm(join(dir, name), { force: true })
-    },
-    async concat(names, name) {
-      const target = join(dir, `${name}${PART}`)
-      const out = createWriteStream(target)
-      try {
-        for (const part of names) await pipeline(createReadStream(join(dir, part)), out, { end: false })
-      } finally {
-        await new Promise<void>((resolve) => out.end(resolve))
-      }
-      await rename(target, join(dir, name))
     },
   }
 }

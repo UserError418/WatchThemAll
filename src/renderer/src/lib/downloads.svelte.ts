@@ -74,10 +74,6 @@ class Downloads {
   setQuality(quality: QualityCap): void {
     void window.wta.downloads.setQuality(quality)
   }
-
-  reveal(id: string): void {
-    void window.wta.downloads.reveal(id)
-  }
 }
 
 export const downloads = new Downloads()

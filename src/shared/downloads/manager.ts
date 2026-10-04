@@ -24,7 +24,7 @@
  */
 
 import type { CapturedRequest, StreamFetch } from '../streamfetch'
-import { planDownload, readPlan, samePlan, joinsIntoMp4, PLAN_FILE, PLAYLIST_FILE, type DownloadPlan } from './plan'
+import { planDownload, readPlan, samePlan, PLAN_FILE, PLAYLIST_FILE, type DownloadPlan } from './plan'
 import {
   afterRestart,
   downloadOf,
@@ -356,7 +356,6 @@ export class DownloadManager {
         segmentsTotal: plan.segments.length,
       })
       await this.changed('state')
-      const doubled = joinsIntoMp4(plan)
       const outcome = await runTransfer(plan, files, {
         signal,
         sleep: (ms) => this.platform.sleep(ms),
@@ -365,13 +364,12 @@ export class DownloadManager {
             segmentsDone: progress.segmentsDone,
             segmentsTotal: progress.segmentsTotal,
             bytesDone: progress.bytesDone,
-            estimatedBytes: progress.estimatedBytes === null ? null : progress.estimatedBytes * (doubled ? 2 : 1),
+            estimatedBytes: progress.estimatedBytes,
           })
           void this.changed('progress')
         },
         roomFor: async (bytes) => {
-          // An fMP4 download is kept twice: as segments to play, and joined as an .mp4.
-          const needed = bytes * (doubled ? 2 : 1) * ROOM_MARGIN
+          const needed = bytes * ROOM_MARGIN
           this.free = await this.platform.freeBytes().catch(() => null)
           if (this.free === null || this.free >= needed) return null
           return `Not enough space on this device: it needs ${describeBytes(needed)}, ${describeBytes(this.free)} is free`
@@ -385,7 +383,6 @@ export class DownloadManager {
             state: 'done',
             bytesDone: outcome.bytes,
             height: outcome.height ?? this.record(id)!.height,
-            mp4: outcome.mp4,
             segmentsDone: plan.segments.length,
             error: null,
             finishedAt: this.platform.now(),

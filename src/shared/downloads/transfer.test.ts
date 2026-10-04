@@ -3,7 +3,7 @@ import { runTransfer, transportStreamStart, RETRY_DELAYS_MS, type TransferOption
 import { planFrom, type DownloadPlan } from './plan'
 import { parseMediaPlaylist } from '../segmentwindow'
 import { ivFor } from './aes'
-import { boxSegment, fakeNetwork, memoryFolder, mediaPlaylist, tsSegment } from './downloads.fixture'
+import { fakeNetwork, memoryFolder, mediaPlaylist, tsSegment } from './downloads.fixture'
 
 function planOf(body: string, bandwidth: number | null = null): DownloadPlan {
   const parsed = parseMediaPlaylist(body, 'https://cdn/ep.m3u8')
@@ -33,7 +33,7 @@ describe('runTransfer', () => {
     const net = fakeNetwork(routesFor(5))
     const folder = memoryFolder(net)
     const outcome = await runTransfer(planOf(mediaPlaylist('https://cdn', 5, 6)), folder, options())
-    expect(outcome).toMatchObject({ kind: 'done', mp4: null })
+    expect(outcome).toMatchObject({ kind: 'done' })
     expect([...folder.files.keys()].sort()).toEqual(['index.m3u8', 's00000.ts', 's00001.ts', 's00002.ts', 's00003.ts', 's00004.ts'])
     expect(folder.files.get('s00003.ts')![1]).toBe(3)
   })
@@ -93,17 +93,6 @@ describe('runTransfer', () => {
     routes['https://cdn/seg1'] = { status: 200, body: '<html>busy</html>' }
     const outcome = await runTransfer(planOf(mediaPlaylist('https://cdn', 2, 6)), memoryFolder(fakeNetwork(routes)), options())
     expect(outcome).toEqual({ kind: 'failed', reason: 'Segment 2 of 2 would not download (not video)' })
-  })
-
-  it('joins an fMP4 stream into one .mp4: init, then the segments in order', async () => {
-    const routes: Record<string, { status: number; body: Uint8Array }> = { 'https://cdn/init.mp4': { status: 200, body: boxSegment('ftyp', 0) } }
-    for (let i = 0; i < 3; i++) routes[`https://cdn/seg${i}`] = { status: 200, body: boxSegment('moof', i + 1) }
-    const folder = memoryFolder(fakeNetwork(routes))
-    const plan = planOf(mediaPlaylist('https://cdn', 3, 6, { map: '#EXT-X-MAP:URI="https://cdn/init.mp4"' }))
-    expect(await runTransfer(plan, folder, options())).toMatchObject({ kind: 'done', mp4: 'film.mp4' })
-    const mp4 = folder.files.get('film.mp4')!
-    expect(mp4.length).toBe(64 * 4)
-    expect([mp4[8], mp4[64 + 8], mp4[128 + 8], mp4[192 + 8]]).toEqual([0, 1, 2, 3])
   })
 
   it('refuses to fill the disk, before the first segment when the bit rate is known', async () => {

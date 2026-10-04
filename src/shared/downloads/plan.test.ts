@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   estimateBytes,
   hasSeparateAudio,
-  joinsIntoMp4,
   localPlaylist,
   pickForCap,
   planDownload,
@@ -137,14 +136,12 @@ describe('the local playlist', () => {
     expect(text.trim().endsWith('#EXT-X-ENDLIST')).toBe(true)
   })
 
-  it('points fMP4 at its initialisation segment, and such a stream joins into an .mp4', () => {
+  it('points fMP4 at its initialisation segment', () => {
     const plan = planOf(mediaPlaylist('https://cdn/ep', 2, 6, { map: '#EXT-X-MAP:URI="init.mp4"' }))
     expect(plan.format).toBe('fmp4')
     expect(plan.maps).toEqual(['https://cdn/init.mp4'])
     expect(localPlaylist(plan)).toContain('#EXT-X-MAP:URI="init0.mp4"')
     expect(localPlaylist(plan)).toContain('s00001.m4s')
-    expect(joinsIntoMp4(plan)).toBe(true)
-    expect(joinsIntoMp4(planOf(mediaPlaylist('https://cdn/ep', 2, 6)))).toBe(false)
   })
 })
 

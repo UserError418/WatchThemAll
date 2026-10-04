@@ -90,7 +90,6 @@ const CANDIDATES_TRIED = 30
 /** The file names inside a download's folder. */
 export const PLAN_FILE = 'plan.json'
 export const PLAYLIST_FILE = 'index.m3u8'
-export const MP4_FILE = 'film.mp4'
 
 export function segmentName(index: number, format: DownloadPlan['format']): string {
   return `s${String(index).padStart(5, '0')}.${format === 'fmp4' ? 'm4s' : 'ts'}`
@@ -294,16 +293,6 @@ export function estimateBytes(plan: DownloadPlan, sample: { bytes: number; secon
   if (plan.bandwidth !== null && plan.bandwidth > 0) return Math.round((plan.bandwidth / 8) * plan.totalSeconds)
   if (sample !== null && sample.seconds > 0) return Math.round((sample.bytes / sample.seconds) * plan.totalSeconds)
   return null
-}
-
-/**
- * Whether the segments join into one real .mp4: fMP4 with a single
- * initialisation segment and no discontinuity, where init + segments, end to
- * end, is a fragmented MP4 any player opens. MPEG-TS stays app-only (the
- * owner, 2026-10-04: no ffmpeg, no new dependency).
- */
-export function joinsIntoMp4(plan: DownloadPlan): boolean {
-  return plan.format === 'fmp4' && plan.maps.length === 1 && plan.segments.every((s) => !s.discontinuity)
 }
 
 /**

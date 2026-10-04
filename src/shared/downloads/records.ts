@@ -53,7 +53,6 @@ function isRecord(v: unknown): v is DownloadRecord {
     typeof r.segmentsDone === 'number' &&
     typeof r.bytesDone === 'number' &&
     isNumberOrNull(r.estimatedBytes) &&
-    isStringOrNull(r.mp4) &&
     isStringOrNull(r.poster) &&
     isStringOrNull(r.error) &&
     typeof r.createdAt === 'number' &&
@@ -153,7 +152,6 @@ export function newRecord(subject: DownloadSubject, preferredProviderId: string 
     segmentsDone: 0,
     bytesDone: 0,
     estimatedBytes: null,
-    mp4: null,
     poster: null,
     error: null,
     createdAt: now,
