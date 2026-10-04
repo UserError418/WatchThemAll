@@ -1792,7 +1792,9 @@ app.on('before-quit', (event) => {
     closePlayer(false)
     if (sync !== null && watching) {
       event.preventDefault()
-      const pushed = sync.positions()
+      // A push that fails must neither hold the quit up nor surface as an
+      // unhandled rejection from the race below.
+      const pushed = sync.positions().catch(() => {})
       void Promise.race([pushed, new Promise((resolve) => setTimeout(resolve, QUIT_PUSH_WAIT_MS))]).finally(() =>
         app.quit(),
       )
