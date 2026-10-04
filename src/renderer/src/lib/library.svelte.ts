@@ -461,19 +461,24 @@ class Library {
    * can leave two entries for it, and removing one would leave it on the list.
    *
    * Returns the undo, which lists the entries again with the dates they were
-   * added, so the Watchlist tab puts them back where they stood.
+   * added, so the Watchlist tab puts them back where they stood. It finds them
+   * by id when it runs: the store's echo of this very write reloads the
+   * watchlist as new objects, so the ones held here are stale by then, and an
+   * undo that wrote to them changed nothing.
    */
   removeFromWatchlist(title: TitleRef): () => void {
     const removed = this.watchlist
       .filter((w) => isTitle(w, title) && isListed(w))
-      .map((entry) => ({ entry, addedAt: entry.addedAt }))
+      .map((entry) => ({ id: entry.id, addedAt: entry.addedAt }))
     if (removed.length === 0) return () => {}
 
-    for (const { entry } of removed) entry.listed = false
+    for (const entry of this.watchlist) if (removed.some((r) => r.id === entry.id)) entry.listed = false
     void this.persist({ watchlist: this.watchlist })
 
     return () => {
-      for (const { entry, addedAt } of removed) {
+      for (const { id, addedAt } of removed) {
+        const entry = this.watchlist.find((w) => w.id === id)
+        if (!entry) continue
         delete entry.listed
         entry.addedAt = addedAt
       }

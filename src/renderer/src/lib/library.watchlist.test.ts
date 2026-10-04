@@ -84,3 +84,20 @@ describe('removeFromWatchlist', () => {
     expect(library.isInWatchlist(show)).toBe(false)
   })
 })
+
+describe('undoing a removal after the library reloaded', () => {
+  /**
+   * The store echoes the renderer's own write, and the reload hands the
+   * watchlist back as new objects before the user can reach Undo. Found in
+   * the running app: Undo after "Remove" left the title off the list.
+   */
+  it('lists the title again', () => {
+    library.addToWatchlist(show)
+    const undo = library.removeFromWatchlist(show)
+
+    library.watchlist = JSON.parse(JSON.stringify(library.watchlist))
+    undo()
+
+    expect(library.isInWatchlist(show)).toBe(true)
+  })
+})
