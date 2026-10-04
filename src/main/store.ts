@@ -12,7 +12,7 @@
  */
 
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { StoreCore } from '@shared/store/core'
 import type { StorePersistence } from '@shared/store/core'
@@ -37,8 +37,21 @@ export class NodePersistence implements StorePersistence {
     mkdirSync(this.dir, { recursive: true })
     // The library is pretty-printed: it is the user's whole library and the
     // one thing they might open in an editor to check or repair by hand.
-    writeFileSync(tmp, this.pretty ? JSON.stringify(JSON.parse(text), null, 2) : text, 'utf-8')
+    const data = this.pretty ? JSON.stringify(JSON.parse(text), null, 2) : text
+    // On the disk before the rename, not only in memory: after a power cut a
+    // rename can survive while the data it points at does not, leaving zeros
+    // or nothing in the library's place for the next launch to set aside.
+    // ext4 and btrfs flush on a rename over an existing file by themselves;
+    // NTFS promises nothing of the kind.
+    const fd = openSync(tmp, 'w')
+    try {
+      writeFileSync(fd, data, 'utf-8')
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(tmp, this.file)
+    syncDirectory(this.dir)
     return Promise.resolve()
   }
 
@@ -52,6 +65,27 @@ export class NodePersistence implements StorePersistence {
     renameSync(this.file, backup)
     console.error(`[store] unreadable document moved to ${backup}`)
     return Promise.resolve(backup)
+  }
+}
+
+/**
+ * Make a rename in `dir` last through a power cut, where the system allows it.
+ *
+ * Best effort: Windows cannot open a directory this way (NTFS journals the
+ * rename itself), and some filesystems refuse to sync one. The write has
+ * happened either way; at worst a crash brings back the previous library.
+ */
+function syncDirectory(dir: string): void {
+  if (process.platform === 'win32') return
+  try {
+    const fd = openSync(dir, 'r')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    // See above.
   }
 }
 
