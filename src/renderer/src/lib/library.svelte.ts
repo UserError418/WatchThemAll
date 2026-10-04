@@ -1081,6 +1081,46 @@ class Library {
   }
 
   /**
+   * File a season, or a film (`season` null), as watched — ticking a season's
+   * aired episodes — and return what undoes exactly that.
+   *
+   * The undo unticks only the episodes this ticked (an episode ticked before
+   * stays ticked) and takes the Watched entry out only if this put it there.
+   * It unticks with fresh stamps rather than deleting the marks, so it holds
+   * even when the ticks have already synced to another device.
+   */
+  markSeen(
+    media: MediaSummary | MediaDetail,
+    season: number | null,
+    episodes: ReadonlyArray<Pick<Episode, 'episode' | 'airDate'>> = [],
+    now = Date.now(),
+  ): () => void {
+    const filed = this.watched.some((w) => isTitle(w, media) && (w.season ?? null) === season)
+    const ticked =
+      season === null
+        ? []
+        : episodes
+            .filter((e) => hasAired(e.airDate, now) && !this.isWatched(media, season, e.episode))
+            .map((e) => e.episode)
+
+    this.addToWatched(media, 'user', season)
+    if (season !== null) this.markSeasonWatched(media, season, episodes, now)
+
+    return () => {
+      if (season !== null && ticked.length > 0) this.setSeasonWatched(media, season, ticked, false)
+      if (!filed) this.removeFromWatched(media, season)
+    }
+  }
+
+  /** Take a season, or a film, out of Watched; returns the undo, which files it again. */
+  unmarkSeen(media: MediaSummary | MediaDetail, season: number | null): () => void {
+    this.removeFromWatched(media, season)
+    return () => {
+      this.addToWatched(media, 'user', season)
+    }
+  }
+
+  /**
    * Mark a *film* seen when all that is known is its id.
    *
    * The playback threshold reports a tmdb id and nothing else, because the main

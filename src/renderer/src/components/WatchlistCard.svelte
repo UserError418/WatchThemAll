@@ -28,7 +28,7 @@
    */
   import type { MediaSummary, WatchlistEntry } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { removeFromWatchlist } from '../lib/undo'
+  import { markSeen, removeFromWatchlist, unmarkSeen } from '../lib/undo'
   import { posterUrl, stillUrl } from '../lib/images'
   import { episodeCode, runtime } from '../lib/format'
   import { canHover } from '../lib/pointer'
@@ -61,10 +61,14 @@
     rating: entry.rating,
     releaseDate: null,
     genreIds: entry.genreIds,
+    imdbId: entry.imdbId,
   })
 
   const poster = $derived(posterUrl(entry.posterPath, 'w342'))
   const isSeries = $derived(entry.type === 'tv')
+
+  /** A film on the list that is also in Watched: its ✓ shows pressed. */
+  const filmSeen = $derived(!isSeries && library.hasSeen(entry))
 
   /**
    * Where this series picks up, and so what the play button plays.
@@ -189,11 +193,26 @@
     void playFromCard(media)
   }
 
-  function markSeasonWatched(event: MouseEvent): void {
+  /**
+   * File the season Resume is in as watched, ticking its aired episodes, as
+   * the detail view's "+ Season N watched" does; a film toggles.
+   *
+   * It used to file the Watched entry only, so nothing on the card changed —
+   * the caption, the pips and the play button all read the ticks — and a
+   * second press did nothing either. Now the card moves on to where the
+   * series picks up next, and the toast offers Undo. Season-scoped, per
+   * 1.5.7: marking a nine-season show from a card must not claim all nine.
+   */
+  async function markSeasonWatched(event: MouseEvent): Promise<void> {
     stop(event)
-    // Season-scoped, per 1.5.7 — marking a nine-season show from a card must
-    // not claim all nine.
-    library.addToWatched(media, 'user', isSeries ? target.season : null)
+    if (!isSeries) {
+      if (filmSeen) unmarkSeen(media, null)
+      else markSeen(media, null)
+      return
+    }
+    const season = target.season
+    await loadListing(entry.tmdbId, season)
+    markSeen(media, season, peekListing(entry.tmdbId, season) ?? [])
   }
 
   function remove(event: MouseEvent): void {
@@ -284,9 +303,11 @@
         </button>
         <button
           class="icon"
+          class:on={filmSeen}
           onclick={markSeasonWatched}
-          title={isSeries ? `Mark season ${target.season} watched` : 'Mark watched'}
-          aria-label={isSeries ? `Mark season ${target.season} watched` : 'Mark watched'}
+          aria-pressed={isSeries ? undefined : filmSeen}
+          title={isSeries ? `Mark season ${target.season} watched` : filmSeen ? 'Watched — mark unwatched' : 'Mark watched'}
+          aria-label={isSeries ? `Mark season ${target.season} watched` : filmSeen ? 'Watched — mark unwatched' : 'Mark watched'}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" class="stroke" /></svg>
         </button>
@@ -544,6 +565,11 @@
   .go:active,
   .icon:active {
     transform: scale(0.95);
+  }
+
+  .icon.on {
+    background: var(--success);
+    border-color: var(--success);
   }
 
   .icon {

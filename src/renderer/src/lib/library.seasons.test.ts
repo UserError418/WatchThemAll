@@ -105,3 +105,56 @@ describe('fillWatchedSeason', () => {
     expect(library.watchedCount(show)).toBe(0)
   })
 })
+
+describe('markSeen', () => {
+  it('files the season and ticks its aired episodes', () => {
+    library.markSeen(show, 2, season2, NOW)
+
+    expect(library.hasSeenSeason(show, 2)).toBe(true)
+    expect(library.watchedCount(show)).toBe(5)
+  })
+
+  /** The detail view's second press, and the toast's Undo. */
+  it('undoes exactly what it did: its ticks and its Watched entry', () => {
+    library.markSeasonWatched(show, 2, season2.slice(0, 1), NOW) // E1 ticked before
+    const undo = library.markSeen(show, 2, season2, NOW)
+
+    undo()
+
+    expect(library.hasSeenSeason(show, 2)).toBe(false)
+    expect(library.isWatched(show, 2, 1)).toBe(true)
+    expect(library.isWatched(show, 2, 2)).toBe(false)
+    expect(library.watchedCount(show)).toBe(1)
+  })
+
+  it('leaves a season that was already in Watched there on undo', () => {
+    library.addToWatched(show, 'mal', 2)
+    const undo = library.markSeen(show, 2, season2, NOW)
+
+    undo()
+
+    expect(library.hasSeenSeason(show, 2)).toBe(true)
+  })
+
+  it('files a film, and undoes it', () => {
+    const film = { ...show, type: 'movie' as const, tmdbId: 550 }
+    const undo = library.markSeen(film, null)
+    expect(library.hasSeen(film)).toBe(true)
+
+    undo()
+
+    expect(library.hasSeen(film)).toBe(false)
+  })
+})
+
+describe('unmarkSeen', () => {
+  it('takes the season out of Watched, and its undo files it again', () => {
+    library.addToWatched(show, 'user', 2)
+
+    const undo = library.unmarkSeen(show, 2)
+    expect(library.hasSeenSeason(show, 2)).toBe(false)
+
+    undo()
+    expect(library.hasSeenSeason(show, 2)).toBe(true)
+  })
+})

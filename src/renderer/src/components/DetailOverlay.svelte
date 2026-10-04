@@ -11,7 +11,7 @@
    */
   import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { removeFromWatchlist } from '../lib/undo'
+  import { markSeen, removeFromWatchlist, unmarkSeen } from '../lib/undo'
   import PreviewSoundButton from './PreviewSoundButton.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
@@ -474,23 +474,29 @@
    * the Watched tab and the episode browser agree — they disagreeing is the
    * original fault here, and it is why a MyAnimeList import of completed shows
    * showed every episode unwatched.
+   *
+   * Pressing it again while the view is open undoes exactly what the first
+   * press did, ticks included. It used to take only the Watched entry back,
+   * leaving every episode ticked and Resume moved on, so a mis-click could not
+   * be taken back by the same button. A season filed on an earlier visit is
+   * only taken out of Watched: its ticks may be the user's own.
    */
   function toggleSeen(): void {
     const media = detail ?? subject
-    if (subject.type === 'movie') {
-      if (seen) library.removeFromWatched(subject)
-      else library.addToWatched(media)
+    const scope = subject.type === 'movie' ? null : selectedSeason
+    const key = String(scope)
+    if (!seen) {
+      undoSeen[key] = markSeen(media, scope, scope === null ? [] : (season?.episodes ?? []))
       return
     }
-
-    if (seen) {
-      library.removeFromWatched(subject, selectedSeason)
-      return
-    }
-
-    library.addToWatched(media, 'user', selectedSeason)
-    if (season) toggleSeasonWatched(true)
+    const undo = undoSeen[key]
+    delete undoSeen[key]
+    if (undo) undo()
+    else unmarkSeen(media, scope)
   }
+
+  /** What undoes each "+ Watched" pressed during this visit, by season ("null" for a film). */
+  const undoSeen: Record<string, () => void> = {}
 
   function toggleSeasonWatched(watched: boolean): void {
     if (!season) return
