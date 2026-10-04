@@ -98,7 +98,10 @@ export function buildMenu(deps: MenuDeps): void {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
+        // F5, because the role's own default is CmdOrCtrl+R, which is Check
+        // Releases Now above: two items on one accelerator, and one of them
+        // never fired from the keyboard. `menu.test.ts` keeps them apart.
+        { role: 'reload', accelerator: 'F5' },
         { role: 'toggleDevTools', accelerator: 'CmdOrCtrl+Shift+I' },
         { type: 'separator' },
         { role: 'resetZoom' },
