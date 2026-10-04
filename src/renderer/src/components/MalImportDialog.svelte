@@ -20,6 +20,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { library } from '../lib/library.svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
+  import { layer } from '../lib/modal'
 
   interface Props {
     preview: MalPreview
@@ -157,12 +158,29 @@
   }
 
   let done = $state<Awaited<ReturnType<typeof window.wta.mal.commit>> | null>(null)
+
+  /** Escape closes, except mid-import, where it is swallowed like the other ways out. */
+  function onEscape(): boolean {
+    if (!importing) onclose()
+    return true
+  }
 </script>
 
-<div class="scrim" in:scrimIn out:scrimOut>
-  <button class="dismiss" onclick={onclose} aria-label="Close"></button>
+<div class="scrim" in:scrimIn out:scrimOut use:layer={{ modal: true, onescape: onEscape }}>
+  <!-- Not while importing: a stray click closed the dialog mid-import, and the
+       summary (with the titles that did not match) was never shown. -->
+  <button class="dismiss" onclick={onclose} disabled={importing} aria-label="Close"></button>
 
-  <div class="panel" in:modalIn out:modalOut role="dialog" aria-modal="true" aria-label="Import from MyAnimeList">
+  <div
+    class="panel"
+    in:modalIn
+    out:modalOut
+    role="dialog"
+    aria-modal="true"
+    aria-label="Import from MyAnimeList"
+    tabindex="-1"
+    data-autofocus
+  >
     {#if done}
       <header>
         <h2>Imported</h2>

@@ -475,11 +475,12 @@
 {/if}
 
 {#if library.persistError}
-  <div class="toast error" role="alert">
+  <div class="toast error" role="alert" data-stays-live>
     Changes are not being saved: {library.persistError}
   </div>
 {:else if toast.current}
-  <div class="toast" role="status">
+  <!-- `data-stays-live`: its Undo stays reachable over a modal (lib/modal.ts). -->
+  <div class="toast" role="status" data-stays-live>
     <span>{toast.current.message}</span>
     {#if toast.current.action}
       <button class="toast-action" onclick={() => toast.act()}>{toast.current.action.label}</button>

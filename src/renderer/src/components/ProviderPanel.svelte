@@ -19,6 +19,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { panelIn, panelOut } from '../lib/motion'
   import { canHover } from '../lib/pointer'
+  import { layer } from '../lib/modal'
 
   interface Props {
     onclose: () => void
@@ -144,7 +145,26 @@
   }
 </script>
 
-<aside class="panel" in:panelIn out:panelOut>
+<!--
+  A layer, but not a modal one: it is docked beside the page, which stays
+  usable. It takes the focus on open, gives it back on close, and answers
+  Escape when nothing above it does (lib/modal.ts).
+-->
+<aside
+  class="panel"
+  in:panelIn
+  out:panelOut
+  use:layer={{
+    modal: false,
+    onescape: () => {
+      onclose()
+      return true
+    },
+  }}
+  tabindex="-1"
+  aria-label="Providers"
+  data-autofocus
+>
   <header>
     <h2>Providers</h2>
     <button class="close" onclick={onclose} aria-label="Close providers">✕</button>

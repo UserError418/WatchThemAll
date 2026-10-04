@@ -156,7 +156,8 @@
   const stop = (): void => void window.wta.player.close()
 </script>
 
-<div class="mini" role="group" aria-label="Mini player">
+<!-- `data-stays-live`: usable while a modal overlay is open (lib/modal.ts). -->
+<div class="mini" role="group" aria-label="Mini player" data-stays-live>
   <!--
     The picture's rectangle. A button, because on the phone a tap on the small
     picture lands here (the video is behind this transparent box) and should

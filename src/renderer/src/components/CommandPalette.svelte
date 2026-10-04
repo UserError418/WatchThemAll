@@ -16,6 +16,7 @@
   import { episodeCode } from '../lib/format'
   import { posterUrl } from '../lib/images'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
+  import { layer } from '../lib/modal'
 
   type Tab = 'browse' | 'search' | 'watchlist' | 'releases'
 
@@ -173,14 +174,22 @@
     } else if (event.key === 'Enter') {
       choose(results[active])
       event.preventDefault()
-    } else if (event.key === 'Escape') {
-      onclose()
-      event.preventDefault()
     }
   }
 </script>
 
-<div class="scrim" in:scrimIn out:scrimOut>
+<div
+  class="scrim"
+  in:scrimIn
+  out:scrimOut
+  use:layer={{
+    modal: true,
+    onescape: () => {
+      onclose()
+      return true
+    },
+  }}
+>
   <button class="scrim-catch" onclick={onclose} tabindex="-1" aria-hidden="true"></button>
 
   <div class="palette" in:modalIn out:modalOut role="dialog" aria-modal="true" aria-label="Command palette">

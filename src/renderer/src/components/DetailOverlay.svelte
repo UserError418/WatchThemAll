@@ -13,6 +13,7 @@
   import { library } from '../lib/library.svelte'
   import { markSeen, removeFromWatchlist, unmarkSeen } from '../lib/undo'
   import { canPlay } from '../lib/detailplay'
+  import { layer } from '../lib/modal'
   import PreviewSoundButton from './PreviewSoundButton.svelte'
   import { previewAudio, previewId } from '../lib/preview.svelte'
   import SourcePicker from './SourcePicker.svelte'
@@ -509,13 +510,20 @@
     else library.setSeasonWatched(subject, selectedSeason, season.episodes.map((e) => e.episode), false)
   }
 
-  function onKeydown(event: KeyboardEvent): void {
-    // While a player is up, or the preview stands in for one, Escape is the
-    // player's: PlayerFrame sends it to main, which leaves fullscreen or
-    // shrinks the player. This listener hears the same key (the app window
-    // keeps the focus after Play), and closing here took the detail view away
-    // behind the player, so the mini player came back over Browse.
-    if (event.key === 'Escape' && !carrying.active && !playerUp) onclose()
+  /**
+   * Escape, when this view is the top layer (`lib/modal.ts`).
+   *
+   * While a player is up, or the preview stands in for one, Escape is the
+   * player's: PlayerFrame sends it to main, which leaves fullscreen or
+   * shrinks the player. This view hears the same key (the app window keeps
+   * the focus after Play), and closing here took the detail view away behind
+   * the player, so the mini player came back over Browse. Declining lets the
+   * key on to the player.
+   */
+  function onEscape(): boolean {
+    if (carrying.active || playerUp) return false
+    onclose()
+    return true
   }
   /**
    * The one episode in this season that gets a live countdown, and the clock
@@ -967,9 +975,7 @@
 
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<div class="scrim" in:scrimIn out:scrimOut>
+<div class="scrim" in:scrimIn out:scrimOut use:layer={{ modal: true, onescape: onEscape }}>
   <!--
     A real button as the click-catcher rather than a click handler on the
     scrim div: it keeps the "click outside to close" affordance without
@@ -986,6 +992,8 @@
     role="dialog"
     aria-modal="true"
     aria-label={subject.title}
+    tabindex="-1"
+    data-autofocus
   >
     <header class="hero" style:background-image={backdrop ? `url("${backdrop}")` : undefined}>
       <button class="close" onclick={onclose} aria-label="Close">✕</button>

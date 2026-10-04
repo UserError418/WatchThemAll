@@ -83,7 +83,8 @@
 <svelte:window onkeydown={onKeydown} />
 
 <!-- See-through while the detail view's preview stands in for the held player (`lib/carry.svelte.ts`). -->
-<div class="player" class:carrying={carrying.active}>
+<!-- `data-stays-live`: never made inert under a modal overlay (lib/modal.ts). -->
+<div class="player" class:carrying={carrying.active} data-stays-live>
   <!--
     `role="group"` because the bar now carries mouse handlers, and an element
     that reacts to the pointer has to say what it is. Not `toolbar`, which
