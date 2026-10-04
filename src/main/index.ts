@@ -1784,22 +1784,51 @@ app.on('window-all-closed', () => {
  * network is worse than a position that arrives at the next launch instead.
  */
 const QUIT_PUSH_WAIT_MS = 1_500
+
+/**
+ * How long a quit waits for the renderer to write down what was just watched.
+ *
+ * Settling the player tells the renderer what the play amounted to, and the
+ * History row and the watched tick are the renderer's to write
+ * (`library.notePlayback`, the `episodeWatched` handler), one IPC round trip
+ * later. Quitting at once lost both, whenever the player was still open: the
+ * place, written here, survived, and the row came back without its minutes
+ * (measured 2026-10-04, sync off). The write normally lands within tens of
+ * milliseconds; this is only the ceiling for a renderer that is gone.
+ */
+const QUIT_RECORD_WAIT_MS = 1_500
 let quitSettled = false
+
+/** Resolves once the store next changes `key`, or after `ms`, whichever is first. */
+function nextChangeOf(key: string, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer)
+      unsubscribe()
+      resolve()
+    }
+    const timer = setTimeout(finish, ms)
+    const unsubscribe = store.subscribe((changed) => {
+      if (changed === key) finish()
+    })
+  })
+}
 
 app.on('before-quit', (event) => {
   if (!quitSettled) {
     quitSettled = true
     const watching = player !== null
+    // Listening before settling, which is what sends the renderer the play.
+    const recorded = watching ? nextChangeOf('history', QUIT_RECORD_WAIT_MS) : Promise.resolve()
     // Settling sends the positions push on its own; the wait below joins it.
     closePlayer(false)
-    if (sync !== null && watching) {
+    if (watching) {
       event.preventDefault()
       // A push that fails must neither hold the quit up nor surface as an
       // unhandled rejection from the race below.
-      const pushed = sync.positions().catch(() => {})
-      void Promise.race([pushed, new Promise((resolve) => setTimeout(resolve, QUIT_PUSH_WAIT_MS))]).finally(() =>
-        app.quit(),
-      )
+      const pushed = sync !== null ? sync.positions().catch(() => {}) : Promise.resolve()
+      const pushedOrLate = Promise.race([pushed, new Promise((resolve) => setTimeout(resolve, QUIT_PUSH_WAIT_MS))])
+      void Promise.all([recorded, pushedOrLate]).finally(() => app.quit())
       return
     }
   }
