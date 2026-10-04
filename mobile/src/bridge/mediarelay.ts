@@ -37,6 +37,7 @@
 
 import { registerPlugin } from '@capacitor/core'
 import { filmRelayScript } from '@shared/filmrelay'
+import { checkBridgeIsolation } from './bridgeisolation'
 
 /** Marks the relay's messages among everything else providers post. */
 const TAG = 'wtaMedia'
@@ -210,9 +211,15 @@ export function mediaRelayScript(appOrigin: string): string {
 interface PlayerRelayNative {
   install(options: { script: string }): Promise<{ installed: boolean }>
   setMuted(options: { muted: boolean }): Promise<{ muted: boolean }>
+  bridgeIsolated(): Promise<{ isolated: boolean }>
 }
 
 const PlayerRelay = registerPlugin<PlayerRelayNative>('PlayerRelay')
+
+/** Whether provider pages are kept away from the native bridge; see `bridgeisolation.ts`. */
+export function bridgeIsolated(): Promise<boolean> {
+  return checkBridgeIsolation(PlayerRelay)
+}
 
 /**
  * Silence the app's whole WebView, every frame of it, or give it its sound

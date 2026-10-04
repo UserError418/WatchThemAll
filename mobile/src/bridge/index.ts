@@ -124,7 +124,8 @@ import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { createPlayerSurface } from './playersurface'
-import { installFilmRelay, setPageMuted, type RelayTime } from './mediarelay'
+import { bridgeIsolated, installFilmRelay, setPageMuted, type RelayTime } from './mediarelay'
+import { OUTDATED_WEBVIEW } from './bridgeisolation'
 import { TV_HANDOVER, TvHandover } from './tvhandover'
 import { createVisibleGate } from './visiblegate'
 import { routePlayerAction, type PlayerActionHandlers } from './playeraction'
@@ -858,6 +859,12 @@ export async function createBridge(): Promise<WtaApi> {
     is the whole of the failure; see `mediarelay.ts`.
   */
   void installFilmRelay(location.origin)
+
+  /**
+   * Whether this WebView keeps provider pages away from the native bridge.
+   * Where it cannot, no provider is loaded into it: see `bridgeisolation.ts`.
+   */
+  const providersAllowed = bridgeIsolated()
 
   /**
    * The last state emitted, kept so a late subscriber can be caught up.
@@ -2211,6 +2218,7 @@ export async function createBridge(): Promise<WtaApi> {
      * an iframe here.
      */
     play: async (req: PlayRequest, options?: { carry?: boolean }) => {
+      if (!(await providersAllowed)) return { ok: false, error: OUTDATED_WEBVIEW }
       const enabled = orderedForRequest(req)
       if (enabled.length === 0) {
         return { ok: false, error: 'No providers are enabled — turn one on in the Providers panel' }
@@ -2412,6 +2420,8 @@ export async function createBridge(): Promise<WtaApi> {
      */
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
+        // A preview is a provider in a frame of this WebView too.
+        if (!(await providersAllowed)) return null
         const key = titleKey(req)
         // Straight after the player: its window may still be arriving, and is the one to start from.
         await segmentStore?.settled(key, PLAN_WAITS_FOR_SAVE_MS)

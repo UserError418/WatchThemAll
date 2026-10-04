@@ -58,6 +58,24 @@ public class PlayerRelayPlugin extends Plugin {
     }
 
     /**
+     * Whether provider frames are kept away from the native bridge.
+     *
+     * Capacitor offers its bridge to the page through
+     * `WebViewCompat.addWebMessageListener`, limited to the app's origin and
+     * main frame. A WebView without that feature makes it fall back to
+     * `addJavascriptInterface`, which every frame of every origin can call, a
+     * provider's adverts included. The page refuses to load providers there
+     * (`bridgeisolation.ts`).
+     */
+    @PluginMethod
+    public void bridgeIsolated(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("isolated", WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+            && !getBridge().getConfig().isUsingLegacyBridge());
+        call.resolve(result);
+    }
+
+    /**
      * Silence the app's WebView, every frame of it, or give it its sound back.
      *
      * While the television has the film the phone must make no sound, and an
