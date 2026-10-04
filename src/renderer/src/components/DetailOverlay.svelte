@@ -11,7 +11,7 @@
    */
   import type { MediaDetail, MediaSummary, Season } from '@shared/types'
   import { library } from '../lib/library.svelte'
-  import { markSeen, removeFromWatchlist, unmarkSeen } from '../lib/undo'
+  import { markSeen, removeFromWatchlist, setSeasonTicks, unmarkSeen } from '../lib/undo'
   import { canPlay } from '../lib/detailplay'
   import { layer } from '../lib/modal'
   import PreviewSoundButton from './PreviewSoundButton.svelte'
@@ -499,16 +499,6 @@
 
   /** What undoes each "+ Watched" pressed during this visit, by season ("null" for a film). */
   const undoSeen: Record<string, () => void> = {}
-
-  function toggleSeasonWatched(watched: boolean): void {
-    if (!season) return
-    // Marking ticks the aired episodes only, in an unlisted entry if the title
-    // has none: marking a season seen — which is also how a series gets rated
-    // — records what was watched, it is not adding to the list. Clearing takes
-    // every tick off, an unaired one ticked by an older build included.
-    if (watched) library.markSeasonWatched(detail ?? subject, selectedSeason, season.episodes)
-    else library.setSeasonWatched(subject, selectedSeason, season.episodes.map((e) => e.episode), false)
-  }
 
   /**
    * Escape, when this view is the top layer (`lib/modal.ts`).
@@ -1232,8 +1222,12 @@
                  per season purely to draw a number. -->
             <Score rating={seasonScore(season?.episodes ?? [])} size="md" />
             <div class="bulk">
-              <button onclick={() => toggleSeasonWatched(true)}>Mark season watched</button>
-              <button onclick={() => toggleSeasonWatched(false)}>Clear season</button>
+              <button onclick={() => season && setSeasonTicks(detail ?? subject, selectedSeason, season.episodes, true)}>
+                Mark season watched
+              </button>
+              <button onclick={() => season && setSeasonTicks(detail ?? subject, selectedSeason, season.episodes, false)}>
+                Clear season
+              </button>
             </div>
           </div>
 

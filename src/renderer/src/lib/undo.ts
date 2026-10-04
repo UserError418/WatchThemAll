@@ -36,6 +36,34 @@ export function removeWatched(ids: readonly string[], what: string): void {
   toast.show(`Removed ${what} from Watched`, { label: 'Undo', run: undo })
 }
 
+/**
+ * The detail view's "Mark season watched" and "Clear season", with an Undo.
+ *
+ * Marking ticks the aired episodes (`library.markSeasonWatched`); clearing
+ * takes every tick off. Either can wipe a season's worth of ticks in one
+ * press, so each says so and offers to put back exactly the episodes it
+ * changed.
+ */
+export function setSeasonTicks(
+  media: MediaSummary | MediaDetail,
+  season: number,
+  episodes: ReadonlyArray<Pick<Episode, 'episode' | 'airDate'>>,
+  watched: boolean,
+): void {
+  const before = new Set(episodes.filter((e) => library.isWatched(media, season, e.episode)).map((e) => e.episode))
+  if (watched) library.markSeasonWatched(media, season, episodes)
+  else library.setSeasonWatched(media, season, episodes.map((e) => e.episode), false)
+
+  const changed = episodes
+    .map((e) => e.episode)
+    .filter((episode) => library.isWatched(media, season, episode) !== before.has(episode))
+  if (changed.length === 0) return
+  toast.show(`${watched ? 'Ticked' : 'Cleared'} ${seenScope(media.title, season)}`, {
+    label: 'Undo',
+    run: () => library.setSeasonWatched(media, season, changed, !watched),
+  })
+}
+
 /** Empty History, with an Undo; the confirmation before it stays. */
 export function clearHistory(): void {
   const undo = library.clearHistory()
