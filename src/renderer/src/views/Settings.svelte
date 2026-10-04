@@ -37,6 +37,9 @@
   import { clock, episodeCode } from '../lib/format'
   import type { SourceSortKey } from '@shared/types'
   import { APP_VERSION } from '../lib/appversion'
+  import { downloads } from '../lib/downloads.svelte'
+  import { formatBytes, qualityCapLabel } from '../lib/downloads'
+  import { QUALITY_CAPS, type QualityCap } from '@shared/downloads/types'
 
   let note = $state<string | null>(null)
   /** Shown after Import is pressed, until a source is chosen or dismissed. */
@@ -264,6 +267,37 @@
         </label>
 
       </section>
+
+      {#if downloads.status}
+        <!-- Where the platform has downloads; the phone has none yet. -->
+        <section class="card">
+          <h2>Downloads</h2>
+          <label class="field">
+            <span>Quality</span>
+            <select
+              value={String(downloads.status.quality)}
+              onchange={(e) => {
+                const value = e.currentTarget.value
+                downloads.setQuality(value === 'best' ? 'best' : (Number(value) as QualityCap))
+              }}
+            >
+              {#each QUALITY_CAPS as cap (cap)}
+                <option value={String(cap)}>{qualityCapLabel(cap)}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">
+            The best a source offers, or at most this. Lower takes less space: an hour at 1080p is often 2 GB, at 480p
+            under 1. Applies to downloads started from now on.
+          </p>
+          <p class="hint testing">
+            {downloads.list.length === 0
+              ? 'Nothing downloaded on this device.'
+              : `${downloads.list.length} ${downloads.list.length === 1 ? 'download' : 'downloads'}, ${formatBytes(downloads.status.usedBytes)} on this device.`}
+            {#if downloads.status.freeBytes !== null}{formatBytes(downloads.status.freeBytes)} free.{/if}
+          </p>
+        </section>
+      {/if}
     </div>
 
     <div class="column" aria-label="Your library">
@@ -448,6 +482,24 @@
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: var(--leading-normal);
+  }
+
+  /* A labelled choice on one line: the downloads' quality. */
+  .field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    font-size: var(--text-sm);
+  }
+
+  .field select {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
   }
 
   .row {

@@ -10,6 +10,9 @@
   import { airDate, countdown, countdownParts, episodeCode, hasAired, runtime } from '../lib/format'
   import { stillUrl } from '../lib/images'
   import Score from './Score.svelte'
+  import DownloadButton from './DownloadButton.svelte'
+  import type { DownloadRequest } from '@shared/ipc'
+  import { downloads } from '../lib/downloads.svelte'
 
   interface Props {
     episode: Episode
@@ -38,6 +41,8 @@
     progress?: { percent: number; minutesIn: number } | null
     /** Clock supplied by the parent, so one interval drives the whole list. */
     now?: number
+    /** What downloading this episode asks for; no control without it, or before it airs. */
+    download?: DownloadRequest | null
   }
 
   const {
@@ -49,12 +54,15 @@
     next = false,
     progress = null,
     now = Date.now(),
+    download = null,
   }: Props = $props()
 
   const aired = $derived(hasAired(episode.airDate))
   const still = $derived(stillUrl(episode.stillPath))
   const remaining = $derived(next && !aired ? countdown(episode.airDate, now) : '')
   const parts = $derived(next && !aired ? countdownParts(episode.airDate, now) : null)
+  /** Where the platform has downloads, for an episode that has aired. */
+  const showDownload = $derived(download !== null && aired && downloads.available)
 </script>
 
 <!--
@@ -70,6 +78,7 @@
   class:current
   class:unaired={!aired}
   class:next-up={remaining}
+  class:with-download={showDownload}
 >
   <button
     class="thumb"
@@ -122,6 +131,10 @@
     {/if}
   </div>
 
+  {#if showDownload && download}
+    <div class="download"><DownloadButton request={download} compact /></div>
+  {/if}
+
   <!--
     Not for an episode that has not aired: nobody has watched it, and a tick
     there moves Resume onto it. One already ticked (by an older build) can
@@ -153,6 +166,10 @@
 
   .episode:hover {
     background: var(--bg-raised);
+  }
+
+  .episode.with-download {
+    grid-template-columns: 150px 1fr auto auto;
   }
 
   .episode.current {

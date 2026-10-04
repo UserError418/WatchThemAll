@@ -86,8 +86,12 @@ export interface AutoTesterDeps {
    * The title playing now, or null. By type as well as id: TMDB numbers films
    * and series separately, so a film can share a watchlisted series' id, and
    * playing it once started a full test of the series.
+   *
+   * `download`: it plays from a download on this device. Nothing is tested
+   * then: the viewer has the film already, and offline every source would
+   * be filed as dead for the title.
    */
-  playing(): { tmdbId: number; type: MediaType } | null
+  playing(): { tmdbId: number; type: MediaType; download?: boolean } | null
   /** A scan is running already, by hand or from here. */
   busy(): boolean
   /** Test every source of `entry`: normally when `idle`, gently while `watching` it. */
@@ -111,6 +115,7 @@ export class AutoTester {
     const tested = (key: string): boolean => this.deps.tested(key)
 
     if (playing !== null) {
+      if (playing.download === true) return
       const entry = watchlist.find((e) => e.tmdbId === playing.tmdbId && e.type === playing.type)
       if (dueWhileWatching(entry, tested, this.tried)) void this.start(entry!, 'watching')
       return

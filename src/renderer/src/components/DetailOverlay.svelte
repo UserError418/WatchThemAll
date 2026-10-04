@@ -21,6 +21,9 @@
   import { backdropUrl, posterUrl } from '../lib/images'
   import { airDate, countdown, episodeCode, hasAired, runtime, year } from '../lib/format'
   import EpisodeRow from './EpisodeRow.svelte'
+  import DownloadButton from './DownloadButton.svelte'
+  import { downloads } from '../lib/downloads.svelte'
+  import type { DownloadRequest } from '@shared/ipc'
   import TrailerEmbed from './TrailerEmbed.svelte'
   import StreamPreview, { CARRY_HANDOVER_FADE_MS, CARRY_HANDOVER_HOLD_MS, STREAM_FADE_MS } from './StreamPreview.svelte'
   import { carrying } from '../lib/carry.svelte'
@@ -462,6 +465,41 @@
     const previewing = stream?.req.season === episode.season && stream?.req.episode === episode.episode
     if (previewing) void play(episode, previewSource ?? chosenProvider, streamOnScreen)
     else void play(episode)
+  }
+
+  /**
+   * What downloading this episode (or the film) asks for: what Play would
+   * ask, plus what the Downloads page shows with no network, the episode's
+   * name and the poster. The source chosen by hand goes first, as for Resume.
+   */
+  function downloadRequestFor(episode: (EpisodeRef & { runtime?: number | null }) | null): DownloadRequest {
+    const listed = episode
+      ? [...(resumeSeason?.episodes ?? []), ...(season?.episodes ?? [])].find(
+          (e) => e.season === episode.season && e.episode === episode.episode,
+        )
+      : undefined
+    return {
+      tmdbId: playable.tmdbId,
+      imdbId: playable.imdbId ?? null,
+      type: playable.type,
+      title: playable.title,
+      season: episode?.season ?? null,
+      episode: episode?.episode ?? null,
+      episodeName: listed?.name || null,
+      runtimeMinutes: episode?.runtime ?? listed?.runtime ?? detail?.runtime ?? null,
+      posterPath: detail?.posterPath ?? subject.posterPath ?? null,
+      providerId: chosenProvider,
+    }
+  }
+
+  /** The main Download button's episode: the one Resume would play (null for a film). */
+  const resumeDownload = $derived(detail ? downloadRequestFor(resumeEpisode()) : null)
+
+  /** Every aired episode of the season on screen, queued in order; the queue runs them one at a time. */
+  function downloadSeason(): void {
+    for (const episode of season?.episodes ?? []) {
+      if (hasAired(episode.airDate)) void downloads.download(downloadRequestFor(episode))
+    }
   }
 
   /** What pressing "+ Watched" will actually file, in words. */
@@ -1082,8 +1120,12 @@
                   ? null
                   : { season: resumeAt.season, episode: resumeAt.episode }}
                 notOut={notOutYet(detail?.releaseDate, Date.now())}
+                downloaded={resumeDownload !== null && downloads.of(resumeDownload)?.state === 'done'}
                 onselect={chooseProvider}
               />
+              {#if resumeDownload !== null}
+                <DownloadButton request={resumeDownload} />
+              {/if}
               <button
                 class="secondary"
                 onclick={() =>
@@ -1228,6 +1270,11 @@
               <button onclick={() => season && setSeasonTicks(detail ?? subject, selectedSeason, season.episodes, false)}>
                 Clear season
               </button>
+              {#if downloads.available}
+                <button onclick={downloadSeason} title="Download every aired episode of this season, one at a time">
+                  Download season
+                </button>
+              {/if}
             </div>
           </div>
 
@@ -1245,6 +1292,7 @@
                   current={resumeAt.season === episode.season &&
                     resumeAt.episode === episode.episode}
                   onplay={playEpisode}
+                  download={downloadRequestFor(episode)}
                   ontoggleWatched={(e, watched) => {
                     library.entryFor(detail ?? subject)
                     library.setWatched(subject, e.season, e.episode, watched)

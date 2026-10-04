@@ -431,7 +431,10 @@ function noteFilmReading(position: VideoPosition): void {
 const autoTester = new AutoTester({
   watchlist: () => store.read().watchlist,
   tested: (key) => kindTested(testResults.sources(), 'desktop', key, enabledProviders().map((p) => p.id)),
-  playing: () => (player && !player.held() && !onTv ? { tmdbId: player.context.tmdbId, type: player.context.type } : null),
+  playing: () =>
+    player && !player.held() && !onTv
+      ? { tmdbId: player.context.tmdbId, type: player.context.type, download: isDownloadedSource(player.currentProviderId()) }
+      : null,
   busy: () => scan.busy(),
   log: (line) => console.log(line),
   run: async (entry, mode) => {

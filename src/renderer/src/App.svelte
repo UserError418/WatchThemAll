@@ -22,6 +22,9 @@
   import Releases from './views/Releases.svelte'
   import History from './views/History.svelte'
   import Settings from './views/Settings.svelte'
+  import Downloads from './views/Downloads.svelte'
+  import { downloads } from './lib/downloads.svelte'
+  import { percentOf } from './lib/downloads'
   import CommandPalette from './components/CommandPalette.svelte'
   import DetailOverlay from './components/DetailOverlay.svelte'
   import MiniPlayer from './components/MiniPlayer.svelte'
@@ -29,7 +32,7 @@
   import ProviderPanel from './components/ProviderPanel.svelte'
   import PreviewSoundButton from './components/PreviewSoundButton.svelte'
 
-  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases' | 'history' | 'settings'
+  type Tab = 'browse' | 'search' | 'watchlist' | 'watched' | 'releases' | 'history' | 'downloads' | 'settings'
 
   /**
    * Search is not among these on purpose.
@@ -46,8 +49,23 @@
     { id: 'watched', label: 'Watched' },
     { id: 'releases', label: 'Releases' },
     { id: 'history', label: 'History' },
+    { id: 'downloads', label: 'Downloads' },
     { id: 'settings', label: 'Settings' },
   ]
+
+  /**
+   * The tabs this platform has: Downloads only where there are downloads
+   * (not on the phone yet). The digit shortcuts count these, so they match
+   * what is on screen.
+   */
+  const tabs = $derived(TABS.filter((t) => t.id !== 'downloads' || downloads.available))
+
+  /** The download under way, for the tab's small indicator: its percentage, or "…" while it prepares. */
+  const downloadBadge = $derived.by(() => {
+    const running = downloads.underWay.find((d) => d.state === 'downloading' || d.state === 'capturing')
+    if (running) return running.state === 'downloading' ? `${percentOf(running)}%` : '…'
+    return downloads.underWay.length > 0 ? String(downloads.underWay.length) : null
+  })
 
   let tab = $state<Tab>('browse')
   let searchQuery = $state('')
@@ -175,9 +193,10 @@
    * no way to remove.
    */
   $effect(() => {
+    downloads.start()
     const off = [
       window.wta.on.navigate((target) => {
-        if (TABS.some((t) => t.id === target)) goTo(target as Tab)
+        if (tabs.some((t) => t.id === target)) goTo(target as Tab)
       }),
       window.wta.on.menuAction((action) => {
         if (action === 'focus-search') {
@@ -327,8 +346,8 @@
     if (paletteOpen || modalLayerOpen() || keyBelongsToTarget(target)) return
     if (event.ctrlKey || event.metaKey || event.altKey) return
     const index = Number(event.key)
-    if (index >= 1 && index <= TABS.length) {
-      goTo(TABS[index - 1]!.id)
+    if (index >= 1 && index <= tabs.length) {
+      goTo(tabs[index - 1]!.id)
       event.preventDefault()
     }
   }
@@ -344,7 +363,7 @@
       >
 
       <div class="tabs">
-        {#each TABS as t (t.id)}
+        {#each tabs as t (t.id)}
           <button class:active={tab === t.id} onclick={() => goTo(t.id)}>
             {t.label}
             {#if t.id === 'watchlist' && watchlistCount > 0}
@@ -353,6 +372,8 @@
               <span class="count">{watchedCount}</span>
             {:else if t.id === 'releases' && trackedCount > 0}
               <span class="count">{trackedCount}</span>
+            {:else if t.id === 'downloads' && downloadBadge !== null}
+              <span class="count active-download" title="Downloading">{downloadBadge}</span>
             {/if}
           </button>
         {/each}
@@ -436,6 +457,8 @@
       <Watched onselect={(m) => (selected = m)} />
     {:else if tab === 'history'}
       <History onselect={(m) => (selected = m)} />
+    {:else if tab === 'downloads'}
+      <Downloads />
     {:else if tab === 'settings'}
       <Settings />
     {:else}
@@ -611,6 +634,10 @@
   .tabs button.active {
     color: var(--text-primary);
     border-bottom-color: var(--accent);
+  }
+
+  .count.active-download {
+    color: var(--accent);
   }
 
   .count {

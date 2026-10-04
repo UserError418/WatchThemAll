@@ -41,7 +41,7 @@ describe('dueWhileWatching', () => {
 })
 
 describe('AutoTester', () => {
-  function tester(playing: { tmdbId: number; type: 'tv' | 'movie' } | null, list: WatchlistEntry[]) {
+  function tester(playing: { tmdbId: number; type: 'tv' | 'movie'; download?: boolean } | null, list: WatchlistEntry[]) {
     const runs: Array<[number, AutoTestMode]> = []
     let finish: () => void = () => {}
     const auto = new AutoTester({
@@ -63,6 +63,13 @@ describe('AutoTester', () => {
     auto.tick()
     auto.tick()
     expect(runs).toEqual([[5, 'watching']])
+  })
+
+  /** Offline, every source would be filed dead; and the viewer has the film anyway. */
+  it('tests nothing while a download plays, not even a standing addition', () => {
+    const { auto, runs } = tester({ tmdbId: 5, type: 'tv', download: true }, [entry(5, NOW), entry(1, NOW - AUTO_TEST_AFTER_ADD_MS)])
+    auto.tick()
+    expect(runs).toEqual([])
   })
 
   /** The bug: a film sharing a watchlisted series' TMDB id started a full test of the series. */

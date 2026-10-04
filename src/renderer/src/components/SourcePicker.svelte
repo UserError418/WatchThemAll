@@ -100,10 +100,15 @@
      * source would come back red. Says so instead of offering the test.
      */
     notOut?: boolean
+    /**
+     * This episode (or film) is downloaded. The player plays the download
+     * before any source, so the list says so at its head, chosen.
+     */
+    downloaded?: boolean
     onselect: (providerId: string | null) => void
   }
 
-  const { selected, media, episode = null, notOut = false, onselect }: Props = $props()
+  const { selected, media, episode = null, notOut = false, downloaded = false, onselect }: Props = $props()
 
   let open = $state(false)
   let sourceState = $state<TitleProviderState>({
@@ -323,7 +328,7 @@
     title="Choose which provider plays this"
   >
     <span class="label">Source</span>
-    <span class="value">{selectedName}</span>
+    <span class="value">{downloaded ? 'Downloaded' : selectedName}</span>
     <span class="caret" class:open>▾</span>
   </button>
 
@@ -346,7 +351,15 @@
         stays in reach while a long list scrolls beneath it.
       -->
       <div class="head">
-        <button class="item" class:active={selected === null} onclick={() => choose(null)}>
+        {#if downloaded}
+          <!-- Not a choice: a download always plays first. The sources below are its fallbacks. -->
+          <div class="item downloaded active" role="note">
+            <span class="dot" style:background="var(--success)"></span>
+            <span class="name">Downloaded</span>
+            <span class="hint">Plays first, offline</span>
+          </div>
+        {/if}
+        <button class="item" class:active={selected === null && !downloaded} onclick={() => choose(null)}>
           <span class="dot" style:background="var(--accent)"></span>
           <span class="name">Automatic</span>
           <span class="hint">Best available</span>
