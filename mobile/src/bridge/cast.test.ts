@@ -17,6 +17,8 @@ const bodies: Record<string, string> = {
 }
 
 const fetched: string[] = []
+/** How much each fetch asked for, in order. */
+const limits: Array<number | undefined> = []
 /** Set to make the source refuse its variant playlist, as some answer a second request. */
 let refuseVariant = false
 const native = {
@@ -27,10 +29,12 @@ const native = {
       { url: MASTER, headers: {}, atMs: 1 },
     ],
   })),
-  fetchText: vi.fn(async ({ url }: { url: string }) => {
+  fetchText: vi.fn(async ({ url, limitBytes }: { url: string; limitBytes?: number }) => {
     fetched.push(url)
+    limits.push(limitBytes)
     if (refuseVariant && url === VARIANT) return { status: 403, contentType: 'text/plain', body: '' }
-    return { status: 200, contentType: 'application/vnd.apple.mpegurl', body: bodies[url] ?? '' }
+    // Cut where the native side cuts it: the limit is a minimum, never more than a buffer over.
+    return { status: 200, contentType: 'application/vnd.apple.mpegurl', body: (bodies[url] ?? '').slice(0, limitBytes ?? Infinity) }
   }),
   startProxy: vi.fn(async () => ({ base: 'http://192.168.0.2:8080/' })),
   loadMedia: vi.fn(async () => {}),
@@ -43,6 +47,7 @@ const { createCastBridge } = await import('./cast')
 
 beforeEach(() => {
   fetched.length = 0
+  limits.length = 0
   refuseVariant = false
   native.stopProxy.mockClear()
 })
@@ -74,4 +79,24 @@ it('takes the proxy down when the attempt that loaded it fails', async () => {
 
   expect(result.ok).toBe(false)
   expect(native.stopProxy).toHaveBeenCalledTimes(1)
+})
+
+it('tells a stream by its first 16 KB, and reads a playlist the peek cut short again, whole', async () => {
+  const short = bodies[VARIANT]!
+  const segments = Array.from({ length: 3000 }, (_, i) => `#EXTINF:6.0,\nseg${i}.ts`).join('\n')
+  bodies[VARIANT] = `#EXTM3U\n#EXT-X-TARGETDURATION:6\n${segments}\n#EXT-X-ENDLIST\n`
+  try {
+    const result = await createCastBridge().beam({ title: 'Film', subtitle: '', providerName: 'A', startSeconds: 0 })
+
+    expect(result.ok).toBe(true)
+    // Both candidates were told apart by a peek.
+    expect(limits.slice(0, 2)).toEqual([16 * 1024, 16 * 1024])
+    // The long variant was cut by its peek, so the bundle read it whole.
+    expect(fetched.filter((url) => url === VARIANT)).toHaveLength(2)
+    const served = (native.startProxy.mock.calls.at(-1) as unknown as [{ playlists: Record<string, string> }])[0]
+    const variant = Object.values(served.playlists).find((body) => body.includes('#EXT-X-TARGETDURATION'))!
+    expect(variant.match(/#EXTINF/g)).toHaveLength(3000)
+  } finally {
+    bodies[VARIANT] = short
+  }
 })

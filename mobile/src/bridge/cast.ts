@@ -195,13 +195,11 @@ export const capture = {
 export const PEEK_LIMIT_BYTES = 16 * 1024
 
 /**
- * How much of a candidate to read while deciding what it is.
- *
- * A playlist announces itself in the first seven bytes, so this only has to be
- * large enough to hold a whole one for the case where the candidate *is* the
- * manifest — a feature-length VOD playlist with a segment every six seconds
- * runs to a few hundred kilobytes. Anything larger is not being parsed anyway,
- * and reading a video file into a string would take the app out.
+ * How much of a playlist to read when it is read whole: for the bundle, and
+ * for the scan's quality reading. A feature-length VOD playlist with a segment
+ * every six seconds runs to a few hundred kilobytes. Anything larger is not
+ * being parsed anyway, and reading a video file into a string would take the
+ * app out. Deciding what a candidate is takes only its start (`PEEK_LIMIT_BYTES`).
  */
 const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
 
@@ -266,7 +264,11 @@ async function identifyStream(
 
     let response: { status: number; contentType: string; body: string }
     try {
-      response = await Cast.fetchText({ url: candidate.url, headers, limitBytes: SNIFF_LIMIT_BYTES })
+      // The start says what it is: a playlist's first line, a file's first
+      // boxes. Reading up to 2 MB of every candidate, one after another, made
+      // a beam slow on a source whose segments carry no extension and so
+      // fill the capture (VidRock), each read as text and sent over the bridge.
+      response = await Cast.fetchText({ url: candidate.url, headers, limitBytes: PEEK_LIMIT_BYTES })
     } catch {
       continue // Unreachable host, or a URL that has already expired.
     }
@@ -274,7 +276,9 @@ async function identifyStream(
     if (response.status !== 200 && response.status !== 206) continue
 
     if (isPlaylist(response.body)) {
-      playlists.set(candidate.url, response.body)
+      // Kept for the bundle only when whole; one the peek cut short is read
+      // again there, in full (a film's media playlist runs past the peek).
+      if (response.body.length < PEEK_LIMIT_BYTES) playlists.set(candidate.url, response.body)
       playlist ??= { url: candidate.url, headers, kind: 'hls' }
       continue
     }
