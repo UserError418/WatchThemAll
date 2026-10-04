@@ -36,6 +36,7 @@
   import type { MalPreview, PreviewCacheStatus, WatchlistTestStatus } from '@shared/ipc'
   import { clock, episodeCode } from '../lib/format'
   import type { SourceSortKey } from '@shared/types'
+  import { APP_VERSION } from '../lib/appversion'
 
   let note = $state<string | null>(null)
   /** Shown after Import is pressed, until a source is chosen or dismissed. */
@@ -300,6 +301,13 @@
         {/if}
 
         {#if note}<p class="note">{note}</p>{/if}
+      </section>
+
+      <!-- Which release this is: the phone has no About dialog, and this
+           column is on both. -->
+      <section class="card">
+        <h2>About</h2>
+        <p class="hint">WatchThemAll {APP_VERSION}</p>
       </section>
     </div>
 

@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'electron-vite'
+import { readFileSync } from 'node:fs'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'node:path'
 
@@ -32,6 +33,15 @@ function syncClientDefines(mode: string): Record<string, string> {
 }
 
 
+/**
+ * The release number, from package.json, for Settings to show
+ * (`src/renderer/src/lib/appversion.ts`). The phone's build defines the same.
+ */
+function appVersionDefine(): Record<string, string> {
+  const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')) as { version: string }
+  return { __WTA_VERSION__: JSON.stringify(pkg.version) }
+}
+
 export default defineConfig(({ mode }) => ({
   main: {
     resolve: { alias: shared },
@@ -56,6 +66,7 @@ export default defineConfig(({ mode }) => ({
   },
   renderer: {
     root: resolve('src/renderer'),
+    define: appVersionDefine(),
     resolve: { alias: { ...shared, '@': resolve('src/renderer/src') } },
     plugins: [svelte({ configFile: resolve('svelte.config.js') })],
     build: {

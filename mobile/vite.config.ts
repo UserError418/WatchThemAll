@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite'
+import { readFileSync } from 'node:fs'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'node:path'
 
@@ -19,6 +20,7 @@ export default defineConfig(({ mode }) => {
   // Same untracked `.env` as the desktop build, read from the repository root
   // rather than from `mobile/`, so one file configures both ports.
   const env = loadEnv(mode, resolve(__dirname, '..'), 'WTA_')
+  const { version } = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8')) as { version: string }
 
   return {
   root: resolve(__dirname),
@@ -35,6 +37,8 @@ export default defineConfig(({ mode }) => {
   define: {
     __WTA_GOOGLE_CLIENT_ID__: JSON.stringify(env.WTA_GOOGLE_CLIENT_ID ?? ''),
     __WTA_GOOGLE_CLIENT_SECRET__: JSON.stringify(env.WTA_GOOGLE_CLIENT_SECRET ?? ''),
+    // The release number Settings shows, as the desktop's build defines it.
+    __WTA_VERSION__: JSON.stringify(version),
   },
   plugins: [svelte({ configFile: resolve(__dirname, '../svelte.config.js') })],
   build: {
