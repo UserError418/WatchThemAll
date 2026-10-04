@@ -173,6 +173,27 @@
     refresh()
   })
 
+  /*
+   * Sound, the way autoplay above is pictures: a film the source started
+   * muted is unmuted, once per load, unless the viewer has chosen the sound
+   * themselves. 111Movies starts its film by itself with the element muted
+   * (the browser's muted autoplay) and turns the sound on only after a click
+   * on its player. Our presses land only while no film exists yet, so when
+   * its muted film came first it stayed silent, and with the source's own
+   * controls hidden under ours the viewer had no way to its unmute button
+   * (the owner, 2026-10-04: "no sound in our player"). Not while held: the
+   * carry-over decides the sound then (`heldMuted`). Adverts stay as they
+   * are, because the relay aims its commands at the film by its length.
+   */
+  let soundChosen = false
+  let unmutedOnce = false
+  $effect(() => {
+    if (!playerMode || film === null || !film.muted || unmutedOnce || soundChosen) return
+    if (config.held !== null || heldMuted !== null) return
+    unmutedOnce = true
+    link.setMuted(false)
+  })
+
   // A playing film that has gone: our cover for a while, then the source's page.
   $effect(() => {
     if (!playerMode || !started || film !== null || revealed) return
@@ -392,6 +413,7 @@
   }
 
   function setVolume(level: number): void {
+    soundChosen = true
     const next = Math.round(Math.min(1, Math.max(0, level)) * 100) / 100
     link.setVolume(next)
     showHud(next, false)
@@ -420,6 +442,7 @@
         setVolume((film.muted ? 0 : film.volume) - VOLUME_STEP)
         break
       case 'mute':
+        soundChosen = true
         link.setMuted(!film.muted)
         showHud(film.volume, !film.muted)
         break
