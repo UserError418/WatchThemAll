@@ -61,10 +61,9 @@
       {title}
       aria-label={title}
     >
-      {#if download === null}
+      {#if download === null || state === 'done'}
+        <!-- Done is the same arrow, filled in green: a tick here would read as the row's "watched". -->
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14" /></svg>
-      {:else if state === 'done'}
-        ✓
       {:else if state === 'failed'}
         !
       {:else if state === 'paused'}
@@ -163,6 +162,7 @@
   .compact.done {
     color: var(--success);
     border-color: color-mix(in srgb, var(--success) 50%, transparent);
+    background: color-mix(in srgb, var(--success) 16%, transparent);
     cursor: default;
   }
 
