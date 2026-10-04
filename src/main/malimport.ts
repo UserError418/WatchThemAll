@@ -36,7 +36,16 @@ import { isRatingValue } from '@shared/rating'
 export type MalStatus = 'watching' | 'completed' | 'onHold' | 'dropped' | 'planToWatch'
 
 export interface MalEntry {
-  /** `series_animedb_id` — MAL's own id, kept so a re-import can be idempotent. */
+  /**
+   * `series_animedb_id` — MAL's own id, kept so a re-import can be idempotent.
+   *
+   * Negative for an entry the export has no id for, which some third-party
+   * exporters leave out: a placeholder unique within the file, never a
+   * MyAnimeList id, and never stored (`malIdOf`). With every such entry at 0,
+   * the preview's ticks moved them all together, its list (keyed by this id)
+   * failed to render with two in one group, and an import kept only the first
+   * that TMDB could not match.
+   */
   malId: number
   title: string
   status: MalStatus
@@ -130,8 +139,9 @@ export function parseMalExport(xml: string): MalExport {
       continue
     }
 
+    const id = readNumber(block, 'series_animedb_id')
     entries.push({
-      malId: readNumber(block, 'series_animedb_id'),
+      malId: id > 0 ? id : -(entries.length + 1),
       title,
       status,
       score: readNumber(block, 'my_score'),
@@ -142,6 +152,11 @@ export function parseMalExport(xml: string): MalExport {
   }
 
   return { userName, entries, skipped }
+}
+
+/** The MyAnimeList id to store for an entry, or null for one the export gave none (see `MalEntry.malId`). */
+export function malIdOf(entry: Pick<MalEntry, 'malId'>): number | null {
+  return entry.malId > 0 ? entry.malId : null
 }
 
 /**

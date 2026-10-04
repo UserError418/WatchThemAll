@@ -51,6 +51,24 @@ const resolveAll = vi.fn(
 const resolveNone = async (): Promise<null> => null
 
 describe('applyMalImport', () => {
+  /**
+   * The bug: entries the export gave no id all counted as id 0, so only the
+   * first one TMDB could not match was kept.
+   */
+  it('keeps every unmatched title the export gave no id, once each', async () => {
+    const pending = [entry({ malId: -1, title: 'Obscure One' }), entry({ malId: -2, title: 'Obscure Two' })]
+    const first = await applyMalImport(emptyStore(), pending, decisions(), resolveNone)
+
+    expect(first.store.watched.map((w) => [w.title, w.malId])).toEqual([
+      ['Obscure One', null],
+      ['Obscure Two', null],
+    ])
+
+    // Imported again from a file whose placeholders came out differently.
+    const again = await applyMalImport(first.store, [entry({ malId: -7, title: 'Obscure Two' })], decisions(), resolveNone)
+    expect(again.store.watched).toHaveLength(2)
+  })
+
   it('routes each status to its default list', async () => {
     const { store, summary } = await applyMalImport(
       emptyStore(),

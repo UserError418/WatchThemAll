@@ -21,7 +21,7 @@ import type {
   WatchlistEntry,
 } from '@shared/types'
 import type { ImportTarget, MalEntry, MalStatus } from './malimport'
-import { mediaTypeFor, ratingFromScore } from './malimport'
+import { malIdOf, mediaTypeFor, ratingFromScore } from './malimport'
 import { isListed } from '@shared/listed'
 import { isRatingValue, legacyRatingOf } from '@shared/rating'
 import { stamp } from '@shared/store/core'
@@ -116,6 +116,8 @@ export async function applyMalImport(
   const haveWatched = new Set(watched.map(titleKey))
   const haveTracker = new Set(trackers.map((t) => t.tmdbId))
   const haveMalIds = new Set(watched.map((w) => w.malId))
+  // Unmatched entries the export gave no id are told apart by title instead.
+  const haveUnmatchedTitles = new Set(watched.filter((w) => w.tmdbId === 0).map((w) => w.title))
 
   /** Every MAL score that resolved to a title, collected before any is applied. */
   const scored = new Map<string, ScoredTitle>()
@@ -151,8 +153,11 @@ export async function applyMalImport(
      */
     if (!match) {
       summary.unmatched.push(entry.title)
-      if (target !== 'watched' || haveMalIds.has(entry.malId)) continue
-      haveMalIds.add(entry.malId)
+      const malId = malIdOf(entry)
+      const kept = malId === null ? haveUnmatchedTitles.has(entry.title) : haveMalIds.has(malId)
+      if (target !== 'watched' || kept) continue
+      if (malId === null) haveUnmatchedTitles.add(entry.title)
+      else haveMalIds.add(malId)
 
       watched.push(stamp({
         id: newId(),
@@ -168,7 +173,7 @@ export async function applyMalImport(
         genreIds: [],
         addedAt: Date.now(),
         source: 'mal',
-        malId: entry.malId,
+        malId: malIdOf(entry),
       }))
       summary.watched += 1
       continue
@@ -190,7 +195,7 @@ export async function applyMalImport(
         genreIds: match.genreIds,
         addedAt: Date.now(),
         source: 'mal',
-        malId: entry.malId,
+        malId: malIdOf(entry),
       }))
       summary.watched += 1
     }

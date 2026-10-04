@@ -1,16 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
-import {
-  DEFAULT_SELECTED,
-  DEFAULT_TARGETS,
-  findBestMatch,
-  mediaTypeFor,
-  parseMalExport,
-  pickBestMatch,
-  type RankableMatch,
-  ratingFromScore,
-  searchVariants,
-} from './malimport'
+import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, mediaTypeFor, parseMalExport, pickBestMatch, type RankableMatch, ratingFromScore, searchVariants, malIdOf } from './malimport'
 
 /** One `<anime>` block, with only the fields the parser reads. */
 function entry(fields: Record<string, string | number>): string {
@@ -124,7 +114,9 @@ describe('parseMalExport', () => {
 
     expect(parsed.score).toBe(0)
     expect(parsed.totalEpisodes).toBe(0)
-    expect(parsed.malId).toBe(0)
+    // The id is the exception: a placeholder of its own, never a MyAnimeList
+    // id (see "entries the export gives no id" below).
+    expect(malIdOf(parsed)).toBeNull()
   })
 
   /**
@@ -477,5 +469,21 @@ describe('findBestMatch', () => {
     const { search } = searchFrom({})
 
     expect(await findBestMatch('Nothing Here', 'tv', search)).toBeNull()
+  })
+})
+
+describe('entries the export gives no id', () => {
+  /** The bug: all of them read as id 0, so the preview could not tell them apart. */
+  it('gives each a placeholder of its own, never taken for a MyAnimeList id', () => {
+    const parsed = parseMalExport(
+      doc(
+        entry({ series_title: 'No Id One', my_status: 'Completed' }),
+        entry({ series_title: 'No Id Two', my_status: 'Completed' }),
+        entry({ series_animedb_id: 38735, series_title: 'Has Id', my_status: 'Completed' }),
+      ),
+    )
+
+    expect(new Set(parsed.entries.map((e) => e.malId)).size).toBe(3)
+    expect(parsed.entries.map(malIdOf)).toEqual([null, null, 38735])
   })
 })
