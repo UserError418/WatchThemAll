@@ -19,6 +19,7 @@
  */
 
 import { lengthVerdict } from '@shared/runtimecheck'
+import type { CapturedRequest, StreamFetch } from '@shared/streamfetch'
 import {
   WINDOW_SECONDS,
   masterVariants,
@@ -31,21 +32,7 @@ import {
   type StreamWindow,
 } from '@shared/segmentwindow'
 
-/** A request the source's page made, with the headers it was made with. */
-export interface CapturedRequest {
-  url: string
-  headers: Record<string, string>
-}
-
-/** Fetching with a source's headers, which the page's own origin could not send. */
-export interface StreamFetch {
-  /**
-   * A URL's text, fetched with these headers; null when it could not be
-   * reached. `limitBytes`: only the start of it. Candidates are sniffed that
-   * way, since most are segments of several megabytes.
-   */
-  fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null>
-}
+export type { CapturedRequest, StreamFetch } from '@shared/streamfetch'
 
 export interface SaveIo extends StreamFetch {
   /**
