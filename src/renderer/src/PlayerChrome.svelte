@@ -2505,6 +2505,10 @@
     fixed box of a set width.
   */
   .episodes.touch {
+    /* Over the backdrop, as `.panel.bottom` is: this panel is not a bottom
+       one, and without it the backdrop (z-index 1) took every tap on a row,
+       so picking an episode only closed the list. */
+    z-index: 3;
     background: var(--surface-solid);
     border-radius: 16px;
     border-width: 1px;
