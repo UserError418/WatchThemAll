@@ -164,6 +164,9 @@ export function layer(node: HTMLElement, options: LayerOptions): { update: (next
   const entry: Layer = { ...options, node, opener: document.activeElement, inerted: [] }
   if (stack.top() === undefined) document.addEventListener('keydown', onKeydown)
   stack.push(entry)
+  // Marked in the page, so the phone's Back button can tell an open layer
+  // (which its Escape closes) from the page underneath (`bridge/index.ts`).
+  node.setAttribute('data-layer', '')
   if (entry.modal) entry.inerted = inertOutside(node)
 
   const first = node.querySelector<HTMLElement>('[data-autofocus]') ?? focusables(node)[0]
@@ -174,6 +177,7 @@ export function layer(node: HTMLElement, options: LayerOptions): { update: (next
       entry.onescape = next.onescape
     },
     destroy() {
+      node.removeAttribute('data-layer')
       stack.remove(entry)
       wake(entry.inerted)
       if (stack.top() === undefined) document.removeEventListener('keydown', onKeydown)

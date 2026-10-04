@@ -1826,7 +1826,13 @@ export async function createBridge(): Promise<WtaApi> {
       setMini(true)
       return
     }
-    if (document.querySelector('.scrim, aside.panel')) {
+    // An open layer of the app (the detail view, a dialog, the providers
+    // panel), which Escape closes. Asked by the mark the layer helper puts on
+    // them (`lib/modal.ts`), not by class: this matched `.scrim` until 2.0.12,
+    // and the player overlay keeps a `.scrim` of its own in the page while the
+    // player is small, so once only the mini player was left, Back sent a
+    // useless Escape for ever and could neither stop it nor quit.
+    if (document.querySelector('[data-layer]')) {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       return
     }
