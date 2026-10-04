@@ -14,7 +14,7 @@
  * rule stays.
  */
 
-import { isSourceResult, mergeResults, pruneResults, type SourceResult } from '../sourceresults'
+import { isSourceResult, mergeResults, pruneResults, withoutFutureResults, type SourceResult } from '../sourceresults'
 import type { StorePersistence } from './core'
 
 /** The file's shape. `results` marks it and is bumped only if the shape ever changes. */
@@ -79,7 +79,8 @@ export class ResultStore {
 
   /** Take the history merged with another device's, as the sync worked it out. */
   adopt(results: readonly SourceResult[]): void {
-    this.replace(pruneResults(results, this.now()), 'remote')
+    const now = this.now()
+    this.replace(pruneResults(withoutFutureResults(results, now), now), 'remote')
   }
 
   subscribe(listener: (change: ResultsChange) => void): () => void {

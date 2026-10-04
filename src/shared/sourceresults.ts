@@ -85,6 +85,27 @@ export const MAX_RESULTS = 4_000
 /** How many of the latest successes the speed and quality are taken from. */
 export const SAMPLE_SIZE = 5
 
+/**
+ * How far ahead of this device's clock another device may have stamped a
+ * result for it to be taken now. Clocks a minute or two apart are ordinary.
+ */
+export const CLOCK_SKEW_ALLOWED_MS = 10 * 60_000
+
+/**
+ * Results, less any stamped further ahead of `now` than clocks ordinarily
+ * drift: another device's, with its clock wrong.
+ *
+ * Such a result was never old enough to drop, always the newest to read, and
+ * took one of `KEEP_PER_EPISODE` slots from results measured since. It is held
+ * back rather than re-dated: `at` is part of a result's identity
+ * (`resultKey`), and the other device still holds the original, so a re-dated
+ * copy would come back as a second result on every sync. Held back, it is
+ * taken once this clock reaches it.
+ */
+export function withoutFutureResults(results: readonly SourceResult[], now: number): SourceResult[] {
+  return results.filter((result) => result.at <= now + CLOCK_SKEW_ALLOWED_MS)
+}
+
 export type ResultOrigin = 'test' | 'play' | 'preview'
 
 /**
