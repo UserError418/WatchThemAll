@@ -43,6 +43,7 @@
   import { actionForEvent } from '@shared/playerkeys'
   import { nextAiredEpisode, previousEpisode, type NextEpisode } from '@shared/episodesteps'
   import { episodeOf } from '@shared/sourceresults'
+  import { isDownloadedSource } from '@shared/downloads/types'
   import {
     nudgeTarget,
     parseRememberedDevice,
@@ -319,12 +320,21 @@
   }
 
   /**
+   * The download, when there is one, at the top: it is what the player plays
+   * first. Tests never rank it (it is not a source), so the test order put it
+   * last, below the fold of a long list.
+   */
+  function downloadedFirst<T extends { id: string }>(rows: T[]): T[] {
+    return [...rows.filter((r) => isDownloadedSource(r.id)), ...rows.filter((r) => !isDownloadedSource(r.id))]
+  }
+
+  /**
    * The menu's rows, in Automatic's order as of the last re-read.
    *
    * Not re-sorted while a test runs — `sourceState` is re-read only when it
    * finishes — so the rows hold still while their dots fill in.
    */
-  const sourceRows = $derived(inScanOrder(context?.providers ?? [], sourceState.order))
+  const sourceRows = $derived(downloadedFirst(inScanOrder(context?.providers ?? [], sourceState.order)))
 
   async function toggleScan(): Promise<void> {
     if (context === null) return

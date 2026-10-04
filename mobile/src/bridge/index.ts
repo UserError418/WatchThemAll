@@ -732,6 +732,16 @@ export async function createBridge(): Promise<WtaApi> {
       const advanced =
         names !== null && named !== null && (named.season !== names.season || named.episode !== names.episode)
 
+      // A downloaded episode always plays from the download (the owner,
+      // 2026-10-04), however the player got to it: the source's own autoplay
+      // moving on included. Stepping settles the episode being left.
+      const fromDownload = isDownloadedSource(session.candidates[session.index]?.provider.id)
+      if (advanced && names !== null && !fromDownload && downloadedCandidate({ ...session.req, ...names }) !== null) {
+        progress.namedEpisode = names
+        void playerGoTo(names.season, names.episode)
+        return
+      }
+
       if (advanced) {
         settleProgress(session.req)
         session = { ...session, req: { ...session.req, ...names } }
