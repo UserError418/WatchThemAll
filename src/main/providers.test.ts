@@ -64,6 +64,15 @@ describe('renderTemplate', () => {
     expect(renderTemplate(tvPath, { ...base, imdbId: null })).toBeNull()
   })
 
+  /** A custom provider's template is whatever the user typed, and the player's web security is off. */
+  it('refuses to build anything but a web address', () => {
+    const custom = (urlTemplate: string): Provider => ({ ...tvPath, id: 'custom', movie: { urlTemplate } })
+    const film = { ...base, type: 'movie' as const }
+    expect(renderTemplate(custom('file:///home/{imdb}'), film)).toBeNull()
+    expect(renderTemplate(custom('javascript:alert({tmdb})'), film)).toBeNull()
+    expect(renderTemplate(custom('http://nas.local/movie/{imdb}'), film)).toBe('http://nas.local/movie/tt0903747')
+  })
+
   it('returns null when the provider does not serve this media type', () => {
     expect(renderTemplate(tmdbOnly, { ...base, type: 'movie' })).toBeNull()
   })

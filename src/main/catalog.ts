@@ -103,7 +103,7 @@ function isValidProvider(value: unknown): value is Provider {
   const section = (v: unknown): boolean =>
     v === null ||
     v === undefined ||
-    (isRecord(v) && typeof v.urlTemplate === 'string' && v.urlTemplate.length > 0)
+    (isRecord(v) && typeof v.urlTemplate === 'string' && isWebTemplate(v.urlTemplate))
 
   if (!section(value.tv) || !section(value.movie)) return false
   // An entry that can serve neither media type is dead weight in every list it
@@ -118,6 +118,20 @@ function isValidProvider(value: unknown): value is Provider {
   }
 
   return true
+}
+
+/**
+ * Whether a published URL template can only build an https address.
+ *
+ * The https check on `rootUrl` above protects nothing if a template need not
+ * use it: a template is any string, and `renderTemplate` accepts whatever
+ * parses, so `http://…` downgraded the player exactly as that check means to
+ * prevent, and `file:///…` would have loaded a local file into a view whose
+ * web security is off. Every template in the catalogue starts with
+ * `{rootUrl}`; one that names its own host must name an https one.
+ */
+function isWebTemplate(template: string): boolean {
+  return template.startsWith('{rootUrl}') || template.startsWith('https://')
 }
 
 /**

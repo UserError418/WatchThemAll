@@ -90,6 +90,21 @@ describe('rejecting a bad document, wholesale', () => {
     ).toBe(false)
   })
 
+  /**
+   * The bug: only `rootUrl` had to be https, and a template need not use it,
+   * so a published template could point the player at any scheme at all.
+   */
+  it('rejects a template that names a host other than over https', () => {
+    for (const urlTemplate of ['http://plain.example/movie/{imdb}', 'file:///etc/{imdb}', 'javascript:alert({tmdb})']) {
+      expect(validateCatalog(document([provider({ movie: { urlTemplate } })])).ok).toBe(false)
+    }
+  })
+
+  it('accepts a template built on the root, or on another https host', () => {
+    expect(validateCatalog(document([provider({ movie: { urlTemplate: '{rootUrl}film/{imdb}' } })])).ok).toBe(true)
+    expect(validateCatalog(document([provider({ movie: { urlTemplate: 'https://mirror.example/{imdb}' } })])).ok).toBe(true)
+  })
+
   it('accepts a provider with no resume parameter, which is most of them', () => {
     // Absent means "does not take one" and is the default; only four entries in
     // the shipped catalogue were measured to accept one.

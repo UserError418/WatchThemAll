@@ -109,11 +109,19 @@ export function renderTemplate(
   // without touching the `https://` one.
   url = url.replace(/([^:])\/\//g, '$1/').replace(/\/\?/g, '?')
 
+  let parsed: URL
   try {
-    return withResume(new URL(url).toString(), provider, resume)
+    parsed = new URL(url)
   } catch {
     return null
   }
+  // A web address or nothing. The catalogue's templates are vetted when it is
+  // fetched (`isWebTemplate`), a custom provider's are whatever the user
+  // typed, and either lands in a player whose web security is off: a `file:`
+  // or `javascript:` address must not reach it. Plain http stays possible for
+  // a custom provider on the user's own network.
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+  return withResume(parsed.toString(), provider, resume)
 }
 
 /** One provider that can serve a request, and the URL it would be served at. */
