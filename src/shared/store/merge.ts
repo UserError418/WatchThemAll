@@ -200,7 +200,7 @@ function mergeTracker(a: RecordOf<'trackers'>, b: RecordOf<'trackers'>): RecordO
   const winner = pickNewer(a, b)
   if (winner.deletedAt !== null) return winner
 
-  const fresher = a.lastChecked >= b.lastChecked ? a : b
+  const fresher = fresherCheck(a, b)
 
   return {
     ...winner,
@@ -208,6 +208,18 @@ function mergeTracker(a: RecordOf<'trackers'>, b: RecordOf<'trackers'>): RecordO
     lastChecked: fresher.lastChecked,
     lastNotified: laterEpisode(a.lastNotified, b.lastNotified),
   }
+}
+
+/**
+ * Which of two trackers checked TMDB more recently.
+ *
+ * On a tie (two sweeps in the same millisecond, or a copied document) any
+ * fixed rule will do, as long as both devices pick the same copy. Taking the
+ * local one, as this did, let each device keep its own after every merge.
+ */
+function fresherCheck(a: RecordOf<'trackers'>, b: RecordOf<'trackers'>): RecordOf<'trackers'> {
+  if (a.lastChecked !== b.lastChecked) return a.lastChecked > b.lastChecked ? a : b
+  return JSON.stringify(a.nextEpisode) >= JSON.stringify(b.nextEpisode) ? a : b
 }
 
 /**
