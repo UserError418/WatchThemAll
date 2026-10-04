@@ -26,16 +26,17 @@
    * cached. A pointer swept across twenty cards starts nothing, because the
    * timer never fires. See `episodecache.ts` for the rest.
    */
-  import type { Episode, MediaSummary, WatchlistEntry } from '@shared/types'
+  import type { MediaSummary, WatchlistEntry } from '@shared/types'
   import { library } from '../lib/library.svelte'
   import { removeFromWatchlist } from '../lib/undo'
   import { posterUrl, stillUrl } from '../lib/images'
   import { episodeCode, runtime } from '../lib/format'
   import { canHover } from '../lib/pointer'
-  import { findEpisode, loadSeason, peekSeason } from '../lib/episodecache'
+  import { findEpisode } from '../lib/episodecache'
+  import { loadListing, peekListing, seriesPickUp, settlePickUp } from '../lib/pickup.svelte'
+  import { whenVisible } from '../lib/titlefacts.svelte'
   import { revealIn, revealOut } from '../lib/motion'
-  import { resumeTarget } from '@shared/progress'
-  import { resumeAnchor, type Activity } from '@shared/watchlistrank'
+  import type { Activity } from '@shared/watchlistrank'
   import Score from './Score.svelte'
 
   interface Props {
@@ -47,18 +48,7 @@
   const { entry, activity, onselect }: Props = $props()
 
   let open = $state(false)
-  let episodes = $state<Episode[]>([])
   let intentTimer: ReturnType<typeof setTimeout> | null = null
-
-  /**
-   * Guards a late response against a card that has moved on.
-   *
-   * Bumped on every open and close. A fetch that resolves after the pointer
-   * has left compares its own token and drops the result — the episodes are
-   * still cached for the next hover, so nothing is wasted, but this card does
-   * not flash a still for a title the user is no longer looking at.
-   */
-  let generation = 0
 
   const media = $derived<MediaSummary>({
     tmdbId: entry.tmdbId,
@@ -76,32 +66,21 @@
   const isSeries = $derived(entry.type === 'tv')
 
   /**
-   * The season this card is about.
+   * Where this series picks up, and so what the play button plays.
    *
-   * From the marks rather than `lastSeason`, which is only written when an
-   * episode is opened in the app's own player and is therefore stale for any
-   * title watched elsewhere — see `resumeAnchor`. This decides which season is
-   * fetched, so getting it wrong would show the still for the wrong episode as
-   * well as sending "Resume" to the wrong place.
+   * The rule the detail view's Resume and Continue Watching use too
+   * (`pickup.svelte.ts`): the further of the episode last played and the last
+   * one ticked, moved past anything finished, into the next season when this
+   * one is done. Until 2.0.12 the card never crossed seasons, so after a
+   * season finale its button replayed the finale. It needs the season's
+   * listing, and the next season's at a season's end: until they are in, it
+   * names where the user is. They are fetched once the card is near the
+   * screen, and only for a series whose answer depends on them.
    */
-  const anchor = $derived(resumeAnchor(entry))
+  const target = $derived(isSeries ? seriesPickUp(entry).target : { season: 0, episode: 0 })
 
-  /** Where "Resume" goes: the last episode reached, unless it is finished. */
-  const target = $derived(
-    isSeries
-      ? resumeTarget({
-          episodes: episodes.map((e) => ({ season: e.season, episode: e.episode })),
-          lastSeason: anchor.season,
-          lastEpisode: anchor.episode,
-          // Only the anchor season is loaded, so this never crosses into the
-          // next one — which is correct rather than a limitation:
-          // `resumeTarget` refuses to guess forward without the episode list
-          // to prove the season is actually finished.
-          seasonCount: anchor.season,
-          isWatched: (s, e) => library.isWatched(entry, s, e),
-        })
-      : { season: 0, episode: 0 },
-  )
+  /** The season Resume is in: for the still, the episode's name and the pips. */
+  const episodes = $derived(isSeries ? (peekListing(entry.tmdbId, target.season) ?? []) : [])
 
   const current = $derived(
     isSeries && episodes.length > 0 ? findEpisode(episodes, target.season, target.episode) : null,
@@ -151,34 +130,27 @@
   }
 
   /**
-   * Open, and fetch the still if this is a series we have not looked at.
+   * Open, and fetch the listing the still comes from if this session has not.
    *
-   * The cached case sets `episodes` synchronously so the still is there on the
-   * first frame of the reveal — a still that fades in a beat after the panel
-   * reads as the card stuttering rather than as an image loading.
+   * A cached listing reaches `episodes` synchronously, so the still is there
+   * on the first frame of the reveal — a still that fades in a beat after the
+   * panel reads as the card stuttering rather than as an image loading. A late
+   * answer is harmless: the still is only drawn while the card is open.
    */
   function reveal(): void {
     open = true
-    generation += 1
     if (!isSeries || !entry.tmdbId) return
+    void settlePickUp(entry).then((at) => loadListing(entry.tmdbId, at.season))
+  }
 
-    const season = anchor.season
-    const cached = peekSeason(entry.tmdbId, season)
-    if (cached) {
-      episodes = cached
-      return
-    }
-
-    const mine = generation
-    void loadSeason(entry.tmdbId, season).then((result) => {
-      if (mine === generation) episodes = result
-    })
+  /** The caption names where Resume goes, so it is settled once the card is near the screen. */
+  function settleCaption(): void {
+    if (isSeries && entry.tmdbId) void settlePickUp(entry)
   }
 
   function hide(): void {
     clearIntent()
     open = false
-    generation += 1
   }
 
   function onEnter(): void {
@@ -213,17 +185,20 @@
 
   async function resume(event: MouseEvent): Promise<void> {
     stop(event)
+    // Settled first: before the listings are in, the target is where the user
+    // is, which is often an episode already watched.
+    const at = isSeries ? await settlePickUp(entry) : null
     await window.wta.play({
       tmdbId: entry.tmdbId,
       imdbId: entry.imdbId,
       type: entry.type,
       title: entry.title,
-      season: isSeries ? target.season : null,
-      episode: isSeries ? target.episode : null,
+      season: at?.season ?? null,
+      episode: at?.episode ?? null,
       providerId: entry.providerId,
       // The episode's own runtime when the season listing supplied one; null
       // otherwise, which is what main already expects when TMDB is silent.
-      runtimeMinutes: current?.runtime ?? null,
+      runtimeMinutes: at ? (findEpisode(peekListing(entry.tmdbId, at.season) ?? [], at.season, at.episode)?.runtime ?? null) : null,
     })
   }
 
@@ -256,6 +231,7 @@
   onfocusout={(e) => {
     if (canHover() && !e.currentTarget.contains(e.relatedTarget as Node)) hide()
   }}
+  use:whenVisible={settleCaption}
   role="group"
 >
   <button class="art" onclick={onArtClick} aria-label={entry.title}>

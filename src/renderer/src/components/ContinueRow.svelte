@@ -7,14 +7,20 @@
    * the watchlist's own order: the thing you watched last night should be
    * first, regardless of when it was added.
    *
-   * Progress needs the episode count, which the watchlist entry does not store.
-   * Rather than fetching detail for every entry — the mistake the original's
-   * recommendation engine made at ~31 requests a load — the bar is drawn from
-   * watched-episode count against the highest season/episode seen so far, and
-   * omitted when there is nothing to compare against.
+   * "Up next" is where the series picks up by the rule the detail view's
+   * Resume and the Watchlist card use (`pickup.svelte.ts`). It used to read the
+   * episode last *started*, which is usually one already finished, so it
+   * named an episode the user had watched.
+   *
+   * The bar is the series' share of episodes watched, against the episode
+   * count the detail view stores on the entry — the Watchlist card's figure.
+   * It used to be ticks in the current season against the furthest episode
+   * reached, which is 100% for anyone watching in order.
    */
   import type { MediaSummary, WatchlistEntry } from '@shared/types'
+  import { activityOf, indexHistory } from '@shared/watchlistrank'
   import { library } from '../lib/library.svelte'
+  import { seriesPickUp } from '../lib/pickup.svelte'
   import { episodeCode } from '../lib/format'
   import TitleCard from './TitleCard.svelte'
   import RowShell from './RowShell.svelte'
@@ -33,16 +39,12 @@
   }
 
   const items = $derived.by<Resumable[]>(() => {
-    // Most recent history entry per title decides the order. A plain record,
-    // not a Map — this is a local accumulator, never reactive state.
-    const lastWatched: Record<number, number> = {}
-    for (const event of library.history) {
-      lastWatched[event.tmdbId] ??= event.watchedAt
-    }
+    // The most recent play per title decides the order.
+    const played = indexHistory(library.history)
 
     return library.listedWatchlist
-      .filter((entry) => entry.watchedEpisodes.length > 0 || lastWatched[entry.tmdbId] != null)
-      .sort((a, b) => (lastWatched[b.tmdbId] ?? 0) - (lastWatched[a.tmdbId] ?? 0))
+      .filter((entry) => entry.watchedEpisodes.length > 0 || played.lastAt.has(entry.tmdbId))
+      .sort((a, b) => (played.lastAt.get(b.tmdbId) ?? 0) - (played.lastAt.get(a.tmdbId) ?? 0))
       .slice(0, 20)
       .map((entry) => {
         const media: MediaSummary = {
@@ -58,23 +60,18 @@
         }
 
         if (entry.type === 'movie') {
-          return { entry, media, subtitle: 'Film', progress: 0 }
+          return { entry, media, subtitle: 'Film', progress: library.filmProgress(entry.tmdbId)?.percent ?? 0 }
         }
 
-        // Highest episode number marked in the current season, as a stand-in
-        // for the season length we have not fetched.
-        const seasonPrefix = `${entry.lastSeason ?? 1}:`
-        const inSeason = entry.watchedEpisodes
-          .filter((key) => key.startsWith(seasonPrefix))
-          .map((key) => Number(key.slice(seasonPrefix.length)))
-        const furthest = Math.max(entry.lastEpisode ?? 1, ...inSeason, 1)
-        const progress = furthest > 1 ? (inSeason.length / furthest) * 100 : 0
-
+        // No bar until the detail view has stored the episode count: a share
+        // of an unknown total is not a number worth drawing.
+        const fraction = activityOf(entry, played).fraction
+        const { target } = seriesPickUp(entry)
         return {
           entry,
           media,
-          subtitle: `Up next · ${episodeCode(entry.lastSeason ?? 1, entry.lastEpisode ?? 1)}`,
-          progress,
+          subtitle: `Up next · ${episodeCode(target.season, target.episode)}`,
+          progress: fraction === null ? 0 : fraction * 100,
         }
       })
   })

@@ -94,3 +94,66 @@ export function episodeToPlay<T extends EpisodeRef>(
   }
   return { season: target.season, episode: target.episode }
 }
+
+export interface PickUpArgs {
+  /** Where the user is: the further of the episode last played and the last ticked (`resumeAnchor`). */
+  anchor: EpisodeRef
+  /** The anchor season's episodes, or null while they are not loaded. */
+  anchorSeason: readonly EpisodeRef[] | null
+  /** The next season's episodes, or null while not loaded; empty when there is no next season. */
+  nextSeason: readonly EpisodeRef[] | null
+  /** How many seasons the series has, where the caller knows it (the detail view does). */
+  seasonCount?: number | null
+  isWatched: (season: number, episode: number) => boolean
+}
+
+export interface PickUp {
+  /** The episode Resume plays. */
+  target: EpisodeRef
+  /**
+   * The season whose listing would settle the answer, or null when it is
+   * settled. Until it is loaded, `target` is the anchor: where the user is,
+   * not where they go next.
+   */
+  need: number | null
+}
+
+/**
+ * Where a series picks up, for every surface that offers to resume one.
+ *
+ * `resumeTarget`'s rule, fed from whatever listings the caller has, and
+ * saying which listing it lacks rather than guessing. The detail view knows
+ * how many seasons there are; the Watchlist card and Continue Watching do
+ * not, and decide whether a finished season is followed by another from the
+ * next season's listing instead.
+ *
+ * One function because three surfaces each had their own reading and showed
+ * the same series three ways: Continue Watching said "Up next" for the
+ * episode last started, often already watched; the Watchlist card never
+ * crossed into the next season, so its play button replayed the finale just
+ * watched; only the detail view had it right.
+ */
+export function pickUp(args: PickUpArgs): PickUp {
+  const { anchor, anchorSeason, nextSeason, isWatched } = args
+  const seasonCount = args.seasonCount ?? null
+
+  // Started and not finished: that is where to go back to, listings or not.
+  if (!isWatched(anchor.season, anchor.episode)) return { target: anchor, need: null }
+  if (anchorSeason === null) return { target: anchor, need: anchor.season }
+
+  // Whether a finished season may roll over: the known count, else the next
+  // season's listing, else not yet.
+  const hasNextSeason =
+    seasonCount !== null ? anchor.season < seasonCount : nextSeason !== null && nextSeason.length > 0
+  const target = resumeTarget({
+    episodes: anchorSeason,
+    lastSeason: anchor.season,
+    lastEpisode: anchor.episode,
+    seasonCount: hasNextSeason ? anchor.season + 1 : anchor.season,
+    isWatched,
+  })
+
+  const seasonDone = target.season === anchor.season && target.episode === anchor.episode
+  const askNext = seasonDone && seasonCount === null && nextSeason === null
+  return { target, need: askNext ? anchor.season + 1 : null }
+}

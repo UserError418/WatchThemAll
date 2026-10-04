@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { episodeToPlay, resumeTarget, type EpisodeRef } from './progress'
+import { episodeToPlay, pickUp, resumeTarget, type EpisodeRef } from './progress'
 
 /** One season of ten, which is what most of these need. */
 function season(number: number, count = 10): EpisodeRef[] {
@@ -154,5 +154,56 @@ describe('episodeToPlay', () => {
       season: 2,
       episode: 1,
     })
+  })
+})
+
+describe('pickUp', () => {
+  const listing = (season: number, count: number): EpisodeRef[] =>
+    Array.from({ length: count }, (_, i) => ({ season, episode: i + 1 }))
+  /** Watched up to and including `season`x`episode`, in order. */
+  const watchedThrough = (season: number, episode: number) => (s: number, e: number) =>
+    s < season || (s === season && e <= episode)
+
+  it('goes back to an episode started and not finished, needing no listing', () => {
+    expect(
+      pickUp({ anchor: { season: 1, episode: 4 }, anchorSeason: null, nextSeason: null, isWatched: () => false }),
+    ).toEqual({ target: { season: 1, episode: 4 }, need: null })
+  })
+
+  it('asks for the season listing before moving past a finished episode', () => {
+    expect(
+      pickUp({ anchor: { season: 1, episode: 12 }, anchorSeason: null, nextSeason: null, isWatched: watchedThrough(1, 12) }),
+    ).toEqual({ target: { season: 1, episode: 12 }, need: 1 })
+  })
+
+  it('moves to the next episode of the season', () => {
+    expect(
+      pickUp({ anchor: { season: 1, episode: 12 }, anchorSeason: listing(1, 26), nextSeason: null, isWatched: watchedThrough(1, 12) }),
+    ).toEqual({ target: { season: 1, episode: 13 }, need: null })
+  })
+
+  it("asks for the next season's listing at the end of a season", () => {
+    expect(
+      pickUp({ anchor: { season: 3, episode: 23 }, anchorSeason: listing(3, 23), nextSeason: null, isWatched: watchedThrough(3, 23) }),
+    ).toEqual({ target: { season: 3, episode: 23 }, need: 4 })
+  })
+
+  /** The Watchlist card's fault: after a finale its play button replayed it. */
+  it('crosses into the next season when there is one', () => {
+    expect(
+      pickUp({ anchor: { season: 3, episode: 23 }, anchorSeason: listing(3, 23), nextSeason: listing(4, 14), isWatched: watchedThrough(3, 23) }),
+    ).toEqual({ target: { season: 4, episode: 1 }, need: null })
+  })
+
+  it('stays on the last episode, as a re-watch, when the series is done', () => {
+    expect(
+      pickUp({ anchor: { season: 7, episode: 6 }, anchorSeason: listing(7, 6), nextSeason: [], isWatched: watchedThrough(7, 6) }),
+    ).toEqual({ target: { season: 7, episode: 6 }, need: null })
+  })
+
+  it('takes a known season count over a listing it does not need', () => {
+    expect(
+      pickUp({ anchor: { season: 3, episode: 23 }, anchorSeason: listing(3, 23), nextSeason: null, seasonCount: 9, isWatched: watchedThrough(3, 23) }),
+    ).toEqual({ target: { season: 4, episode: 1 }, need: null })
   })
 })

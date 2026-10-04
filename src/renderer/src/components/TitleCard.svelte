@@ -25,6 +25,7 @@
   import type { MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
   import { removeFromWatchlist } from '../lib/undo'
+  import { settlePickUp } from '../lib/pickup.svelte'
   import { backdropUrl, logoUrl, posterUrl } from '../lib/images'
   import { year } from '../lib/format'
   import { previewAudio, previewId } from '../lib/preview.svelte'
@@ -156,6 +157,12 @@
      * visible — no expansion, no iframe — for the cards merely passed over.
      */
     void requestTrailer()
+
+    // A series in the library: where it picks up, worked out while the
+    // pointer decides, so the panel names the right episode (Continue
+    // Watching's "Up next").
+    const entry = media.type === 'tv' ? library.watchlistEntry(media) : undefined
+    if (entry) void settlePickUp(entry)
 
     expandTimer = setTimeout(() => {
       expanded = true

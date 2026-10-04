@@ -28,7 +28,7 @@
   import type { CachedPreview, PlayRequest, PreviewPlan, PreviewReport } from '@shared/ipc'
   import { untrack } from 'svelte'
   import { modalIn, modalOut, scrimIn, scrimOut } from '../lib/motion'
-  import { episodeToPlay, resumeTarget, type EpisodeRef } from '@shared/progress'
+  import { episodeToPlay, pickUp, type EpisodeRef } from '@shared/progress'
   import { resumeAnchor } from '@shared/watchlistrank'
   import Score from './Score.svelte'
   import { seasonScore } from '@shared/score'
@@ -395,13 +395,15 @@
    * given any other it falls back to the anchor itself.
    */
   const resumeAt = $derived(
-    resumeTarget({
-      episodes: resumeSeason?.season === anchor.season ? resumeSeason.episodes : [],
-      lastSeason: anchor.season,
-      lastEpisode: anchor.episode,
+    pickUp({
+      anchor,
+      anchorSeason: resumeSeason?.season === anchor.season ? resumeSeason.episodes : null,
+      // The season count says whether a finished season rolls over; the
+      // Watchlist card, without it, asks the next season's listing instead.
+      nextSeason: null,
       seasonCount: detail?.seasonCount ?? 1,
       isWatched: (s, e) => library.isWatched(subject, s, e),
-    }),
+    }).target,
   )
 
   /**
