@@ -14,8 +14,14 @@
       `targetSdk 36` already defaults it on, because that default is a moving
       target and this file is where someone will look for it.
     -->
+    <!--
+      Backup stays on for the library; the sign-in token is left out of it
+      (data_extraction_rules.xml, and backup_rules.xml before Android 12).
+    -->
     <application
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

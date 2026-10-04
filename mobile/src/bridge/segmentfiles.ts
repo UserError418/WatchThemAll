@@ -1,7 +1,12 @@
 /**
  * The phone's files and network for the preview cache (`src/main/segmentstore.ts`).
  *
- * Windows live under the app's own data directory, `preview-cache/`. Their
+ * Windows live under the app's cache directory, `preview-cache/`: copies of
+ * public streams, up to a gigabyte, that Android may reclaim when storage runs
+ * low, that "Clear cache" clears, and that backup leaves out. Through 2.0.11
+ * they lived in the data directory, where none of that applied, and a few
+ * windows pushed the app past Auto Backup's per-app quota, which stops backing
+ * up the library as well. Their
  * bytes are fetched by native code straight into the files (`capture.download`,
  * `CastPlugin.downloadToFile`), with the source's headers, which the WebView
  * could not set, and without passing megabytes over the bridge. The page plays
@@ -17,7 +22,9 @@ import type { CacheFiles } from '@main/segmentstore'
 import { capture } from './cast'
 
 const ROOT = 'preview-cache'
-const DIRECTORY = Directory.Data
+const DIRECTORY = Directory.Cache
+/** Where windows were kept through 2.0.11; emptied once, so the old gigabyte is not stranded there. */
+const LEGACY_DIRECTORY = Directory.Data
 const INDEX = `${ROOT}/index.json`
 
 /** A URL's text with the source's headers, by native code; with `limitBytes`, only its start. */
@@ -50,6 +57,7 @@ function windowIo(dir: string): SaveIo {
 }
 
 export async function phoneCacheFiles(): Promise<CacheFiles> {
+  await Filesystem.rmdir({ path: ROOT, directory: LEGACY_DIRECTORY, recursive: true }).catch(() => {})
   await Filesystem.mkdir({ path: ROOT, directory: DIRECTORY, recursive: true }).catch(() => {})
   // The directory's own address, once: `playlistUrl` has to answer at once.
   const { uri } = await Filesystem.getUri({ path: ROOT, directory: DIRECTORY })

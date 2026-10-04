@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What Android's backup (Android 11 and older) leaves out. See
+  data_extraction_rules.xml for the reasons; the two files say the same.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="CapacitorStorage.xml" />
+</full-backup-content>

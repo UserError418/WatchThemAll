@@ -246,7 +246,7 @@ public class CastPlugin extends Plugin {
      * would triple that in memory for nothing, since the page plays the file
      * from disk (`convertFileSrc`).
      *
-     * `path` is relative to the app's files directory and must stay under
+     * `path` is relative to the app's cache directory and must stay under
      * `preview-cache/`: nothing else there is this method's to write. Resolves
      * with the status, the bytes written and the first bytes (base64), which
      * the TypeScript side reads to tell a segment from an error page.
@@ -259,8 +259,8 @@ public class CastPlugin extends Plugin {
             call.reject("url and path are required");
             return;
         }
-        java.io.File root = new java.io.File(getContext().getFilesDir(), "preview-cache");
-        java.io.File target = new java.io.File(getContext().getFilesDir(), path);
+        java.io.File root = new java.io.File(getContext().getCacheDir(), "preview-cache");
+        java.io.File target = new java.io.File(getContext().getCacheDir(), path);
         try {
             if (!target.getCanonicalPath().startsWith(root.getCanonicalPath() + java.io.File.separator)) {
                 call.reject("path must be under preview-cache/");
