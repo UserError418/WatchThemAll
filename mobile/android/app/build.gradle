@@ -10,7 +10,8 @@ apply plugin: 'com.android.application'
  */
 def wtaPackageJson = new groovy.json.JsonSlurper().parse(file("$rootDir/../../package.json"))
 def wtaVersionName = wtaPackageJson.version
-def wtaVersionCode = wtaVersionName.tokenize('.').withIndex().sum { part, index ->
+// A pre-release (2.0.13-alpha.1) counts as its release, so the release installs over it.
+def wtaVersionCode = wtaVersionName.replaceAll(/-.*$/, '').tokenize('.').withIndex().sum { part, index ->
     part.toInteger() * (100 ** (2 - index))
 } as int
 

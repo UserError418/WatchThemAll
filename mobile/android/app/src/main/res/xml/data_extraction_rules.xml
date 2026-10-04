@@ -14,14 +14,22 @@
   backup exists. Left out, a restored phone asks to pair again; the
   catalogue is fetched again.
 
+  Downloads (files/downloads/ and downloads.json) are left out: films of
+  gigabytes would blow the backup quota and stop the library being backed
+  up at all, and they are a copy of a stream, fetched again on demand.
+
   The preview cache is not listed because it is not backed up anyway: it
   lives in the cache directory, which backup never includes.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="CapacitorStorage.xml" />
+        <exclude domain="file" path="downloads/" />
+        <exclude domain="file" path="downloads.json" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="CapacitorStorage.xml" />
+        <exclude domain="file" path="downloads/" />
+        <exclude domain="file" path="downloads.json" />
     </device-transfer>
 </data-extraction-rules>

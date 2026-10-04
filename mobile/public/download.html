@@ -1,0 +1,25 @@
+<!doctype html>
+<!--
+  The page a download plays in on the phone (mobile/src/bridge/downloads.ts):
+  our own <video> of the download's local playlist, which the WebView plays as
+  HLS by itself. The player loads it in the surface like a source's page, so
+  the film relay, our controls, resume and auto-next work unchanged. The
+  desktop serves the same page from its local server (localserver.ts).
+
+  `src` must be a file of this app's own (`/_capacitor_file_/`): the page is
+  never a player for anything else.
+-->
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloaded</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+</style>
+</head><body>
+<video autoplay playsinline preload="auto"></video>
+<script>
+  const src = new URLSearchParams(location.search).get('src') || ''
+  if (src.startsWith(location.origin + '/_capacitor_file_/')) document.querySelector('video').src = src
+</script>
+</body></html>

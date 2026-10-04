@@ -28,7 +28,7 @@ const LEGACY_DIRECTORY = Directory.Data
 const INDEX = `${ROOT}/index.json`
 
 /** A URL's text with the source's headers, by native code; with `limitBytes`, only its start. */
-async function fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null> {
+export async function fetchText(url: string, headers: Record<string, string>, limitBytes?: number): Promise<{ status: number; body: string } | null> {
   try {
     const response = await capture.text(url, headers, limitBytes)
     return { status: response.status, body: response.body }

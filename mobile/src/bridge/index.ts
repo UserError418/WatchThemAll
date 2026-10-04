@@ -55,6 +55,7 @@ import type {
   TitleProviderState,
   TitleRef,
   WtaApi,
+  DownloadsStatus,
   PlayerOverlayConfig,
   WtaPlayerApi,
 } from '@shared/ipc'
@@ -123,6 +124,9 @@ import {
 import { capture, createCastBridge, type Candidate } from './cast'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
+import { createPhoneDownloads, downloadedProvider } from './downloads'
+import type { DownloadManager } from '@shared/downloads/manager'
+import { DOWNLOADED_SOURCE_ID, DOWNLOADED_SOURCE_NAME, isDownloadedSource } from '@shared/downloads/types'
 import { App as CapacitorApp } from '@capacitor/app'
 import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { Browser } from '@capacitor/browser'
@@ -247,6 +251,7 @@ export async function createBridge(): Promise<WtaApi> {
   const playerPointerTop = new Signal<boolean>()
   const providerScan = new Signal<ProviderScanProgress>()
   const syncStatus = new Signal<SyncStatus>()
+  const downloadsStatus = new Signal<DownloadsStatus>()
 
   /**
    * Sync, over the same shared engine the desktop uses.
@@ -900,6 +905,37 @@ export async function createBridge(): Promise<WtaApi> {
     .then((store) => (segmentStore = store))
     .catch((error: unknown) => console.log(`[cache] unavailable: ${String(error)}`))
 
+  /**
+   * Downloads (`./downloads.ts` on the shared core). Null until loaded, and
+   * for good if they cannot be: every download control is then left out.
+   */
+  let downloads: { manager: DownloadManager; playUrl: (id: string) => string } | null = null
+  const downloadsReady = createPhoneDownloads({
+    // As Resume would choose: the one picked by hand, then the Automatic order.
+    sources: (subject, preferredProviderId) =>
+      buildPlayUrl(automaticOrderFor(subject).providers, { ...subject, providerId: preferredProviderId })?.candidates.map((c) => ({
+        id: c.provider.id,
+        name: c.provider.name,
+      })) ?? [],
+    sourceUrl: (providerId, subject) => {
+      const provider = allProviders().find((p) => p.id === providerId)
+      return provider ? renderTemplate(provider, subject) : null
+    },
+    publish: (status) => downloadsStatus.emit(status),
+  })
+    .then((ready) => (downloads = ready))
+    .catch((error: unknown) => {
+      console.log(`[downloads] unavailable: ${String(error)}`)
+      return null
+    })
+
+  /** The episode's finished download as the player's first candidate; null when there is none. */
+  const downloadedCandidate = (req: PlayRequest): PlayCandidate | null => {
+    const found = downloads?.manager.playable({ tmdbId: req.tmdbId, type: req.type, season: req.season ?? null, episode: req.episode ?? null })
+    if (!downloads || !found) return null
+    return { provider: downloadedProvider(DOWNLOADED_SOURCE_ID, DOWNLOADED_SOURCE_NAME), url: downloads.playUrl(found.id) }
+  }
+
   /** How long a preview's plan waits for the window the player is saving; the source would take longer to start. */
   const PLAN_WAITS_FOR_SAVE_MS = 5_000
 
@@ -918,7 +954,8 @@ export async function createBridge(): Promise<WtaApi> {
   /** In the background, one at a time; nothing waits for it. The frames' requests are one buffer, newest first. */
   const keepStreamWindow = (req: PlayRequest, providerId: string | null, from: { seconds: number; duration: number }): void => {
     const store = segmentStore
-    if (store === null || providerId === null) return
+    // A download is on the device already; a window of it would be a copy of a copy.
+    if (store === null || providerId === null || isDownloadedSource(providerId)) return
     void store.save(windowWhere(req, providerId), capture.list().catch(() => []), from, req.runtimeMinutes ?? null, saveNames(req, providerId))
   }
   /**
@@ -1185,7 +1222,8 @@ export async function createBridge(): Promise<WtaApi> {
 
   const recordPlay = (current: { req: PlayRequest; candidates: PlayCandidate[]; index: number }, filmAt: number): void => {
     const providerId = current.candidates[current.index]?.provider.id
-    if (!progress || providerId === undefined) return
+    // Never for a download: Resume's source rule reads these results.
+    if (!progress || providerId === undefined || isDownloadedSource(providerId)) return
     const at = Date.now()
     const ms = filmAt - progress.candidateShownAt
     const where = { device: testResults.device(), titleKey: titleKey(current.req), episode: episodeOf(current.req), providerId }
@@ -1206,7 +1244,8 @@ export async function createBridge(): Promise<WtaApi> {
   }
 
   const settleOutcome = (req: PlayRequest, providerId: string, switching: boolean): void => {
-    if (!progress) return
+    // A download is not a source: counting it would rank one that does not exist.
+    if (!progress || isDownloadedSource(providerId)) return
     const shownMs = Date.now() - progress.candidateShownAt
 
     // Proof, not inference: the film element was seen playing (`noteFilmPlaying`).
@@ -1459,7 +1498,9 @@ export async function createBridge(): Promise<WtaApi> {
       // The episode being stepped to has its own stored position.
       resumeOfferFor(store.read().resumePoints, req),
     )
-    if (!selection) return
+    const downloaded = downloadedCandidate(req)
+    const candidates = [...(downloaded ? [downloaded] : []), ...(selection?.candidates ?? [])]
+    if (candidates.length === 0) return
 
     // Settle the episode being left while `session.req` still names it. After
     // the line below, its time and its position would be credited to the
@@ -1467,7 +1508,7 @@ export async function createBridge(): Promise<WtaApi> {
     leaveCandidate(false)
     settleProgress(session.req)
 
-    session = { req, candidates: selection.candidates, index: 0 }
+    session = { req, candidates, index: 0 }
     if (progress) {
       progress.reading = null
       progress.namedEpisode = null
@@ -2041,7 +2082,13 @@ export async function createBridge(): Promise<WtaApi> {
     watchlist: () => store.read().watchlist,
     tested: (key) => kindTested(testResults.sources(), 'phone', key, enabledProviders().map((p) => p.id)),
     playing: () =>
-      session && !onTv && (carry === null || carry.done) ? { tmdbId: session.req.tmdbId, type: session.req.type } : null,
+      session && !onTv && (carry === null || carry.done)
+        ? {
+            tmdbId: session.req.tmdbId,
+            type: session.req.type,
+            download: isDownloadedSource(session.candidates[session.index]?.provider.id),
+          }
+        : null,
     busy: () => scanRunner.busy(),
     log: (line) => console.log(line),
     run: async (entry, mode) => {
@@ -2262,11 +2309,16 @@ export async function createBridge(): Promise<WtaApi> {
       // The other device may have played this moments ago; its place is worth
       // up to a second and a half of waiting. See `PositionsChannel.freshen`.
       await sync.freshenPositions()
-      const selection = buildPlayUrl(
+      const built = buildPlayUrl(
         enabled,
         req,
         resumeOfferFor(store.read().resumePoints, req),
       )
+      // A finished download plays first, and plays with no source enabled.
+      await downloadsReady
+      const downloaded = downloadedCandidate(req)
+      const candidates = [...(downloaded ? [downloaded] : []), ...(built?.candidates ?? [])]
+      const selection = candidates[0] ? { ...candidates[0], candidates } : null
       if (!selection) {
         return { ok: false, error: 'No enabled provider can play this' }
       }
@@ -2444,18 +2496,14 @@ export async function createBridge(): Promise<WtaApi> {
      * relay obeys. It is not the player's surface, so the player's controls
      * never mount over it.
      */
-    /**
-     * Downloads are desktop-only until the phone's native downloader is built
-     * on the shared core (`shared/downloads/`, its `DownloadPlatform`). Null
-     * status: the renderer then offers no download anywhere.
-     */
+    /** Downloads, on the shared core (`./downloads.ts`). A null status leaves every download control out. */
     downloads: {
-      status: async () => null,
-      start: async () => ({ ok: false, error: 'Downloads are not on the phone yet' }),
-      pause: async () => {},
-      resume: async () => {},
-      remove: async () => {},
-      setQuality: async () => {},
+      status: async () => (await downloadsReady)?.manager.status() ?? null,
+      start: async (request) => (await downloadsReady)?.manager.start(request) ?? { ok: false, error: 'Downloads are unavailable on this phone' },
+      pause: async (id) => void (await (await downloadsReady)?.manager.pause(id)),
+      resume: async (id) => void (await (await downloadsReady)?.manager.resume(id)),
+      remove: async (id) => void (await (await downloadsReady)?.manager.remove(id)),
+      setQuality: async (quality) => void (await (await downloadsReady)?.manager.setQuality(quality)),
     },
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
@@ -2620,7 +2668,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
       watchlistTest: () => () => {},
-      downloads: () => () => {},
+      downloads: (cb) => downloadsStatus.subscribe(cb),
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),
     },

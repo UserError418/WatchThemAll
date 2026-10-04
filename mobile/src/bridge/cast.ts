@@ -132,6 +132,14 @@ export const capture = {
     for (let i = 0; i < binary.length; i++) head[i] = binary.charCodeAt(i)
     return { status: result.status, bytes: result.bytes, head }
   },
+  /** A small URL's bytes (a key, an init segment, a poster), with a captured request's headers replayed; for downloads. */
+  async bytes(url: string, headers: Record<string, string>, limitBytes: number): Promise<{ status: number; bytes: Uint8Array }> {
+    const response = await Cast.fetchText({ url, headers: replayable(headers), limitBytes, encoding: 'base64' })
+    const binary = atob(response.body)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return { status: response.status, bytes }
+  },
   /**
    * Fetch the start of one captured request, replaying its headers.
    *

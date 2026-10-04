@@ -5,4 +5,6 @@
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="CapacitorStorage.xml" />
+    <exclude domain="file" path="downloads/" />
+    <exclude domain="file" path="downloads.json" />
 </full-backup-content>
