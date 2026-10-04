@@ -155,6 +155,13 @@ async function findFile(request: DriveRequest, accessToken: string, name: string
     q: `name = '${name}' and trashed = false`,
     fields: 'files(id,md5Checksum)',
     pageSize: '1',
+    // The oldest file of that name, so that every device settles on the same
+    // one if there are ever two: two first syncs at once, or a listing that
+    // did not yet show a file created seconds before. Without an order Drive
+    // promises none, and each device could keep syncing with a different copy
+    // while both said "synced". Merging any others into that one and moving
+    // them to the trash would go here; until then they are only ignored.
+    orderBy: 'createdTime',
   })
   const response = await request(accessToken, `${FILES_URL}?${query}`)
   const body = (await response.json()) as { files?: Partial<DriveFile>[] }
