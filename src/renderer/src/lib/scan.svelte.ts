@@ -63,6 +63,11 @@ class ProviderScanState {
    */
   listen(): void {
     window.wta.on.providerScan((progress: ProviderScanProgress) => {
+      // Follow the run that is speaking. Runs the viewer did not start (a
+      // first watch's, an addition's) speak here too, and with the subject
+      // left at the title last tested by hand, their verdicts showed as
+      // that title's.
+      if (progress.title) this.subject = progress.title
       this.verdicts = progress.verdicts
       this.timings = progress.timings
       this.qualities = progress.qualities

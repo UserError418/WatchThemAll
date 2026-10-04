@@ -277,6 +277,11 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     const publish = (finished: boolean): void => {
       options.onProgress({
         titleKey,
+        title: { type: request.type, imdbId: request.imdbId || null, tmdbId: request.tmdbId },
+        episode:
+          request.type === 'tv' && request.season != null && request.episode != null
+            ? { season: request.season, episode: request.episode }
+            : null,
         testing: [...testing.values()],
         done: Object.keys(verdicts).length,
         total,

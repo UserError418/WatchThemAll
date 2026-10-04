@@ -80,6 +80,7 @@ import {
   titleKey,
 } from '@main/outcomes'
 import type { Outcome } from '@main/outcomes'
+import { progressIsAbout } from '@shared/scanprogress'
 import {
   castResult,
   everyRow,
@@ -2084,7 +2085,13 @@ export async function createBridge(): Promise<WtaApi> {
     season: (tmdbId, season) => tmdb.season(tmdbId, season),
     scan: (media, episode) => runProviderScan(media, episode),
     cancelScan: async () => scanRunner.cancel(),
-    subscribeScan: (cb) => providerScan.subscribe(cb),
+    // Only runs about what is playing, as main does for the desktop's chrome
+    // (`progressIsAbout`): an automatic test of another title, or of the
+    // episode before a step, painted its verdicts onto this source list.
+    subscribeScan: (cb) =>
+      providerScan.subscribe((progress) => {
+        if (session && progressIsAbout(progress, titleKey(session.req), episodeOf(session.req))) cb(progress)
+      }),
     outcomes: async (media, episode) => providerStateFor(media, episode),
     overlay: overlayHub.chrome,
     /**

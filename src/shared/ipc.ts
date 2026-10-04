@@ -574,6 +574,13 @@ export interface ScanInFlight {
 export interface ProviderScanProgress {
   titleKey: string
   /**
+   * The title under test, in the parts the renderer holds (it cannot build a
+   * `titleKey`). Lets the app window's scan state follow the run it is
+   * showing: an automatic test of another title used to paint its verdicts
+   * onto the list of the title last tested by hand (`scan.svelte.ts`).
+   */
+  title?: TitleRef
+  /**
    * The episode under test, or null for a film. Absent where the sender does
    * not say (the phone's bridge): "this title, episode unknown". Results are
    * per episode, so the player's source list shows a run only for the
