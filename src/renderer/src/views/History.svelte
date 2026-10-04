@@ -24,6 +24,7 @@
    */
   import type { HistoryEntry, MediaSummary } from '@shared/types'
   import { library } from '../lib/library.svelte'
+  import { clearHistory, removeHistoryEntry } from '../lib/undo'
   import { posterUrl } from '../lib/images'
   import { episodeCode } from '../lib/format'
   import {
@@ -185,7 +186,7 @@
   }
 
   function clearAll(): void {
-    library.clearHistory()
+    clearHistory()
     confirmingClear = false
     pickedDay = null
   }
@@ -527,7 +528,7 @@
 
                   <button
                     class="remove"
-                    onclick={() => library.removeHistoryEntry(item.id)}
+                    onclick={() => removeHistoryEntry(item)}
                     aria-label="Remove {item.title} from history"
                     title="Remove">✕</button
                   >

@@ -4,7 +4,7 @@
  * One place for the wording and the undo, so every surface that offers the
  * same action (the detail view, the cards, the Watchlist) says the same thing.
  */
-import type { Episode, MediaDetail, MediaSummary } from '@shared/types'
+import type { Episode, HistoryEntry, MediaDetail, MediaSummary } from '@shared/types'
 import { library, type TitleRef } from './library.svelte'
 import { toast } from './toast.svelte'
 
@@ -34,6 +34,18 @@ export function unmarkSeen(media: MediaSummary | MediaDetail, season: number | n
 export function removeWatched(ids: readonly string[], what: string): void {
   const undo = library.removeWatchedEntries(ids)
   toast.show(`Removed ${what} from Watched`, { label: 'Undo', run: undo })
+}
+
+/** Empty History, with an Undo; the confirmation before it stays. */
+export function clearHistory(): void {
+  const undo = library.clearHistory()
+  toast.show('Cleared your history', { label: 'Undo', run: undo })
+}
+
+/** Remove one row from History, with an Undo. */
+export function removeHistoryEntry(entry: Pick<HistoryEntry, 'id' | 'title'>): void {
+  const undo = library.removeHistoryEntry(entry.id)
+  toast.show(`Removed ${entry.title} from your history`, { label: 'Undo', run: undo })
 }
 
 /** Take a title off the watchlist, with an Undo that puts it back where it stood. */

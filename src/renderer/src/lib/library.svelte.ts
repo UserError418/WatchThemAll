@@ -827,14 +827,33 @@ class Library {
     }
   }
 
-  removeHistoryEntry(id: string): void {
+  /** Remove one play from History; returns the undo, which puts it back. */
+  removeHistoryEntry(id: string): () => void {
+    const removed = this.history.find((h) => h.id === id)
+    if (!removed) return () => {}
     this.history = this.history.filter((h) => h.id !== id)
     void this.persist({ history: this.history })
+    return () => this.restoreHistory([removed])
   }
 
-  clearHistory(): void {
+  /** Empty History; returns the undo, which puts every row back. */
+  clearHistory(): () => void {
+    const cleared = this.history
     this.history = []
     void this.persist({ history: [] })
+    return () => this.restoreHistory(cleared)
+  }
+
+  /**
+   * Put removed rows back, under their own ids. The store reads a record that
+   * comes back after its deletion as an un-delete, and stamps it, so the undo
+   * syncs like any other change.
+   */
+  private restoreHistory(rows: HistoryEntry[]): void {
+    const back = rows.filter((row) => !this.history.some((kept) => kept.id === row.id))
+    if (back.length === 0) return
+    this.history = newestFirst([...back, ...this.history]).slice(0, Library.HISTORY_LIMIT)
+    void this.persist({ history: this.history })
   }
 
   /* ── Providers ──────────────────────────────────────────────────────── */

@@ -39,3 +39,27 @@ describe('watch time in the history', () => {
     expect(library.history[0]).toMatchObject({ playedMs: 45_000, completed: true })
   })
 })
+
+describe('undoing a removal', () => {
+  it('puts every row back after "Clear all"', () => {
+    library.recordWatch(show, 1, 1)
+    library.recordWatch(show, 1, 2)
+
+    const undo = library.clearHistory()
+    expect(library.history).toHaveLength(0)
+
+    undo()
+    expect(library.history.map((h) => h.episode)).toEqual([2, 1])
+  })
+
+  it('puts one removed row back where it was in time', () => {
+    library.recordWatch(show, 1, 1)
+    library.recordWatch(show, 1, 2)
+    const removed = library.history[1]!
+
+    library.removeHistoryEntry(removed.id)()
+
+    expect(library.history.map((h) => h.id)).toContain(removed.id)
+    expect(library.history).toHaveLength(2)
+  })
+})
