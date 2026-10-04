@@ -492,6 +492,11 @@
     }
   }
 
+  /** How many of this title's episodes (or the film) are downloaded on this device. */
+  const downloadedHere = $derived(
+    downloads.list.filter((d) => d.state === 'done' && d.subject.tmdbId === subject.tmdbId && d.subject.type === subject.type).length,
+  )
+
   /** The main Download button's episode: the one Resume would play (null for a film). */
   const resumeDownload = $derived(detail ? downloadRequestFor(resumeEpisode()) : null)
 
@@ -1100,6 +1105,12 @@
           {#if detail?.genres.length}
             <p class="genres">{detail.genres.join(' · ')}</p>
           {/if}
+          {#if downloadedHere > 0}
+            <!-- The title's badge: on this device, playable with no connection. -->
+            <p class="downloaded-badge">
+              ↓ {subject.type === 'movie' ? 'Downloaded' : `${downloadedHere} ${downloadedHere === 1 ? 'episode' : 'episodes'} downloaded`}
+            </p>
+          {/if}
 
           <div class="action-bar">
             <div class="actions">
@@ -1467,6 +1478,18 @@
     margin: 0 0 var(--space-2);
     font-size: var(--text-sm);
     color: var(--text-secondary);
+  }
+
+  .downloaded-badge {
+    display: inline-flex;
+    align-self: flex-start;
+    margin: 0 0 var(--space-2);
+    padding: 2px var(--space-3);
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+    color: var(--success);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-emphasis);
   }
 
   /*

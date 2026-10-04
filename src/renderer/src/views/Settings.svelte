@@ -358,7 +358,7 @@
           <dd>Search films and series</dd>
           <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt>
           <dd>Jump to a tab or a title on your lists, or run a command</dd>
-          <dt><kbd>1</kbd> – <kbd>6</kbd></dt>
+          <dt><kbd>1</kbd> – <kbd>{downloads.available ? 7 : 6}</kbd></dt>
           <dd>Switch tabs, from Browse to Settings</dd>
           <dt><kbd>Esc</kbd></dt>
           <dd>Close whatever is open — a title, a menu, the player</dd>
