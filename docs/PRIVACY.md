@@ -51,7 +51,8 @@ With sync on:
 Access and refresh tokens are stored on your device and transmitted only to
 Google. On desktop they go in the operating system's credential store — Keychain,
 libsecret or DPAPI. On Android they are kept in the app's private storage, the
-same boundary as the library file itself.
+same boundary as the library file itself, and are left out of Android's device
+backup, so they never leave the phone that signed in.
 
 **Turning it off:** disconnect the account in Settings, which deletes the stored
 tokens. Revoke access at
@@ -103,7 +104,9 @@ no device identifier.
 the application. Your device connects to them directly, exactly as a browser
 would, and they see what any website you visit would see. WatchThemAll does not
 host, stream or proxy any video and has no relationship with these sites. Their
-own policies apply.
+own policies apply. Their pages get none of your device's permissions: the
+application refuses every request they make for the microphone, the camera, your
+location, notifications or the clipboard.
 
 ## What is never collected
 
