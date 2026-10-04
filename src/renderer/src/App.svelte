@@ -14,6 +14,7 @@
   import { toast } from './lib/toast.svelte'
   import { keyBelongsToTarget } from './lib/keys'
   import { modalLayerOpen } from './lib/modal'
+  import { exportCatalogueFile, importCatalogueFile } from './lib/catalogue'
   import Browse from './views/Browse.svelte'
   import Search from './views/Search.svelte'
   import Watchlist from './views/Watchlist.svelte'
@@ -185,10 +186,12 @@
       window.wta.on.menuAction((action) => {
         if (action === 'focus-search') {
           paletteOpen = true
-        } else if (action === 'export') {
-          void window.wta.data.export()
-        } else if (action === 'import') {
-          void window.wta.data.import(null).then(() => library.reload())
+        } else if (action === 'export' || action === 'import') {
+          // The menu has no note line of its own, so the toast says what happened.
+          const run = action === 'export' ? exportCatalogueFile : importCatalogueFile
+          void run().then((note) => {
+            if (note) toast.show(note)
+          })
         }
       }),
       window.wta.on.storeChanged((keys) => void library.reload(keys)),

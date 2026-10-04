@@ -32,6 +32,7 @@
   import MalImportDialog from '../components/MalImportDialog.svelte'
   import PageHeader from '../components/PageHeader.svelte'
   import { library } from '../lib/library.svelte'
+  import { exportCatalogueFile, importCatalogueFile } from '../lib/catalogue'
   import type { MalPreview, PreviewCacheStatus, WatchlistTestStatus } from '@shared/ipc'
   import { clock, episodeCode } from '../lib/format'
   import type { SourceSortKey } from '@shared/types'
@@ -43,32 +44,13 @@
 
   async function exportData(): Promise<void> {
     note = null
-    const result = (await window.wta.data.export()) as {
-      ok?: boolean
-      cancelled?: boolean
-      error?: string
-    }
-    if (result?.cancelled) return
-    note = result?.ok ? 'Catalogue exported.' : (result?.error ?? 'Export failed.')
+    note = await exportCatalogueFile()
   }
 
   async function importCatalogue(): Promise<void> {
     choosingImport = false
     note = null
-    const result = (await window.wta.data.import(null)) as {
-      ok?: boolean
-      cancelled?: boolean
-      error?: string
-    }
-    if (result?.cancelled) return
-    if (!result?.ok) {
-      note = result?.error ?? 'Import failed.'
-      return
-    }
-    // Main merged into the stored document; the in-memory copy is now stale and
-    // would keep showing the pre-import catalogue.
-    await library.reload()
-    note = 'Catalogue imported.'
+    note = await importCatalogueFile()
   }
 
   /** What each ordering key means, in the words the Settings card uses. */
