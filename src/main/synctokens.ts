@@ -21,7 +21,7 @@
  */
 
 import { app, safeStorage } from 'electron'
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { StoredCredentials } from '@shared/sync/types'
@@ -65,10 +65,16 @@ export class TokenStore {
     if (!this.canPersist) return
 
     await mkdir(dirname(this.path), { recursive: true })
-    await writeFile(this.path, safeStorage.encryptString(JSON.stringify(credentials)))
+    // Written beside the file and renamed over it, so a write cut short, or two
+    // racing, can never leave a file that will not decrypt: `read` deletes one
+    // of those, which signs the user out.
+    const pending = `${this.path}.tmp`
+    await writeFile(pending, safeStorage.encryptString(JSON.stringify(credentials)))
     // After the write, not before: `writeFile` creates with the process umask,
-    // so a mode passed to it can be widened by an inherited umask of 0.
-    await chmod(this.path, 0o600)
+    // so a mode passed to it can be widened by an inherited umask of 0. And
+    // before the rename, so the file never sits under its own name readable.
+    await chmod(pending, 0o600)
+    await rename(pending, this.path)
   }
 
   async clear(): Promise<void> {

@@ -40,6 +40,7 @@ import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
 import { RETRY_AFTER_MS, afterFailure } from '@shared/sync/failure'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
+import { singleFlight } from '@shared/sync/singleflight'
 import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import { dualStackFetch } from './net'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
@@ -107,14 +108,14 @@ export function createMobileSync(options: MobileSyncOptions) {
     options.onStatus({ ...state })
   }
 
-  const accessToken = async (): Promise<string> => {
+  /** A new access token, one refresh at a time: see the desktop's `SyncService.refresh`. */
+  const refresh = singleFlight(async (): Promise<string> => {
     const client = oauthClient()
-    if (client === null) throw new Error(NO_CLIENT_REASON)
+    const signedIn = credentials
+    if (client === null || signedIn === null) throw new Error('Not signed in.')
+    const fresh = await refreshAccessToken(client, signedIn.refreshToken, dualStackFetch)
+    // Signed out while the request was out: keep nothing from it.
     if (credentials === null) throw new Error('Not signed in.')
-
-    if (access !== null && !isExpired(access)) return access.accessToken
-
-    const fresh = await refreshAccessToken(client, credentials.refreshToken, dualStackFetch)
     access = fresh
     // A refresh response usually omits the refresh token; keeping the old one
     // unless a new one actually arrives is what stops the app signing itself
@@ -127,6 +128,14 @@ export function createMobileSync(options: MobileSyncOptions) {
     }
     await Preferences.set({ key: TOKEN_KEY, value: JSON.stringify(credentials) })
     return fresh.accessToken
+  })
+
+  const accessToken = async (): Promise<string> => {
+    const client = oauthClient()
+    if (client === null) throw new Error(NO_CLIENT_REASON)
+    if (credentials === null) throw new Error('Not signed in.')
+    if (access !== null && !isExpired(access)) return access.accessToken
+    return refresh()
   }
 
   const currentRunner = (): SyncRunner => {

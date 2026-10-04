@@ -29,6 +29,7 @@ import { createDriveBackend, fetchAccountEmail } from '@shared/sync/drive'
 import { SyncRunner, type SyncHost } from '@shared/sync/engine'
 import { RETRY_AFTER_MS, afterFailure } from '@shared/sync/failure'
 import { createPositionsChannel, type PositionsChannel, type PositionsHost } from '@shared/sync/positions'
+import { singleFlight } from '@shared/sync/singleflight'
 import { createResultsChannel, type ResultsChannel, type ResultsHost } from '@shared/sync/results'
 import type { OAuthTokens, StoredCredentials, SyncStatus } from '@shared/sync/types'
 
@@ -111,8 +112,24 @@ export class SyncService {
     if (this.credentials === null) throw new Error('Not signed in.')
 
     if (this.access !== null && !isExpired(this.access)) return this.access.accessToken
+    return this.refresh()
+  }
 
-    const fresh = await refreshAccessToken(client, this.credentials.refreshToken)
+  /**
+   * A new access token, one refresh at a time (`singleFlight`).
+   *
+   * `syncSoon` starts the library, the positions and the test history
+   * together, and with an expired token (most launches) each used to refresh
+   * it and write the credentials on its own: three requests to Google and
+   * three writes racing for one file.
+   */
+  private readonly refresh = singleFlight(async (): Promise<string> => {
+    const client = oauthClient()
+    const signedIn = this.credentials
+    if (client === null || signedIn === null) throw new Error('Not signed in.')
+    const fresh = await refreshAccessToken(client, signedIn.refreshToken)
+    // Signed out while the request was out: keep nothing from it.
+    if (this.credentials === null) throw new Error('Not signed in.')
     this.access = fresh
     this.credentials = {
       ...this.credentials,
@@ -122,7 +139,7 @@ export class SyncService {
     }
     await this.options.tokens.write(this.credentials)
     return fresh.accessToken
-  }
+  })
 
   private backendRunner(): SyncRunner {
     this.runner ??= new SyncRunner(
