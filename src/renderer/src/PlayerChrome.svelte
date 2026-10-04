@@ -791,9 +791,14 @@
 
   $effect(() =>
     api?.onContext((next) => {
+      // Untracked: the phone's bridge calls this synchronously while
+      // subscribing, so inside this effect, and a tracked read made the effect
+      // depend on the `context` it writes: effect_update_depth_exceeded on
+      // every player open.
+      const previous = untrack(() => context)
       const moved =
-        context !== null &&
-        (context.tmdbId !== next.tmdbId || context.season !== next.season || context.episode !== next.episode)
+        previous !== null &&
+        (previous.tmdbId !== next.tmdbId || previous.season !== next.season || previous.episode !== next.episode)
       if (moved) clearLiveScan()
       context = next
     }),
