@@ -12,6 +12,8 @@
   import { library } from './lib/library.svelte'
   import { previewAudio } from './lib/preview.svelte'
   import { toast } from './lib/toast.svelte'
+  import { keyBelongsToTarget } from './lib/keys'
+  import { modalLayerOpen } from './lib/modal'
   import Browse from './views/Browse.svelte'
   import Search from './views/Search.svelte'
   import Watchlist from './views/Watchlist.svelte'
@@ -315,11 +317,16 @@
       return
     }
 
-    // Anything below is a bare key; not while a modal owns the keyboard.
-    if (paletteOpen) return
-
-    // Digits switch tabs, but only when the user is not typing into something.
-    if (typing || event.ctrlKey || event.metaKey || event.altKey) return
+    /*
+     * Anything below is a bare key: not while a modal overlay owns the
+     * keyboard (the detail view, the palette, the MyAnimeList dialog), and not
+     * on a control that takes keys itself. Only the palette used to count, so
+     * a digit swapped the tab under an open detail view, out of sight, closed
+     * the MyAnimeList dialog with the Settings tab under it, and pressed on a
+     * rating pip switched tabs instead of rating.
+     */
+    if (paletteOpen || modalLayerOpen() || keyBelongsToTarget(target)) return
+    if (event.ctrlKey || event.metaKey || event.altKey) return
     const index = Number(event.key)
     if (index >= 1 && index <= TABS.length) {
       goTo(TABS[index - 1]!.id)

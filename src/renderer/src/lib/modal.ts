@@ -81,6 +81,11 @@ interface Layer extends LayerOptions {
 
 const stack = new LayerStack<Layer>()
 
+/** Whether a modal layer is open: the app's bare-key shortcuts stand down while one is. */
+export function modalLayerOpen(): boolean {
+  return stack.top()?.modal === true
+}
+
 /**
  * How many open layers made each element inert, so that closing one of two
  * stacked modals does not wake the page under the other. Elements that were
