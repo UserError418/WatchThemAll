@@ -12,7 +12,9 @@
    * stretched across a 60vh banner looks exactly as bad as it sounds.
    */
   import type { MediaSummary } from '@shared/types'
+  import { untrack } from 'svelte'
   import { library } from '../lib/library.svelte'
+  import { seriesPickUp, settlePickUp } from '../lib/pickup.svelte'
   import { backdropUrl, posterUrl } from '../lib/images'
   import { countdown, episodeCode } from '../lib/format'
   import { titleFacts } from '../lib/titlefacts.svelte'
@@ -49,6 +51,17 @@
     }
   }
 
+  /** The series part-way through that the billboard offers, when nothing airs soon. */
+  const inProgress = $derived(library.listedWatchlist.find((w) => w.type === 'tv' && w.watchedEpisodes.length > 0))
+
+  // The billboard is often the first thing on screen: fetch the season
+  // listings its pick-up needs, as the Watchlist card does, so it settles
+  // without a visit to the Watchlist first.
+  $effect(() => {
+    const entry = inProgress
+    if (entry) untrack(() => void settlePickUp(entry))
+  })
+
   const subject = $derived.by<Subject | null>(() => {
     // 1. A tracked series with an episode airing soonest.
     const upcoming = library.trackers
@@ -68,15 +81,16 @@
       }
     }
 
-    // 2. Something already in progress.
-    const inProgress = library.listedWatchlist.find(
-      (w) => w.type === 'tv' && w.watchedEpisodes.length > 0,
-    )
+    // 2. Something already in progress, named where the detail view and the
+    // Watchlist card pick it up (`seriesPickUp`). The stored cursor alone can
+    // name an episode already watched, and the billboard said S01E03 while
+    // both of them said S02E01.
     if (inProgress) {
+      const { target } = seriesPickUp(inProgress)
       return {
         media: toMedia(inProgress),
         kicker: 'Continue watching',
-        detail: `Up next: ${episodeCode(inProgress.lastSeason ?? 1, inProgress.lastEpisode ?? 1)}`,
+        detail: `Up next: ${episodeCode(target.season, target.episode)}`,
       }
     }
 
