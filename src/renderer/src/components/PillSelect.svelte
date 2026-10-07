@@ -32,14 +32,37 @@
     value = next
     onchange?.(next)
   }
+
+  let select = $state<HTMLSelectElement | null>(null)
+
+  /**
+   * A press anywhere on the pill opens the menu. A label only focuses its
+   * select, so pressing the words before the choice did nothing but draw the
+   * focus ring: on the phone that was half the pill (seen on the emulator,
+   * 2026-10-07). `showPicker` is Chromium 121+ (Electron and the phone's
+   * WebView both are); without it, focus is the old behaviour.
+   */
+  function openMenu(event: MouseEvent): void {
+    if (select === null || event.target === select) return
+    event.preventDefault()
+    // lib.dom declares `showPicker` on inputs only.
+    const menu = select as HTMLSelectElement & { showPicker(): void }
+    try {
+      menu.showPicker()
+    } catch {
+      select.focus()
+    }
+  }
 </script>
 
-<label class="pill-select" {title}>
+<!-- The click is the pointer's shortcut to the menu; the keyboard reaches the select itself. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+<label class="pill-select" {title} onclick={openMenu}>
   {#if glyph}
     <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d={glyph} /></svg>
   {/if}
   <span class="pill-label">{label}</span>
-  <select {value} onchange={(e) => pick(e.currentTarget.value as T)}>
+  <select bind:this={select} {value} onchange={(e) => pick(e.currentTarget.value as T)}>
     {#each options as option (option.id)}
       <option value={option.id}>{option.label}</option>
     {/each}
