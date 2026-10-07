@@ -71,7 +71,11 @@ export interface DownloadRecord {
   id: string
   subject: DownloadSubject
   state: DownloadState
-  /** The source chosen by hand when it was asked for: tried first, as Resume would. */
+  /**
+   * The source chosen by hand for the title when the download was asked for:
+   * tried after the Downloads tab's preferred source (`DownloadsStatus.preferredSourceId`),
+   * before the Automatic order, as Resume would.
+   */
   preferredProviderId: string | null
   /** The source being tried, or the one the stream came from. */
   source: { id: string; name: string } | null
@@ -109,6 +113,13 @@ export interface DownloadView extends DownloadRecord {
 export interface DownloadsStatus {
   downloads: DownloadView[]
   quality: QualityCap
+  /**
+   * The source every download tries first (the owner, 2026-10-07: the
+   * Downloads tab's dropdown); null for Automatic. When it cannot give the
+   * film, the download carries on through the usual order. Kept on this
+   * device beside the quality cap, never synced.
+   */
+  preferredSourceId: string | null
   /** Bytes all downloads take on disk, finished or not. */
   usedBytes: number
   /** Free space where they are kept; null when the platform cannot say. */

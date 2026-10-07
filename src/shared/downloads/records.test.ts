@@ -17,17 +17,26 @@ const episode = (n: number): DownloadSubject => ({
 const film: DownloadSubject = { ...episode(0), tmdbId: 550, type: 'movie', season: null, episode: null, episodeName: null }
 
 describe('the downloads file', () => {
-  it('round-trips, with the quality cap', () => {
-    const file = { quality: 720 as const, downloads: [newRecord(episode(1), null, 1_000)] }
+  it('round-trips, with the quality cap and the preferred source', () => {
+    const file = { quality: 720 as const, preferredSourceId: 'vidsrc', downloads: [newRecord(episode(1), null, 1_000)] }
     expect(readDownloadsFile(writeDownloadsFile(file))).toEqual(file)
   })
 
   it('keeps only well-formed records from a damaged file', () => {
     const good = newRecord(film, 'vidrock', 5)
-    const text = JSON.stringify({ quality: 'nonsense', downloads: [good, { id: '../etc', state: 'done' }, null, { ...good, state: 'flying' }] })
-    expect(readDownloadsFile(text)).toEqual({ quality: 'best', downloads: [good] })
-    expect(readDownloadsFile('{')).toEqual({ quality: 'best', downloads: [] })
-    expect(readDownloadsFile(null)).toEqual({ quality: 'best', downloads: [] })
+    const text = JSON.stringify({
+      quality: 'nonsense',
+      preferredSourceId: 42,
+      downloads: [good, { id: '../etc', state: 'done' }, null, { ...good, state: 'flying' }],
+    })
+    expect(readDownloadsFile(text)).toEqual({ quality: 'best', preferredSourceId: null, downloads: [good] })
+    expect(readDownloadsFile('{')).toEqual({ quality: 'best', preferredSourceId: null, downloads: [] })
+    expect(readDownloadsFile(null)).toEqual({ quality: 'best', preferredSourceId: null, downloads: [] })
+  })
+
+  it('reads a file from before the preferred source as Automatic', () => {
+    const text = JSON.stringify({ version: 1, quality: 480, downloads: [] })
+    expect(readDownloadsFile(text)).toEqual({ quality: 480, preferredSourceId: null, downloads: [] })
   })
 })
 

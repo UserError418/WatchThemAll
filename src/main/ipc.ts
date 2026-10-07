@@ -400,6 +400,9 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
   ipcMain.handle(CH.downloadsResume, (_e, id: string) => deps.downloads()?.resume(id))
   ipcMain.handle(CH.downloadsRemove, (_e, id: string) => deps.downloads()?.remove(id))
   ipcMain.handle(CH.downloadsSetQuality, (_e, quality: QualityCap) => deps.downloads()?.setQuality(quality))
+  ipcMain.handle(CH.downloadsSetPreferredSource, (_e, providerId: unknown) =>
+    deps.downloads()?.setPreferredSource(typeof providerId === 'string' ? providerId : null),
+  )
   ipcMain.handle(CH.previewRecord, (_e, req: PlayRequest, providerId: string, streamedMs: number, filmSeconds: unknown) => {
     const where = { device: deps.results.device(), titleKey: titleKey(req), episode: episodeOf(req), providerId }
     const at = Date.now()

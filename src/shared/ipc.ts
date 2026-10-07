@@ -154,6 +154,7 @@ export const CH = {
   downloadsResume: 'downloads:resume',
   downloadsRemove: 'downloads:remove',
   downloadsSetQuality: 'downloads:set-quality',
+  downloadsSetPreferredSource: 'downloads:set-preferred-source',
 
   /**
    * Cross-device sync.
@@ -1047,6 +1048,8 @@ export interface WtaApi {
     /** Delete it and its files, finished or not. */
     remove(id: string): Promise<void>
     setQuality(quality: QualityCap): Promise<void>
+    /** The source every download tries first; null for Automatic. See `DownloadsStatus.preferredSourceId`. */
+    setPreferredSource(providerId: string | null): Promise<void>
   }
   providers: {
     list(): Promise<Provider[]>

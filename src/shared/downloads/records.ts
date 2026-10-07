@@ -9,10 +9,12 @@ import { QUALITY_CAPS, type DownloadRecord, type DownloadState, type DownloadSub
 
 export interface DownloadsFile {
   quality: QualityCap
+  /** The source every download tries first; null for Automatic. See `DownloadsStatus.preferredSourceId`. */
+  preferredSourceId: string | null
   downloads: DownloadRecord[]
 }
 
-export const EMPTY_DOWNLOADS: DownloadsFile = { quality: 'best', downloads: [] }
+export const EMPTY_DOWNLOADS: DownloadsFile = { quality: 'best', preferredSourceId: null, downloads: [] }
 
 const STATES: readonly DownloadState[] = ['queued', 'capturing', 'downloading', 'paused', 'failed', 'done']
 
@@ -75,14 +77,20 @@ export function readDownloadsFile(text: string | null): DownloadsFile {
     return { ...EMPTY_DOWNLOADS, downloads: [] }
   }
   if (typeof raw !== 'object' || raw === null) return { ...EMPTY_DOWNLOADS, downloads: [] }
-  const file = raw as { quality?: unknown; downloads?: unknown }
+  const file = raw as { quality?: unknown; preferredSourceId?: unknown; downloads?: unknown }
   const quality = QUALITY_CAPS.includes(file.quality as QualityCap) ? (file.quality as QualityCap) : 'best'
+  // Absent in a file from before 2.0.17: Automatic, as it was.
+  const preferredSourceId = typeof file.preferredSourceId === 'string' ? file.preferredSourceId : null
   const downloads = Array.isArray(file.downloads) ? file.downloads.filter(isRecord) : []
-  return { quality, downloads }
+  return { quality, preferredSourceId, downloads }
 }
 
 export function writeDownloadsFile(file: DownloadsFile): string {
-  return JSON.stringify({ version: 1, quality: file.quality, downloads: file.downloads }, null, 1)
+  return JSON.stringify(
+    { version: 1, quality: file.quality, preferredSourceId: file.preferredSourceId, downloads: file.downloads },
+    null,
+    1,
+  )
 }
 
 /** A folder name for a new download: unique, and safe in a URL path and on any file system. */

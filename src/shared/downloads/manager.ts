@@ -1,8 +1,9 @@
 /**
- * The downloads queue: one download at a time, each from the source Resume
- * would choose, the next source when one cannot give the film, pause, resume
- * and delete, and carrying on after a restart. The same on both platforms;
- * what differs is `DownloadPlatform`.
+ * The downloads queue: one download at a time, each from the preferred
+ * download source or else the one Resume would choose (`sourceOrder`), the
+ * next source when one cannot give the film, pause, resume and delete, and
+ * carrying on after a restart. The same on both platforms; what differs is
+ * `DownloadPlatform`.
  *
  * ## One download's life
  *
@@ -28,6 +29,7 @@ import { planDownload, readPlan, samePlan, PLAN_FILE, PLAYLIST_FILE, type Downlo
 import {
   afterRestart,
   downloadOf,
+  EMPTY_DOWNLOADS,
   newRecord,
   nextInQueue,
   playableDownload,
@@ -54,6 +56,7 @@ export interface DownloadPlatform {
   /**
    * The sources to try, best first, as Resume would choose them: the one
    * chosen by hand for the title, then the best tested. Enabled ones only.
+   * The preferred download source goes in front of these (`sourceOrder`).
    */
   sources(subject: DownloadSubject, preferredProviderId: string | null): Promise<DownloadSource[]>
   /**
@@ -104,8 +107,38 @@ export function describeBytes(bytes: number): string {
 
 export type StartResult = { ok: true; id: string } | { ok: false; error: string }
 
+/**
+ * The order a download tries its sources in:
+ *
+ * 1. **The source of the stream on disk**, when part of one is there. A fresh
+ *    capture of it is the likeliest to be the same stream, and only the same
+ *    stream's segments join the ones kept; any other would start the film over.
+ * 2. **The preferred download source** (the owner, 2026-10-07: the Downloads
+ *    tab's dropdown), always tried, even where the source tests say it does
+ *    not play this title: the capture is the real test, and "preferred" that
+ *    gives way to a stale test result would not mean anything.
+ * 3. **The platform's order**, unchanged: the source chosen by hand for the
+ *    title, then Automatic's.
+ *
+ * Nothing outside `chain` is tried. It holds the enabled providers that can
+ * serve this title, so a preferred source switched off since is passed over:
+ * a provider switched off in the Providers panel is never reached.
+ */
+export function sourceOrder(
+  chain: readonly DownloadSource[],
+  preferredSourceId: string | null,
+  onDisk: DownloadSource | null,
+): DownloadSource[] {
+  const first: DownloadSource[] = []
+  for (const id of [onDisk?.id, preferredSourceId]) {
+    const source = chain.find((s) => s.id === id)
+    if (source !== undefined && !first.includes(source)) first.push(source)
+  }
+  return [...first, ...chain.filter((s) => !first.includes(s))]
+}
+
 export class DownloadManager {
-  private file: DownloadsFile = { quality: 'best', downloads: [] }
+  private file: DownloadsFile = { ...EMPTY_DOWNLOADS, downloads: [] }
   private active: { id: string; controller: AbortController; run: Promise<void> } | null = null
   private loaded = false
   private free: number | null = null
@@ -152,7 +185,13 @@ export class DownloadManager {
     const downloads = [...this.file.downloads]
       .sort((a, b) => b.createdAt - a.createdAt)
       .map((r) => ({ ...r, posterUrl: r.poster === null ? null : this.platform.posterUrl(r.id, r.poster) }))
-    return { downloads, quality: this.file.quality, usedBytes: usedBytes(this.file.downloads), freeBytes: this.free }
+    return {
+      downloads,
+      quality: this.file.quality,
+      preferredSourceId: this.file.preferredSourceId,
+      usedBytes: usedBytes(this.file.downloads),
+      freeBytes: this.free,
+    }
   }
 
   /** The download of this episode (or film), whatever its state. */
@@ -223,6 +262,16 @@ export class DownloadManager {
   /** The Settings choice. Applies to downloads planned from now on. */
   async setQuality(quality: QualityCap): Promise<void> {
     this.file.quality = quality
+    await this.changed('state')
+  }
+
+  /**
+   * The Downloads tab's choice; null for Automatic. Applies whenever a
+   * download next chooses a source: one starting, and one resumed with
+   * nothing on disk. A download part-way through keeps its own stream.
+   */
+  async setPreferredSource(providerId: string | null): Promise<void> {
+    this.file.preferredSourceId = providerId
     await this.changed('state')
   }
 
@@ -304,9 +353,8 @@ export class DownloadManager {
     let plan: DownloadPlan | null = readPlan(await files.readText(PLAN_FILE))
     // A plan from an earlier run: its URLs first, since they often still open.
     let useKept = plan !== null
-    const sources = await this.platform.sources(subject, first.preferredProviderId)
-    const kept = first.source
-    const pending = kept && sources.some((s) => s.id === kept.id) ? [kept, ...sources.filter((s) => s.id !== kept.id)] : [...sources]
+    const chain = await this.platform.sources(subject, first.preferredProviderId)
+    const pending = sourceOrder(chain, this.file.preferredSourceId, plan !== null ? first.source : null)
     if (pending.length === 0 && !useKept) return this.fail(id, 'No enabled source can play this')
     let recaptures = 0
 
@@ -410,6 +458,16 @@ export class DownloadManager {
             // stream, not the network (measured: a proxy serving the segments
             // mangled into text). The next source may well give the film.
             this.patch(id, { refusals: [...this.record(id)!.refusals, { providerId: source.id, reason: `${source.name}: ${outcome.reason}` }] })
+            continue
+          }
+          if (!captured && !progressed && !noRoom) {
+            // The URLs kept from an earlier run gave nothing: a stream its
+            // source was refused for (its plan stays on disk when every source
+            // after it refuses too), or one no longer served. Failing here
+            // failed every resume the same way, without a capture (found
+            // 2026-10-07), so capture afresh. `plan` stays as it is, so a
+            // fresh capture of the same stream keeps the segments on disk.
+            this.platform.log(`${id}: the kept stream gave nothing (${outcome.reason}), capturing again`)
             continue
           }
           return this.fail(id, outcome.reason)

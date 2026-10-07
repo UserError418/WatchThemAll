@@ -2526,6 +2526,7 @@ export async function createBridge(): Promise<WtaApi> {
       resume: async (id) => void (await (await downloadsReady)?.manager.resume(id)),
       remove: async (id) => void (await (await downloadsReady)?.manager.remove(id)),
       setQuality: async (quality) => void (await (await downloadsReady)?.manager.setQuality(quality)),
+      setPreferredSource: async (providerId) => void (await (await downloadsReady)?.manager.setPreferredSource(providerId)),
     },
     preview: {
       plan: async (req: PlayRequest): Promise<PreviewPlan | null> => {
