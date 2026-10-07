@@ -269,7 +269,7 @@
       </section>
 
       {#if downloads.status}
-        <!-- Where the platform has downloads; the phone has none yet. -->
+        <!-- Where the platform has downloads: both do since 2.0.13, but a phone whose files could not open has none. -->
         <section class="card">
           <h2>Downloads</h2>
           <label class="field">

@@ -33,6 +33,31 @@ export function qualityLabel(height: number | null): string | null {
 
 export const QUALITY_LABELS: Record<string, string> = { best: 'Best available', 1080: 'Up to 1080p', 720: 'Up to 720p', 480: 'Up to 480p' }
 
+/** The preferred-source menu's id for Automatic: a select's values are strings. */
+export const AUTOMATIC_SOURCE = ''
+
+/**
+ * The Downloads tab's preferred-source menu: Automatic, then every enabled
+ * provider in the user's order.
+ *
+ * A preference for a provider switched off since stays stored (switching it
+ * back on brings the preference back) and is listed last, saying so: the
+ * menu showing "Automatic" while another choice is kept would be the menu
+ * lying about the setting. It is never tried while off (`sourceOrder`).
+ */
+export function preferredSourceOptions(
+  enabled: ReadonlyArray<{ id: string; name: string }>,
+  catalogue: ReadonlyArray<{ id: string; name: string }>,
+  preferredSourceId: string | null,
+): Array<{ id: string; label: string }> {
+  const options = [{ id: AUTOMATIC_SOURCE, label: 'Automatic' }, ...enabled.map((p) => ({ id: p.id, label: p.name }))]
+  if (preferredSourceId !== null && !enabled.some((p) => p.id === preferredSourceId)) {
+    const name = catalogue.find((p) => p.id === preferredSourceId)?.name ?? preferredSourceId
+    options.push({ id: preferredSourceId, label: `${name} (switched off)` })
+  }
+  return options
+}
+
 export function qualityCapLabel(cap: QualityCap): string {
   return QUALITY_LABELS[String(cap)] ?? 'Best available'
 }

@@ -64,6 +64,7 @@
   import { expandIn, expandOut, stagger } from '../lib/motion'
   import { fly } from 'svelte/transition'
   import { SvelteSet } from 'svelte/reactivity'
+  import PillSelect from '../components/PillSelect.svelte'
   import RatingStrip from '../components/RatingStrip.svelte'
   import Score from '../components/Score.svelte'
 
@@ -262,24 +263,7 @@
         </button>
       {/each}
     </div>
-    <!--
-      Labelled on screen, and shaped as a menu. It was a bare select styled as a
-      pill, with "Sort by" for screen readers only, so it read as one more filter
-      chip at the end of the row — "Recently added" — and the owner asked for a
-      sort that was already there.
-    -->
-    <label class="sort">
-      <svg class="sort-glyph" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M7 5v14M4 16l3 3 3-3M14 7h6M14 12h4.5M14 17h3" />
-      </svg>
-      <span class="sort-label">Sort by</span>
-      <select bind:value={sort}>
-        {#each WATCHED_SORTS as option (option.id)}
-          <option value={option.id}>{option.label}</option>
-        {/each}
-      </select>
-      <svg class="sort-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
-    </label>
+    <PillSelect label="Sort by" bind:value={sort} options={WATCHED_SORTS} glyph="M7 5v14M4 16l3 3 3-3M14 7h6M14 12h4.5M14 17h3" />
   </PageHeader>
 
   {#if library.watched.length === 0}
@@ -690,83 +674,6 @@
   .filters button.active .badge {
     background: rgb(0 0 0 / 22%);
     color: inherit;
-  }
-
-  /*
-    The same height and outline as the filter box, so the header's two text
-    controls read as a pair; the chevron is what says "menu" rather than
-    "toggle". The native select stays underneath for the keyboard and for
-    screen readers, stripped of its own look.
-  */
-  .sort {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 0 var(--space-3) 0 var(--space-3);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-full);
-    background: var(--bg-elevated);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: border-color var(--dur-fast) var(--ease-out);
-  }
-
-  .sort:hover,
-  .sort:focus-within {
-    border-color: var(--border-strong);
-  }
-
-  .sort-glyph,
-  .sort-chevron {
-    width: 14px;
-    height: 14px;
-    flex: none;
-    fill: none;
-    stroke: var(--text-tertiary);
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    pointer-events: none;
-  }
-
-  .sort-label {
-    color: var(--text-tertiary);
-    white-space: nowrap;
-  }
-
-  .sort select {
-    appearance: none;
-    border: none;
-    background: transparent;
-    color: var(--text-primary);
-    font: inherit;
-    font-weight: var(--weight-emphasis);
-    /* Room for the chevron, which sits over the select's right end. */
-    padding: var(--space-2) 22px var(--space-2) 0;
-    margin-right: -20px;
-    cursor: pointer;
-  }
-
-  /*
-    The pill shows focus, so the select inside it must not show its own: two
-    rings, one inside the other. The app's ring is a box-shadow, not an
-    outline (`:focus-visible` in global.css), so both go. Android's WebView
-    counts a tapped select as focus-visible, so on the phone the second ring
-    appeared after every pick, not only under the keyboard.
-  */
-  .sort select:focus {
-    outline: none;
-    box-shadow: none;
-  }
-
-  .sort:has(select:focus-visible) {
-    border-color: var(--accent);
-  }
-
-  .sort option {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
   }
 
   /* ── The band ─────────────────────────────────────────────────────── */

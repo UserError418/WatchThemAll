@@ -4,8 +4,9 @@
  * download (the Downloads page, the detail view's button, the episode rows,
  * the nav's indicator, Settings) reads this one copy, so they always agree.
  *
- * `status` stays null where the platform has no downloads (the phone, for
- * now), and every download control is then left out.
+ * `status` stays null where the platform has no downloads (a phone whose
+ * download files could not be opened), and every download control is then
+ * left out.
  */
 
 import type { DownloadRequest, DownloadsStatus, DownloadView, QualityCap } from '@shared/ipc'
@@ -73,6 +74,11 @@ class Downloads {
 
   setQuality(quality: QualityCap): void {
     void window.wta.downloads.setQuality(quality)
+  }
+
+  /** The source every download tries first; null for Automatic. */
+  setPreferredSource(providerId: string | null): void {
+    void window.wta.downloads.setPreferredSource(providerId)
   }
 }
 

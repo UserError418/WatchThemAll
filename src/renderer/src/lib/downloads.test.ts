@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { downloadEvents, downloadTitle, eventMessage, formatBytes, percentOf, stateLine } from './downloads'
+import { downloadEvents, downloadTitle, eventMessage, formatBytes, percentOf, preferredSourceOptions, stateLine } from './downloads'
 import type { DownloadView } from '@shared/ipc'
 
 function view(overrides: Partial<DownloadView> = {}): DownloadView {
@@ -67,5 +67,32 @@ describe('downloadEvents', () => {
 
   it('announces nothing the app found on starting', () => {
     expect(downloadEvents(null, [view({ state: 'done' })])).toEqual([])
+  })
+})
+
+describe('the preferred-source menu', () => {
+  const vidsrc = { id: 'vidsrc', name: 'VidSrc' }
+  const vidrock = { id: 'vidrock', name: 'VidRock' }
+  const videasy = { id: 'videasy', name: 'Videasy' }
+  const catalogue = [vidsrc, vidrock, videasy]
+
+  it('offers Automatic, then the enabled providers in the user\'s order', () => {
+    expect(preferredSourceOptions([vidrock, vidsrc], catalogue, null)).toEqual([
+      { id: '', label: 'Automatic' },
+      { id: 'vidrock', label: 'VidRock' },
+      { id: 'vidsrc', label: 'VidSrc' },
+    ])
+  })
+
+  it('keeps a preference for a provider switched off since, and says so', () => {
+    expect(preferredSourceOptions([vidrock], catalogue, 'videasy').at(-1)).toEqual({ id: 'videasy', label: 'Videasy (switched off)' })
+  })
+
+  it('names a provider gone from the catalogue by its id', () => {
+    expect(preferredSourceOptions([vidrock], catalogue, 'gone').at(-1)).toEqual({ id: 'gone', label: 'gone (switched off)' })
+  })
+
+  it('lists an enabled preference once', () => {
+    expect(preferredSourceOptions([vidrock, vidsrc], catalogue, 'vidsrc')).toHaveLength(3)
   })
 })

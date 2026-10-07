@@ -10,10 +10,24 @@
    * Works with no network: everything shown is in the downloads' own records
    * and folders (the poster is a file beside the segments). Only "8 of 10
    * episodes" needs TMDB's season, and reads "8 episodes" without it.
+   *
+   * The heading carries the preferred source (the owner, 2026-10-07): the one
+   * every download tries first, before the usual order (`sourceOrder`).
    */
   import PageHeader from '../components/PageHeader.svelte'
+  import PillSelect from '../components/PillSelect.svelte'
   import { downloads } from '../lib/downloads.svelte'
-  import { downloadTitle, formatBytes, isUnderWay, percentOf, qualityLabel, stateLine } from '../lib/downloads'
+  import { library } from '../lib/library.svelte'
+  import {
+    AUTOMATIC_SOURCE,
+    downloadTitle,
+    formatBytes,
+    isUnderWay,
+    percentOf,
+    preferredSourceOptions,
+    qualityLabel,
+    stateLine,
+  } from '../lib/downloads'
   import {
     groupDownloads,
     heightsLabel,
@@ -32,6 +46,12 @@
   const status = $derived(downloads.status)
   const groups = $derived(groupDownloads(list))
   const overview = $derived(overviewOf(groups))
+
+  const sourceOptions = $derived(preferredSourceOptions(library.activeProviders, library.providers, status?.preferredSourceId ?? null))
+
+  function choosePreferredSource(id: string): void {
+    downloads.setPreferredSource(id === AUTOMATIC_SOURCE ? null : id)
+  }
 
   /** The one being fetched now: at most one runs at a time. */
   const running = $derived(list.find((d) => d.state === 'capturing' || d.state === 'downloading') ?? null)
@@ -211,7 +231,18 @@
 {/snippet}
 
 <div class="view">
-  <PageHeader title="Downloads" count={list.length || null} />
+  <PageHeader title="Downloads" count={list.length || null}>
+    {#if status}
+      <PillSelect
+        label="Preferred source"
+        value={status.preferredSourceId ?? AUTOMATIC_SOURCE}
+        options={sourceOptions}
+        glyph="M12 4v10M8 10l4 4 4-4M5 19h14"
+        title="Every download tries this source first. When it cannot give the film, the usual order takes over."
+        onchange={choosePreferredSource}
+      />
+    {/if}
+  </PageHeader>
 
   {#if list.length === 0}
     <p class="empty">
