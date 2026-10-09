@@ -71,6 +71,7 @@ vi.mock('./qualityprobe', () => ({
       mediaSamples: [],
       playlists: [],
       requests: answer.requests ?? [],
+      wholeFileRequests: [],
       wholeFiles: [],
       video: null,
       sniffed: [],
@@ -104,11 +105,18 @@ const subject: ProbeSubject = { imdbId: 'tt1', tmdbId: 1, type: 'movie', label: 
 /** A scan service over `providers`, and every progress update it sends. */
 function scanOf(
   providers: Provider[],
-  extra: { fetch?: StreamFetch; subject?: ProbeSubject; refile?: (row: ProviderScan) => void; onStream?: () => void } = {},
+  extra: {
+    fetch?: StreamFetch
+    subject?: ProbeSubject
+    refile?: (row: ProviderScan) => void
+    onStream?: () => void
+    castCheck?: Parameters<typeof createScanService>[0]['castCheck']
+  } = {},
 ): {
   run: () => Promise<ProviderScan>
   probeOne: (provider: Provider) => Promise<ProviderScan | null>
   progress: ProviderScanProgress[]
+  cancel: () => void
 } {
   const progress: ProviderScanProgress[] = []
   const tested = extra.subject ?? subject
@@ -119,11 +127,13 @@ function scanOf(
     // Nothing reaches the network from a test: an address no route names is unreachable.
     fetch: extra.fetch ?? { fetchText: async () => null },
     ...(extra.onStream ? { onStream: extra.onStream } : {}),
+    ...(extra.castCheck ? { castCheck: extra.castCheck } : {}),
   })
   return {
     run: () => service.run('movie:tt1', tested, extra.refile ? { refile: extra.refile } : {}),
     probeOne: (one) => service.probeOne('movie:tt1', tested, one),
     progress,
+    cancel: () => service.cancel(),
   }
 }
 
@@ -554,5 +564,79 @@ describe('three sources under test at every moment', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/*
+ * The cast check (`castcheck.ts`) runs after a streaming source's verdict,
+ * on the requests its test captured, and is filed with the run. It must not
+ * slow the verdict, nor change it.
+ */
+describe('the cast check during a test', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  const PLAYLIST = { url: 'https://cdn.test/film.m3u8', headers: { Referer: 'https://fast.test/' } }
+
+  it('checks a source that streamed, after its verdict is out, and files the check with the run', async () => {
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    script.set('dead', [{ verdict: 'unreachable', ms: null }, { verdict: 'unreachable', ms: null }])
+    let release: () => void = () => {}
+    const asked: Array<{ urls: string[]; runtime: number | null }> = []
+    const scan = scanOf([provider('fast'), provider('dead')], {
+      // The check is held to the runtime the test was given.
+      subject: { ...subject, runtimeMinutes: 139 },
+      castCheck: async (requests, runtime) => {
+        asked.push({ urls: requests.map((r) => r.url), runtime })
+        await new Promise<void>((resolve) => (release = resolve))
+        return { reach: 'ok', identity: 'film' }
+      },
+    })
+
+    const running = scan.run()
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    // The verdict was published while the check was still out.
+    expect(scan.progress.some((p) => p.verdicts.fast === 'stream' && !p.finished)).toBe(true)
+    expect(scan.progress.some((p) => p.finished)).toBe(false)
+    release()
+    const result = await running
+
+    expect(asked).toEqual([{ urls: [PLAYLIST.url], runtime: 139 }])
+    expect(result.castChecks).toEqual({ fast: { reach: 'ok', identity: 'film' } })
+    // The check never moves a verdict.
+    expect(result.verdicts).toEqual({ fast: 'stream', dead: 'dead' })
+  })
+
+  it('files nothing for a check that failed or had nothing to say', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST] }])
+    script.set('b', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST] }])
+    let calls = 0
+    const scan = scanOf([provider('a'), provider('b')], {
+      castCheck: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('the network went away')
+        return null
+      },
+    })
+    const result = await scan.run()
+    expect(result.castChecks).toBeUndefined()
+    expect(result.verdicts).toEqual({ a: 'stream', b: 'stream' })
+  })
+
+  it('does not wait for the checks of a run that was cancelled', async () => {
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    const scan = scanOf([provider('fast')], { castCheck: () => new Promise(() => {}) })
+    const running = scan.run()
+    await vi.waitFor(() => expect(scan.progress.some((p) => p.verdicts.fast === 'stream')).toBe(true))
+    scan.cancel()
+    expect((await running).castChecks).toBeUndefined()
+  })
+
+  it("checks the background tester's one source too", async () => {
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    const scan = scanOf([provider('fast')], { castCheck: async () => ({ reach: 'blocked', identity: 'unknown', status: 403 }) })
+    expect((await scan.probeOne(provider('fast')))?.castChecks).toEqual({ fast: { reach: 'blocked', identity: 'unknown', status: 403 } })
   })
 })

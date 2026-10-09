@@ -468,8 +468,16 @@ function classAnswer(
   )
 }
 
-/** Why a check found the stream not castable today, in words; null when it found nothing against it. */
+/**
+ * Why a check found the stream not castable today, in words; null when it
+ * found nothing against it. The length first: a stream that is not the
+ * title is the reason, whatever else was found about it.
+ */
 function reachToday(check: DatedCastCheck): string | null {
+  if (check.identity === 'wrong-length') {
+    const minutes = check.seconds !== undefined ? `a ${Math.max(1, Math.round(check.seconds / 60))} min video` : 'a video'
+    return `it served ${minutes}, not the title`
+  }
   switch (check.reach) {
     case 'blocked':
       return check.status ? `the source refused the cast's request (${check.status})` : 'the source did not answer the cast'
@@ -479,10 +487,6 @@ function reachToday(check: DatedCastCheck): string | null {
       return check.pace !== undefined
         ? `too slow: a piece of the stream took ${check.pace.toFixed(1)}× its length to arrive`
         : 'too slow to keep up on a TV'
-  }
-  if (check.identity === 'wrong-length') {
-    const minutes = check.seconds !== undefined ? `a ${Math.max(1, Math.round(check.seconds / 60))} min video` : 'a video'
-    return `it served ${minutes}, not the title`
   }
   return null
 }

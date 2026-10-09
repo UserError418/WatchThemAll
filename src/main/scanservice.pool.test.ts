@@ -32,6 +32,7 @@ vi.mock('./qualityprobe', () => ({
       mediaSamples: [],
       playlists: [],
       requests: [],
+      wholeFileRequests: [],
       wholeFiles: [],
       video: null,
       sniffed: [],

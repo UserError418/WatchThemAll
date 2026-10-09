@@ -20,6 +20,7 @@
 
 import { segmentExtension } from '../segmentwindow'
 import { readStreamHeader } from '../streamheader'
+import { transportStreamOffset } from '../transportstream'
 import { ivFor } from './aes'
 import { localPlaylist, mapName, PLAYLIST_FILE, segmentName, estimateBytes, type DownloadPlan } from './plan'
 
@@ -123,27 +124,14 @@ type Attempt<T> = { kind: 'ok'; value: T } | { kind: 'expired' } | { kind: 'retr
 
 type Fetched<T> = { kind: 'ok'; value: T } | { kind: 'expired' } | { kind: 'failed'; why: string } | { kind: 'aborted' }
 
-/**
- * Where an MPEG-TS segment starts: its first sync byte. Some sources disguise
- * segments as images, a PNG header in front of the transport stream, which
- * their own players skip and a native player does not. Three sync bytes 188
- * apart within the first few kilobytes are the stream's start; 0 when there
- * is no disguise, or no stream to find.
- */
-export function transportStreamOffset(bytes: Uint8Array): number {
-  if (bytes[0] === 0x47) return 0
-  const limit = Math.min(bytes.length - 377, 4096)
-  for (let i = 1; i < limit; i++) {
-    if (bytes[i] === 0x47 && bytes[i + 188] === 0x47 && bytes[i + 376] === 0x47) return i
-  }
-  return 0
-}
-
 /** The segment from its stream's start; see `transportStreamOffset`. */
 export function transportStreamStart(bytes: Uint8Array): Uint8Array {
   const offset = transportStreamOffset(bytes)
   return offset === 0 ? bytes : bytes.subarray(offset)
 }
+
+/** Kept here for its callers: moved beside the TS parser for the cast's use (2.0.19). */
+export { transportStreamOffset }
 
 function isSuccess(status: number): boolean {
   return status === 200 || status === 206

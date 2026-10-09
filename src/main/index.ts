@@ -17,6 +17,8 @@ import type { CapturedRequest } from './segmentsave'
 import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
+import { checkCast } from './castcheck'
+import { desktopCastPath, desktopRootFetch } from './castfetch'
 import { UpNextController, type UpNextPlace } from './upnext'
 import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
 import { malIdFor } from './animeids'
@@ -375,6 +377,10 @@ const scan = createScanService({
   frameUrl: (providerUrl) =>
     rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl, { bare: true }) : providerUrl,
   onStream: noteScanStream,
+  // The cast path without a television, after each streaming verdict: the
+  // desktop's own proxy on loopback (`castcheck.ts`).
+  castCheck: (requests, runtimeMinutes) =>
+    checkCast({ candidates: requests, runtimeMinutes, io: desktopRootFetch, open: desktopCastPath }),
   onProgress: (progress) => {
     send(EV.providerScan, progress)
     // The player chrome is a separate document with its own preload, so the

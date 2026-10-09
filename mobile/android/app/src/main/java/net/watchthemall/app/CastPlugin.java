@@ -248,6 +248,90 @@ public class CastPlugin extends Plugin {
     }
 
     /**
+     * Fetch one segment, or a range of a whole file, whole and timed, for the
+     * cast check during a test (`src/main/castcheck.ts`): whether the stream
+     * arrives faster than it plays. Only its opening crosses the bridge
+     * (`headBytes`, base64): the rest is counted and dropped, so a segment's
+     * megabytes never reach the WebView.
+     *
+     * Gives up after `maxMs`, answering with what arrived (`complete` false),
+     * so a slow source is measured rather than waited out. Resolves with the
+     * status, the content type, the bytes read, the whole body's size where
+     * the server said (`totalBytes`), the time taken and the opening.
+     */
+    @PluginMethod
+    public void sampleStream(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null) {
+            call.reject("url is required");
+            return;
+        }
+        JSObject headers = call.getObject("headers", new JSObject());
+        int headBytes = call.getInt("headBytes", 64 * 1024);
+        long maxMs = call.getInt("maxMs", 6_000);
+        offThread(call, () -> sampleNow(call, url, headers, headBytes, maxMs));
+    }
+
+    /** `sampleStream`'s request, on `fetchPool`. */
+    private static void sampleNow(PluginCall call, String url, JSObject headers, int headBytes, long maxMs) {
+        HttpURLConnection connection = null;
+        long startedAt = android.os.SystemClock.elapsedRealtime();
+        try {
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            int timeout = (int) Math.max(1_000, Math.min(15_000, maxMs));
+            connection.setConnectTimeout(timeout);
+            connection.setReadTimeout(timeout);
+            connection.setInstanceFollowRedirects(true);
+            if (headers != null) {
+                Iterator<String> keys = headers.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    connection.setRequestProperty(key, headers.getString(key));
+                }
+            }
+            int status = connection.getResponseCode();
+            ByteArrayOutputStream head = new ByteArrayOutputStream();
+            long read = 0;
+            boolean complete = false;
+            InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            if (stream == null) {
+                complete = true;
+            } else {
+                try (InputStream in = stream) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int got;
+                    while (true) {
+                        if (android.os.SystemClock.elapsedRealtime() - startedAt > maxMs) break;
+                        got = in.read(buffer);
+                        if (got == -1) {
+                            complete = true;
+                            break;
+                        }
+                        if (head.size() < headBytes) head.write(buffer, 0, Math.min(got, headBytes - head.size()));
+                        read += got;
+                    }
+                } catch (java.net.SocketTimeoutException slow) {
+                    // Nothing for a whole timeout: what arrived is what there is to judge.
+                }
+            }
+            JSObject result = new JSObject();
+            result.put("status", status);
+            result.put("contentType", connection.getContentType() != null ? connection.getContentType() : "");
+            result.put("bytes", read);
+            long total = totalBytes(status, connection.getHeaderField("Content-Range"), connection.getContentLengthLong());
+            if (total >= 0) result.put("totalBytes", total);
+            result.put("elapsedMs", android.os.SystemClock.elapsedRealtime() - startedAt);
+            result.put("complete", complete);
+            result.put("head", Base64.encodeToString(head.toByteArray(), Base64.NO_WRAP));
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("sample failed: " + error.getMessage());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    /**
      * Fetch a URL with the source's headers straight into a file, for the
      * preview cache (`src/main/segmentsave.ts`). The bytes never cross into
      * the WebView: a window is several megabytes, and base64 over the bridge

@@ -358,6 +358,50 @@ export function readTransportStreamSize(bytes: Uint8Array): Rendition | null {
   return sps ? readSpsSize(sps) : null
 }
 
+/* ── Disguises ───────────────────────────────────────────────────────────── */
+
+/**
+ * Where an MPEG-TS segment starts: its first sync byte. Some sources disguise
+ * segments as images, a PNG header in front of the transport stream, which
+ * their own players skip and a native player does not. Three sync bytes 188
+ * apart within the first few kilobytes are the stream's start; 0 when there
+ * is no disguise, or no stream to find.
+ *
+ * Downloads strip a disguise by this (`transportStreamStart` in
+ * `downloads/transfer.ts`, where it was first written), and so do the cast
+ * proxies, through `disguisedStreamOffset`.
+ */
+export function transportStreamOffset(bytes: Uint8Array): number {
+  if (bytes[0] === 0x47) return 0
+  const limit = Math.min(bytes.length - 377, 4096)
+  for (let i = 1; i < limit; i++) {
+    if (bytes[i] === 0x47 && bytes[i + 188] === 0x47 && bytes[i + 376] === 0x47) return i
+  }
+  return 0
+}
+
+/**
+ * Where a transport stream starts behind an image disguise, or 0 when there
+ * is none.
+ *
+ * Some sources serve their segments as pictures: a PNG's opening bytes in
+ * front of the transport stream, on an image CDN that would refuse to host
+ * video (2Embed's, measured 2026-09-30). The source's own player skips the
+ * prefix; a Cast receiver's does not, and the cast proxies passed the
+ * prefix through with `image/png` as the type until 2.0.19.
+ *
+ * Only behind a PNG or JPEG signature, so the search never runs over a
+ * fragmented-MP4 segment or anything else that merely holds three 0x47
+ * bytes at the wrong distances. GIF is left alone: its signature starts with
+ * the sync byte itself, and none has been seen. `CastProxyServer.java`
+ * carries a copy of this rule.
+ */
+export function disguisedStreamOffset(head: Uint8Array): number {
+  const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
+  const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
+  return png || jpeg ? transportStreamOffset(head) : 0
+}
+
 /* ── Codecs: what a television would have to decode ───────────────────── */
 
 /** PMT stream types, as ISO/IEC 13818-1 and the ATSC and HLS specifications number them. */

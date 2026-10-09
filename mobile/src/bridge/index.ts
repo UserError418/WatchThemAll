@@ -126,7 +126,7 @@ import {
   ResumeSeek,
   WrittenPositions,
 } from '@main/resume'
-import { capture, createCastBridge, type Candidate, type NowPlaying } from './cast'
+import { capture, checkCastOnPhone, createCastBridge, type Candidate, type NowPlaying } from './cast'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
 import { createPhoneDownloads, downloadedProvider, readDownloadPlaylist } from './downloads'
@@ -2049,6 +2049,8 @@ export async function createBridge(): Promise<WtaApi> {
       title.set(providerId, requests)
       scanStreams.set(key, title)
     },
+    // The cast path without a television, after each streaming verdict (`castcheck.ts`).
+    castCheck: checkCastOnPhone,
   })
 
   /**

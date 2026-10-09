@@ -56,7 +56,7 @@
  * moment once it is not (`RunOptions.refile`).
  */
 
-import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
+import type { CastCheck, Provider, QualityKind, StreamDelivery } from '@shared/types'
 import { piecesDelivery, wholeFileDelivery } from '@shared/castability'
 import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
@@ -174,6 +174,13 @@ export interface ScanRunnerOptions {
   onStream?: (titleKey: string, providerId: string, requests: Candidate[]) => void
   /** How playlists are asked for again after a verdict, with the page's headers. The native fetch by default. */
   fetch?: StreamFetch
+  /**
+   * The cast check (`castcheck.ts`) of a provider that streamed, after its
+   * verdict is published, on the requests its session captured. Filed with
+   * the test (`ProviderScan.castChecks`); a failure files none. As on the
+   * desktop (`scanservice.ts`).
+   */
+  castCheck?: (requests: Candidate[], runtimeMinutes: number | null) => Promise<CastCheck | null>
 }
 
 /**
@@ -195,6 +202,13 @@ export interface RunOptions {
    */
   refile?: (row: ProviderScan) => void
 }
+
+/**
+ * The longest a cast check may hold a run: past its own budget of a few
+ * seconds, a source answering at a crawl is filed with no check. As on the
+ * desktop (`CAST_CHECK_LIMIT_MS` in `scanservice.ts`).
+ */
+const CAST_CHECK_LIMIT_MS = 15_000
 
 /** How often a held run looks again. */
 const HOLD_POLL_MS = 1_000
@@ -314,6 +328,9 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     const testedAt: Record<string, number> = {}
     /** How each streaming provider's video arrived. */
     const delivery: Record<string, StreamDelivery> = {}
+    /** What the cast check made of each streaming provider, and the checks still out. */
+    const castChecks: Record<string, CastCheck> = {}
+    const checking = new Set<Promise<void>>()
     const total = providers.length
 
     /** What is under test right now, by provider, in the order it started. */
@@ -347,6 +364,26 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         finished,
         cancelled: finished && token !== mine,
       })
+    }
+
+    /**
+     * The cast check of a provider that streamed, started once its verdict
+     * is out; not a test slot, since it loads no page.
+     */
+    const startCastCheck = (provider: Provider, measured: Measured): void => {
+      const check = options.castCheck
+      if (!check || measured.verdict !== 'stream' || !measured.requests?.length) return
+      let gaveUp: ReturnType<typeof setTimeout> | undefined
+      const limit = new Promise<null>((resolve) => (gaveUp = setTimeout(() => resolve(null), CAST_CHECK_LIMIT_MS)))
+      const task: Promise<void> = Promise.race([check(measured.requests, request.runtimeMinutes ?? null).catch(() => null), limit])
+        .then((found) => {
+          if (found !== null && !cancelled()) castChecks[provider.id] = found
+        })
+        .finally(() => {
+          clearTimeout(gaveUp)
+          checking.delete(task)
+        })
+      checking.add(task)
     }
 
     const settle = (provider: Provider, measured: Measured): void => {
@@ -439,6 +476,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           settle(provider, measured)
           afterVerdict(provider, measured)
           end(provider)
+          startCastCheck(provider, measured)
         }
       }
       const workers = Math.max(1, Math.min(runOptions.concurrency ?? CONCURRENCY, total))
@@ -457,6 +495,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
           settle(provider, second)
           afterVerdict(provider, second)
+          startCastCheck(provider, second)
         }
         end(provider)
       }
@@ -468,8 +507,13 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       if (token === mine) running = false
     }
 
+    // The last checks, before the run is filed; looked at every second, so a
+    // cancellation meanwhile is not held up.
+    while (checking.size > 0 && !cancelled()) await Promise.race([...checking, sleep(HOLD_POLL_MS)])
+    // Only now: a ladder found while the last checks ran still joins the row.
     ended = true
     const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
+    if (Object.keys(castChecks).length > 0) result.castChecks = castChecks
     testing.clear()
     publish(true)
     return result

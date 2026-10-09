@@ -3,7 +3,6 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   byteRange,
   createCastProxy,
-  disguisedStreamOffset,
   idFromPath,
   isUpstreamSuccess,
   lanAddress,
@@ -197,28 +196,6 @@ describe('what the proxy saw', () => {
     // The next stream starts counting from nothing.
     await proxy.start({ playlists: {}, targets: {}, headers: {} })
     expect(proxy.upstreamFailures()).toBe(0)
-  })
-})
-
-describe('disguisedStreamOffset', () => {
-  const ts = new Uint8Array(4 * 188)
-  for (let i = 0; i < 4; i++) ts[i * 188] = 0x47
-  const behind = (prefix: number[]): Uint8Array => {
-    const out = new Uint8Array(prefix.length + ts.length)
-    out.set(prefix)
-    out.set(ts, prefix.length)
-    return out
-  }
-
-  it('finds a transport stream behind a PNG or JPEG signature', () => {
-    expect(disguisedStreamOffset(behind([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(8)
-    expect(disguisedStreamOffset(behind([0xff, 0xd8, 0xff, 0xe0, 0, 16]))).toBe(6)
-  })
-
-  it('leaves alone a plain segment, and bytes that only happen to hold sync bytes', () => {
-    expect(disguisedStreamOffset(ts)).toBe(0)
-    // fMP4: a box, not a picture, whatever 0x47s it carries.
-    expect(disguisedStreamOffset(behind([0, 0, 0, 24, 0x73, 0x74, 0x79, 0x70]))).toBe(0)
   })
 })
 

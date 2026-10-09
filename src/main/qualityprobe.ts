@@ -203,6 +203,12 @@ export interface QualityProbeResult {
    * source's, and never written into a result.
    */
   requests: CapturedRequest[]
+  /**
+   * The whole-file media requests, with the page's headers: with `requests`,
+   * what the cast check chooses a stream from (`castcheck.ts`). Memory only,
+   * like `requests`.
+   */
+  wholeFileRequests: CapturedRequest[]
   /** Whole-file media URLs the page fetched, truncated. */
   wholeFiles: string[]
   /** The `<video>` judged to be the title — the longest one with a picture. */
@@ -543,6 +549,7 @@ export async function probeQuality(
     mediaSamples: result.mediaSamples,
     playlists: read,
     requests: playlistRequests(candidates, read),
+    wholeFileRequests: [...candidates.entries()].filter(([, c]) => c.kind === 'whole-file').map(([url, c]) => ({ url, headers: c.headers })),
     wholeFiles,
     video,
     sniffed,

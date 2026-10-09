@@ -77,7 +77,7 @@
  */
 
 import type { CapturedRequest } from './segmentsave'
-import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
+import type { CastCheck, Provider, QualityKind, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
 import type { StreamFetch } from '@shared/streamfetch'
 import type { ProbeSubject } from './streamprobe'
@@ -115,6 +115,8 @@ interface Measured {
   delivery: StreamDelivery | null
   /** The playlists its page asked for, with its headers, for a stream: where its ladder is looked for after the verdict. */
   requests: CapturedRequest[]
+  /** What the page fetched that a cast could choose from, newest first: for the cast check. */
+  castCandidates: CapturedRequest[]
 }
 
 /** One test the pool runs: a provider's first, or the second a red gets. */
@@ -145,6 +147,13 @@ export interface ScanServiceOptions {
   onStream?: (titleKey: string, providerId: string, requests: CapturedRequest[]) => void
   /** How playlists are asked for again after a verdict, with the page's headers. Node's fetch by default. */
   fetch?: StreamFetch
+  /**
+   * The cast check (`castcheck.ts`), run on a source that streamed, after its
+   * verdict is published and while its captured tokens are fresh. Its answer
+   * is filed with the test's result (`ProviderScan.castChecks`); null, or a
+   * failure, files none. Absent: no checks.
+   */
+  castCheck?: (requests: CapturedRequest[], runtimeMinutes: number | null) => Promise<CastCheck | null>
 }
 
 /**
@@ -167,6 +176,13 @@ export interface RunOptions {
 
 /** How often a held run looks again. */
 const HOLD_POLL_MS = 1_000
+
+/**
+ * The longest a cast check may hold a run, past its own budget of a few
+ * seconds (`CAST_CHECK_BUDGET_MS`): a source that answers its requests at a
+ * crawl is filed with no check rather than keeping the run open.
+ */
+const CAST_CHECK_LIMIT_MS = 15_000
 
 export interface ScanService {
   /**
@@ -296,7 +312,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       // see `scanreason.ts` for why not red. Nothing of it is kept for the
       // preview, which would show the clip.
       const reason = wrongVideoReason(result.film, subject.runtimeMinutes ?? null, subject.type === 'tv' ? 'episode' : 'film')
-      return { verdict: verdictForReason(reason), ms: null, quality: null, qualityKind: null, audio: null, reason, delivery: null, requests: [] }
+      return { verdict: verdictForReason(reason), ms: null, quality: null, qualityKind: null, audio: null, reason, delivery: null, requests: [], castCandidates: [] }
     }
     if (streamed && result.requests.length > 0) options.onStream?.(titleKey, provider.id, result.requests)
     return {
@@ -310,6 +326,26 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       // (`unknown`), so the tester does not keep coming back to ask.
       delivery: streamed ? (result.delivery ?? 'unknown') : null,
       requests: streamed ? result.requests : [],
+      // Newest first, as a cast's capture lists them.
+      castCandidates: streamed ? [...result.requests, ...result.wholeFileRequests].reverse() : [],
+    }
+  }
+
+  /**
+   * The cast check of a source that streamed, or null with nothing to check.
+   *
+   * Not counted in `loading`: it loads no page, only a few requests and one
+   * segment, and a test slot waiting on it would slow every verdict after it.
+   */
+  const castCheckOf = async (measured: Measured, runtimeMinutes: number | null): Promise<CastCheck | null> => {
+    if (!options.castCheck || measured.verdict !== 'stream' || measured.castCandidates.length === 0) return null
+    // Its own fetches time out; this bounds the whole, so no source can hold a run.
+    let gaveUp: ReturnType<typeof setTimeout> | undefined
+    const limit = new Promise<null>((resolve) => (gaveUp = setTimeout(() => resolve(null), CAST_CHECK_LIMIT_MS)))
+    try {
+      return await Promise.race([options.castCheck(measured.castCandidates, runtimeMinutes).catch(() => null), limit])
+    } finally {
+      clearTimeout(gaveUp)
     }
   }
 
@@ -322,13 +358,16 @@ export function createScanService(options: ScanServiceOptions): ScanService {
     async probeOne(titleKey, subject, provider) {
       const before = token
       const measured = await probe(titleKey, provider, subject, longTimeoutMs)
+      const castCheck = await castCheckOf(measured, subject.runtimeMinutes ?? null)
       // A scan by hand started, or was cancelled, while this one ran.
       if (token !== before || running) return null
       const at = Date.now()
       // Its ladder before it is filed, rather than filed twice: the
       // background tester files one row, and nobody is watching it arrive.
       const better = await ladderAfterVerdict(measured, measured.requests, io, subject.runtimeMinutes ?? null)
-      return rowFor(titleKey, provider.id, at, better ?? measured)
+      const scan = rowFor(titleKey, provider.id, at, better ?? measured)
+      if (castCheck !== null) scan.castChecks = { [provider.id]: castCheck }
+      return scan
     },
 
     cancel() {
@@ -359,6 +398,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const testedAt: Record<string, number> = {}
       /** How each streaming provider's video arrived. */
       const delivery: Record<string, StreamDelivery> = {}
+      /** What the cast check made of each streaming provider, as each finishes. */
+      const castChecks: Record<string, CastCheck> = {}
+      /** The cast checks still running, which the run waits for before it is filed. */
+      const checking = new Set<Promise<void>>()
       const total = providers.length
 
       /** What is under test right now, by provider, in the order it started. */
@@ -469,6 +512,18 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           afterVerdict(job.provider, measured)
         }
         publish(false)
+        // After the verdict is out, so the dot fills in as fast as without it.
+        startCastCheck(job.provider, measured)
+      }
+
+      const startCastCheck = (provider: Provider, measured: Measured): void => {
+        if (measured.verdict !== 'stream') return
+        const task: Promise<void> = castCheckOf(measured, subject.runtimeMinutes ?? null)
+          .then((check) => {
+            if (check !== null && token === mine) castChecks[provider.id] = check
+          })
+          .finally(() => checking.delete(task))
+        checking.add(task)
       }
 
       /**
@@ -506,8 +561,15 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
+      // The last checks, before the run is filed: a check is a few seconds at
+      // most (`CAST_CHECK_BUDGET_MS`), and the owner accepted that much on a
+      // full test. A cancelled run does not wait for them.
+      // Looked at again every second, so cancelling meanwhile is not held up.
+      while (checking.size > 0 && token === mine) await Promise.race([...checking, wait()])
+      // Only now: a ladder found while the last checks ran still joins the row.
       ended = true
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
+      if (Object.keys(castChecks).length > 0) scan.castChecks = castChecks
       if (token === mine) running = false
       publish(true)
       return scan

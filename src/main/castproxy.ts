@@ -29,7 +29,7 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
-import { transportStreamOffset } from '@shared/downloads/transfer'
+import { disguisedStreamOffset } from '@shared/transportstream'
 
 /**
  * Long enough for a slow provider, short enough not to wedge a connection:
@@ -49,8 +49,9 @@ const BUFFERABLE_BYTES = 24 * 1024 * 1024
 
 /**
  * How much of a segment is read before answering, to see whether it is a
- * transport stream disguised as an image (`disguisedStreamOffset`): the
- * search window `transportStreamOffset` uses, plus three packets to confirm.
+ * transport stream disguised as an image (`disguisedStreamOffset` in
+ * `shared/transportstream.ts`): the search window, plus three packets to
+ * confirm the last place in it.
  */
 const DISGUISE_PEEK_BYTES = 4096 + 3 * 188
 
@@ -93,29 +94,6 @@ export function mediaContentType(upstreamType: string | undefined, url: string):
   if (path.endsWith('.aac')) return 'audio/aac'
   if (path.endsWith('.webm')) return 'video/webm'
   return 'application/octet-stream'
-}
-
-/**
- * Where a transport stream starts behind an image disguise, or 0 when there
- * is none.
- *
- * Some sources serve their segments as pictures: a PNG's opening bytes in
- * front of the transport stream, on an image CDN that would refuse to host
- * video (2Embed's, measured 2026-09-30). The source's own player skips the
- * prefix. A Cast receiver's does not, and the proxy used to pass the prefix
- * through with `image/png` as the type. Downloads strip it already
- * (`transportStreamOffset` in `shared/downloads/transfer.ts`), by the same
- * rule reused here: three sync bytes 188 apart.
- *
- * Only behind a PNG or JPEG signature, so the search never runs over a
- * fragmented-MP4 segment or anything else that merely contains three 0x47
- * bytes at the wrong distances. GIF is left alone: its signature starts
- * with the sync byte itself, and none has been seen.
- */
-export function disguisedStreamOffset(head: Uint8Array): number {
-  const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
-  const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
-  return png || jpeg ? transportStreamOffset(head) : 0
 }
 
 /** `/p3.m3u8` -> `p3`, `/s41` -> `s41`. The suffix is for the receiver's sniffing. */

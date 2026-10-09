@@ -35,6 +35,9 @@ import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle } from '@main/hlsrewrite'
 import { chooseCastRoot, PLAYLIST_BYTES, rootRefusal, rootSignature, type FetchedText, type RootFetch } from '@main/castroot'
+import { checkCast, SAMPLE_HEAD_BYTES, type CastPath } from '@main/castcheck'
+import type { CastBundle } from '@main/hlsrewrite'
+import type { CastCheck } from '@shared/types'
 import {
   blockedCastMessage,
   CAST_ANSWER_WINDOW_MS,
@@ -76,6 +79,17 @@ interface CastNative {
     /** How long the fetch took on the native side, in milliseconds, before the body crossed the bridge (2.0.19). */
     elapsedMs?: number
   }>
+  /**
+   * One segment, or a range of a whole file, fetched whole and timed; only
+   * its opening comes back (`head`, base64). Gives up after `maxMs` with
+   * what arrived. For the cast check (`castcheck.ts`).
+   */
+  sampleStream(options: {
+    url: string
+    headers: Record<string, string>
+    headBytes: number
+    maxMs: number
+  }): Promise<{ status: number; contentType: string; bytes: number; totalBytes?: number; elapsedMs: number; complete: boolean; head: string }>
   /** A URL's bytes straight into `path` under the app's files directory (`preview-cache/` only). */
   downloadToFile(options: {
     url: string
@@ -300,6 +314,70 @@ export const phoneRootFetch: RootFetch = {
       return null
     }
   },
+}
+
+/**
+ * The cast check's path on the phone (`CastPath`): the bundle's playlists
+ * from memory, and every other request made by the native client the
+ * phone's proxy fetches with, with the root's headers alone, as the proxy
+ * replays them. Not through `CastProxyServer` itself: that serves the
+ * television, and a check must never take over a cast in progress. What
+ * the proxy adds over the client (rewriting, the disguise stripped) is the
+ * shared code the desktop's check runs through its own proxy.
+ */
+function phoneCastPath(bundle: CastBundle, headers: Record<string, string>): CastPath {
+  const playlists = new Map(bundle.playlists.map((p) => [p.id, p.body]))
+  const targets = new Map(bundle.targets.map((t) => [t.id, t.url]))
+  return {
+    async playlist(id) {
+      const body = playlists.get(id)
+      return body === undefined ? null : { status: 200, body }
+    },
+    async data(id, limitBytes) {
+      const url = targets.get(id)
+      return url === undefined ? null : phoneRootFetch.bytes(url, headers, limitBytes)
+    },
+    async sample(id, request) {
+      const url = targets.get(id)
+      if (url === undefined) return null
+      const range: Record<string, string> = request.range
+        ? { Range: `bytes=${request.range.offset}-${request.range.offset + request.range.length - 1}` }
+        : {}
+      try {
+        const answer = await Cast.sampleStream({
+          url,
+          headers: { ...headers, ...range },
+          headBytes: SAMPLE_HEAD_BYTES,
+          maxMs: Math.max(0, request.deadline - Date.now()),
+        })
+        return {
+          status: answer.status,
+          contentType: answer.contentType,
+          bytes: answer.bytes,
+          totalBytes: answer.totalBytes ?? null,
+          elapsedMs: answer.elapsedMs,
+          complete: answer.complete,
+          head: bytesOf(answer.head),
+        }
+      } catch {
+        return null // No answer at all.
+      }
+    },
+    close() {},
+  }
+}
+
+/**
+ * The cast check of a source the phone's test saw stream (`castcheck.ts`),
+ * on the requests the test captured, newest first.
+ */
+export function checkCastOnPhone(requests: readonly Candidate[], runtimeMinutes: number | null): Promise<CastCheck> {
+  return checkCast({
+    candidates: requests.map((r) => ({ url: r.url, headers: replayable(r.headers) })),
+    runtimeMinutes,
+    io: phoneRootFetch,
+    open: async (bundle, headers) => phoneCastPath(bundle, headers),
+  })
 }
 
 /**
