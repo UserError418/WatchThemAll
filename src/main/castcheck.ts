@@ -78,6 +78,12 @@ const ROOT_CHOICE_MS = 3_000
  */
 export const CHECK_REQUEST_TIMEOUT_MS = 4_000
 
+/** Answers that mean "not now" rather than "no": a receiver's player asks again. */
+const TRANSIENT_STATUSES = new Set([429, 502, 503, 504])
+
+/** How long the check waits before asking again after a transient answer. */
+const RETRY_AFTER_MS = 500
+
 /** One segment, or a whole file's opening, as the proxy served it, timed. */
 export interface Sample {
   status: number
@@ -147,7 +153,7 @@ export async function checkCast(input: CastCheckInput): Promise<CastCheck | null
     return { ...found, reach: 'blocked', status: refusal ?? 0 }
   }
 
-  const path = await input.open(bundle, root.headers)
+  const path = patient(await input.open(bundle, root.headers), now)
   try {
     const deadline = Math.max(started + (input.budgetMs ?? CAST_CHECK_BUDGET_MS), now() + MIN_SAMPLE_MS)
     return root.kind === 'progressive' ? await checkFile(path, bundle, root, found, deadline) : await checkHls(path, bundle, root, found, deadline)
@@ -179,6 +185,30 @@ function unrooted(choice: RootChoice): CastCheck | null {
   if (refused) return { reach: 'blocked', identity: 'unknown', status: refused.status }
   if (!choice.complete || passedOver.some((p) => p.why === 'status' || p.why === 'piece')) return null
   return { reach: 'not-media', identity: 'unknown' }
+}
+
+/**
+ * The cast path, asking once more after a transient answer, as a receiver's
+ * player does with a segment that failed. Measured 2026-10-09: VidFlix's CDN
+ * answered a check's segment 503 on two runs of three while the test's own
+ * player was still fetching from it, and the next run's 200; filed as
+ * "blocked", that put a source that casts in the blocked group. A request
+ * that did not answer at all is not asked again: it has had its time.
+ */
+function patient(path: CastPath, now: () => number): CastPath {
+  async function again<T extends { status: number }>(ask: () => Promise<T | null>, until?: number): Promise<T | null> {
+    const first = await ask()
+    if (first === null || !TRANSIENT_STATUSES.has(first.status)) return first
+    if (until !== undefined && now() + RETRY_AFTER_MS >= until) return first
+    await new Promise((resolve) => setTimeout(resolve, RETRY_AFTER_MS))
+    return ask()
+  }
+  return {
+    playlist: (id) => again(() => path.playlist(id)),
+    data: (id, limitBytes) => again(() => path.data(id, limitBytes)),
+    sample: (id, request) => again(() => path.sample(id, request), request.deadline),
+    close: () => path.close(),
+  }
 }
 
 /**

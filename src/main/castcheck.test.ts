@@ -188,6 +188,23 @@ describe('checkCast, through the desktop proxy', () => {
     expect(await checkOrNothing(origin, ['/cuid/', '/api/config'])).toBeNull()
   })
 
+  it('asks again after a transient refusal, as a receiver does', async () => {
+    let asked = 0
+    const flaky: Handler = (request, response) => {
+      asked += 1
+      if (asked === 1) return void (response.writeHead(503), response.end())
+      bytes(segment())(request, response)
+    }
+    const origin = await serve({ '/film.m3u8': text(media(450)), '/seg0.ts': flaky })
+    expect(await check(origin, ['/film.m3u8'])).toMatchObject({ reach: 'ok' })
+    expect(asked).toBe(2)
+  })
+
+  it('says blocked when a transient refusal lasts', async () => {
+    const origin = await serve({ '/film.m3u8': text(media(450)), '/seg0.ts': (_q, r) => void (r.writeHead(503), r.end()) })
+    expect(await check(origin, ['/film.m3u8'])).toMatchObject({ reach: 'blocked', status: 503 })
+  })
+
   it("files nothing for a stream's pieces with no playlist: that load's, not the source's", async () => {
     const origin = await serve({ '/file2/a': bytes(segment()), '/api/config': text('{"ok":true}', 'application/json') })
     expect(await checkOrNothing(origin, ['/file2/a', '/api/config'])).toBeNull()
