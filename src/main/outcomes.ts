@@ -83,20 +83,9 @@ export function mediaKey(req: {
   return `tv:${id}:${req.season ?? 1}:${req.episode ?? 1}`
 }
 
-/**
- * The key for a *title*, ignoring which episode.
- *
- * `mediaKey` is deliberately episode-level, because coverage is: a provider
- * routinely carries a series' first season and not its fourth. But the source
- * picker is answering a coarser question — "does this provider work for this
- * show" — and an episode-level answer would leave almost every dot blank, since
- * the user is rarely re-picking a source for an episode they have already
- * watched.
- */
-export function titleKey(req: { type: 'tv' | 'movie'; imdbId: string | null; tmdbId: number }): string {
-  const id = req.imdbId || `tmdb${req.tmdbId}`
-  return `${req.type}:${id}`
-}
+// The key for a title, ignoring which episode. Defined in shared, so the
+// renderer can name titles the same way; see `@shared/titlekey`.
+export { titleKey } from '@shared/titlekey'
 
 // One definition of this lives in the contract, because the renderer draws
 // from it and main derives it — see `TitleOutcome` in `@shared/ipc`.
