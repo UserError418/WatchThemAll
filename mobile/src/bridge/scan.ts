@@ -731,23 +731,6 @@ function documentFailedForGood(error: ProbeDocumentError): boolean {
   return error.status === 0 || error.status >= 500
 }
 
-/**
- * The best quality the captured playlists name, and what it is worth; null
- * when none does.
- *
- * The phone's counterpart of the desktop's `probeQuality` scan reading, with
- * one reading fewer: it cannot reach into the provider's frame to ask the
- * `<video>` its size, so a source serving one whole file stays unknown here.
- * A single rendition without a master is read from its own header instead —
- * see `readDeclaredSizes` — and is a floor, never the best: a playlist that
- * would not answer (`read` keeps those, with an empty body) may have been
- * the master. MoviesAPI read 240p here from one rung where every desktop
- * reading of the same title is a 720p ladder. The parsers and the judgement
- * are the desktop's, from `shared/`, so a stream reads the same on both.
- *
- * Keeps watching the session's requests for up to `QUALITY_WAIT_MS`, because
- * the playlist that proved the stream is not always the one that names sizes.
- */
 /** What a phone test read of a stream: its quality, its sound, and whether it is the film. */
 export interface PhoneQuality {
   best: number | null
@@ -764,6 +747,26 @@ export interface PageReadings {
   runtimeMinutes: number | null
 }
 
+/**
+ * The best quality the captured playlists or the source's engine name, and
+ * what it is worth (null when none does); its audio languages; and whether
+ * what played is the film.
+ *
+ * The phone's counterpart of the desktop's `probeQuality` scan reading. The
+ * engine's own list comes from the page script (`page.engines`) and is an
+ * offer, as on the desktop. One reading fewer: the picture's decoded size is
+ * not asked for, so a source serving one whole file and no engine stays
+ * unknown here. A single rendition without a master is read from its own
+ * header instead — see `readDeclaredSizes` — and is a floor, never the best:
+ * a playlist that would not answer (`read` keeps those, with an empty body)
+ * may have been the master. MoviesAPI read 240p here from one rung where
+ * every desktop reading of the same title is a 720p ladder. The parsers and
+ * the judgement are the desktop's, from `shared/`, so a stream reads the
+ * same on both.
+ *
+ * Keeps watching the session's requests for up to `QUALITY_WAIT_MS`, because
+ * the playlist that proved the stream is not always the one that names sizes.
+ */
 export async function readQuality(
   bodies: Map<string, string>,
   requests: () => Promise<Candidate[]>,

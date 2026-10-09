@@ -788,6 +788,12 @@ function describeQuality(r: QualityProbeResult): string {
   }
   if (j.decoy) parts.push('DECOY (length does not fit)')
   if (j.contradiction) parts.push('CONTRADICTION (picture above ladder)')
+  // What the source's engine listed, and whether what played is the film:
+  // what a test now files as an offer, and what turns it amber.
+  const levels = r.engines.flatMap((f) => f.videos).filter((v) => v.levels.length > 0)
+  if (levels.length) parts.push(`engine ${levels.map((v) => `${Math.max(...v.levels.map((l) => l.height))}p/${Math.round(v.duration / 60)}m`).join(',')}`)
+  if (r.film.kind === 'other') parts.push(`SOMETHING ELSE (${Math.round(r.film.seconds)} s)`)
+  if (r.audio.length) parts.push(`audio ${r.audio.join('/')}`)
   const statuses = r.playlists.map((p) => `${p.kind}:${p.status}`).join(',')
   if (statuses) parts.push(`[${statuses}]`)
   // What each stream's header declared, beside the picture, so the two can be compared.
