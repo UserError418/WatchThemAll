@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { bestQuality, judgeQuality, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
+import { bestQuality, judgeQuality, masterVariants, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
 
 const MASTER = [
   '#EXTM3U',
@@ -70,6 +70,30 @@ describe('qualityClass', () => {
     [1024, 576, 480],
   ])('rounds %ix%i, which fills no frame of the class above, down to %ip', (width, height, expected) => {
     expect(qualityClass({ width, height })).toBe(expected)
+  })
+})
+
+describe('masterVariants', () => {
+  it('gives each variant its absolute URL, bandwidth and size', () => {
+    expect(masterVariants(MASTER, 'https://cdn.example/hls/ep/master.m3u8')).toEqual([
+      { url: 'https://cdn.example/hls/ep/360/index.m3u8', bandwidth: 800000, width: 640, height: 360 },
+      { url: 'https://cdn.example/hls/ep/720/index.m3u8', bandwidth: 2400000, width: 1280, height: 720 },
+      { url: 'https://cdn.example/hls/ep/1080/index.m3u8', bandwidth: 5000000, width: 1920, height: 1080 },
+    ])
+  })
+
+  it('reads BANDWIDTH and not AVERAGE-BANDWIDTH, wherever each sits', () => {
+    const body = '#EXTM3U\n#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=900,BANDWIDTH=1200,RESOLUTION=1920x800\nv.m3u8\n'
+    expect(masterVariants(body, 'https://cdn.example/a/')).toEqual([
+      { url: 'https://cdn.example/a/v.m3u8', bandwidth: 1200, width: 1920, height: 800 },
+    ])
+  })
+
+  it('keeps a variant that states no size, with none', () => {
+    const body = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1200\nv.m3u8\n'
+    expect(masterVariants(body, 'https://cdn.example/a/')).toEqual([
+      { url: 'https://cdn.example/a/v.m3u8', bandwidth: 1200, width: null, height: null },
+    ])
   })
 })
 

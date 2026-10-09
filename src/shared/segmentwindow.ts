@@ -31,6 +31,8 @@
  *   from a copy anyway.
  */
 
+import type { Variant } from './streamquality'
+
 /** How much of a stream is kept: the owner's number (2026-09-29). */
 export const WINDOW_SECONDS = 25
 
@@ -219,35 +221,11 @@ export function windowPlaylist(window: StreamWindow, version: number | null, nam
   return lines.join('\n')
 }
 
-/** One variant of a master playlist. */
-export interface Variant {
-  url: string
-  bandwidth: number
-  height: number | null
-}
-
-/** The variants a master playlist offers, with absolute URLs. */
-export function masterVariants(body: string, url: string): Variant[] {
-  const variants: Variant[] = []
-  let pending: { bandwidth: number; height: number | null } | null = null
-  for (const raw of body.split('\n')) {
-    const line = raw.trim()
-    if (line.startsWith('#EXT-X-STREAM-INF:')) {
-      const resolution = attribute(line, 'RESOLUTION')
-      const height = resolution ? Number(resolution.split('x')[1]) : NaN
-      pending = { bandwidth: Number(attribute(line, 'BANDWIDTH')) || 0, height: Number.isFinite(height) ? height : null }
-    } else if (pending !== null && line !== '' && !line.startsWith('#')) {
-      const resolved = absolute(line, url)
-      if (resolved !== null) variants.push({ url: resolved, ...pending })
-      pending = null
-    }
-  }
-  return variants
-}
-
 /**
- * The variant to keep: the one the player itself was fetching (it had chosen
- * for the screen and the connection), else the best at or under 1080 lines.
+ * The variant to keep, of those a master lists (`masterVariants` in
+ * `streamquality.ts`, the one reading of a master): the one the player itself
+ * was fetching (it had chosen for the screen and the connection), else the
+ * best at or under 1080 lines.
  */
 export function pickVariant(variants: Variant[], fetched: ReadonlySet<string>): Variant | null {
   const used = variants.find((v) => fetched.has(v.url))

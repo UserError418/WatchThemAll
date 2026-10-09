@@ -86,6 +86,12 @@ export interface DownloadRecord {
   refusals: Array<{ providerId: string; reason: string }>
   /** The picture's height in lines, when the playlist or the stream said. */
   height: number | null
+  /**
+   * Its width, from the same place: with the height, what names the quality
+   * class the Downloads tab shows (1920×800 is 1080p, as in the source
+   * lists). Absent from records written before it was kept.
+   */
+  width?: number | null
   /** MPEG-TS or fragmented MP4 segments; either plays in the app's own player. */
   format: 'ts' | 'fmp4' | null
   durationSeconds: number | null

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { downloadEvents, downloadTitle, eventMessage, formatBytes, percentOf, preferredSourceOptions, stateLine } from './downloads'
+import {
+  downloadEvents,
+  downloadTitle,
+  eventMessage,
+  formatBytes,
+  percentOf,
+  preferredSourceOptions,
+  qualityLabel,
+  stateLine,
+} from './downloads'
 import type { DownloadView } from '@shared/ipc'
 
 function view(overrides: Partial<DownloadView> = {}): DownloadView {
@@ -28,6 +37,15 @@ function view(overrides: Partial<DownloadView> = {}): DownloadView {
 }
 
 describe('the words', () => {
+  it('names the quality as the source lists do, by class', () => {
+    // By its height alone this said "800p" where the list it came from said 1080p.
+    expect(qualityLabel(view({ width: 1920, height: 800 }))).toBe('1080p')
+    expect(qualityLabel(view({ width: 1148, height: 480 }))).toBe('480p')
+    // A download from before the width was kept: named by its height.
+    expect(qualityLabel(view({ height: 720 }))).toBe('720p')
+    expect(qualityLabel(view({ height: null }))).toBeNull()
+  })
+
   it('says what a download is doing', () => {
     expect(stateLine(view())).toBe('Downloading · 25%')
     expect(stateLine(view({ state: 'capturing' }))).toBe('Finding the stream on VidRock…')

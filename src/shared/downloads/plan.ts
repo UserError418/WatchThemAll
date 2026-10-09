@@ -27,8 +27,9 @@
  */
 
 import { lengthVerdict } from '../runtimecheck'
-import { masterVariants, parseMediaPlaylist, type MediaPlaylist, type UnfitReason, type Variant } from '../segmentwindow'
+import { parseMediaPlaylist, type MediaPlaylist, type UnfitReason } from '../segmentwindow'
 import type { CapturedRequest, StreamFetch } from '../streamfetch'
+import { masterVariants, qualityClass, type Variant } from '../streamquality'
 import type { QualityCap } from './types'
 
 /** One segment to fetch, as `plan.json` keeps it. */
@@ -62,6 +63,12 @@ export interface DownloadPlan {
   totalSeconds: number
   /** The rendition's height and bit rate, when the master said. */
   height: number | null
+  /**
+   * Its width, when the master said: with the height, what names its
+   * quality class (1920×800 is 1080p). Absent from plans written before it
+   * was kept.
+   */
+  width?: number | null
   bandwidth: number | null
 }
 
@@ -100,21 +107,26 @@ export function mapName(index: number): string {
 }
 
 /**
- * The variant the cap allows: the tallest at or under it, the better bit rate
- * between equals. When every variant is taller than the cap, the shortest of
- * them (the cap is a wish about size, not a reason to have nothing). Heights
- * a master does not state are judged by bit rate alone.
+ * The variant the cap allows: the best at or under it, the better bit rate
+ * between equals. When every variant is above the cap, the lowest of them
+ * (the cap is a wish about size, not a reason to have nothing). Sizes a
+ * master does not state are judged by bit rate alone.
+ *
+ * Judged by quality class (`qualityClass`), the names the cap's menu and the
+ * Downloads tab use: by height alone, a letterboxed 1440p (2560×1068) passed
+ * as "up to 1080p" and was then labelled 1440p.
  */
 export function pickForCap(variants: readonly Variant[], cap: QualityCap): Variant | null {
   if (variants.length === 0) return null
   const limit = cap === 'best' ? Number.POSITIVE_INFINITY : cap
-  const better = (a: Variant, b: Variant): Variant =>
-    (a.height ?? 0) !== (b.height ?? 0) ? ((a.height ?? 0) > (b.height ?? 0) ? a : b) : a.bandwidth >= b.bandwidth ? a : b
-  const known = variants.filter((v) => v.height !== null)
+  const known = variants.flatMap((v) => (v.height === null ? [] : [{ v, quality: qualityClass({ width: v.width, height: v.height }) }]))
   if (known.length === 0) return variants.reduce((a, b) => (a.bandwidth >= b.bandwidth ? a : b))
-  const fitting = known.filter((v) => v.height! <= limit)
-  if (fitting.length > 0) return fitting.reduce(better)
-  return known.reduce((a, b) => (a.height! < b.height! || (a.height === b.height && a.bandwidth < b.bandwidth) ? a : b))
+  // Class first, then the taller picture, then the higher bit rate.
+  const order = (a: (typeof known)[number], b: (typeof known)[number]): number =>
+    a.quality - b.quality || a.v.height! - b.v.height! || a.v.bandwidth - b.v.bandwidth
+  const fitting = known.filter((k) => k.quality <= limit)
+  if (fitting.length > 0) return fitting.reduce((a, b) => (order(a, b) >= 0 ? a : b)).v
+  return known.reduce((a, b) => (order(a, b) <= 0 ? a : b)).v
 }
 
 /** Whether a master keeps the sound in a rendition of its own, which a video download would leave out. */
@@ -161,7 +173,7 @@ export function planFrom(
   playlist: MediaPlaylist,
   playlistUrl: string,
   headers: Record<string, string>,
-  variant: { height: number | null; bandwidth: number | null },
+  variant: { width: number | null; height: number | null; bandwidth: number | null },
 ): DownloadPlan | null {
   const maps: string[] = []
   const withMap = playlist.segments.filter((s) => s.map !== null).length
@@ -190,6 +202,7 @@ export function planFrom(
     segments,
     totalSeconds: playlist.totalSeconds,
     height: variant.height,
+    width: variant.width,
     bandwidth: variant.bandwidth,
   }
 }
@@ -239,7 +252,11 @@ export async function planDownload(requests: readonly CapturedRequest[], io: Str
       refused = wrongLengthReason(parsed.playlist.totalSeconds, options)
       continue
     }
-    const plan = planFrom(parsed.playlist, variant.url, master.headers, { height: variant.height, bandwidth: variant.bandwidth || null })
+    const plan = planFrom(parsed.playlist, variant.url, master.headers, {
+      width: variant.width,
+      height: variant.height,
+      bandwidth: variant.bandwidth || null,
+    })
     if (plan) return { ok: true, plan }
   }
 
@@ -249,7 +266,7 @@ export async function planDownload(requests: readonly CapturedRequest[], io: Str
       refused = wrongLengthReason(found.playlist.totalSeconds, options)
       continue
     }
-    const plan = planFrom(found.playlist, found.url, found.headers, { height: null, bandwidth: null })
+    const plan = planFrom(found.playlist, found.url, found.headers, { width: null, height: null, bandwidth: null })
     if (plan) return { ok: true, plan }
   }
   return { ok: false, reason: refused ?? unfitReason('nothing', options.sourceName) }

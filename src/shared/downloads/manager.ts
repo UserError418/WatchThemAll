@@ -401,7 +401,7 @@ export class DownloadManager {
       this.patch(id, {
         state: 'downloading',
         format: plan.format,
-        height: this.record(id)!.height ?? plan.height,
+        ...(this.record(id)!.height === null ? { height: plan.height, width: plan.width ?? null } : {}),
         durationSeconds: plan.totalSeconds,
         segmentsTotal: plan.segments.length,
       })
@@ -440,7 +440,7 @@ export class DownloadManager {
           this.patch(id, {
             state: 'done',
             bytesDone: outcome.bytes,
-            height: outcome.height ?? this.record(id)!.height,
+            ...(outcome.height === null ? {} : { height: outcome.height, width: outcome.width }),
             segmentsDone: plan.segments.length,
             error: null,
             finishedAt: this.platform.now(),

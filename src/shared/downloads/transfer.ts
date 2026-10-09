@@ -91,7 +91,8 @@ export interface TransferOptions {
 }
 
 export type TransferOutcome =
-  | { kind: 'done'; bytes: number; height: number | null }
+  /** `width` and `height`: the picture's, from the plan or else the stream's own header; null when neither said. */
+  | { kind: 'done'; bytes: number; width: number | null; height: number | null }
   /** The signed URLs no longer open: capture the source again and resume. */
   | { kind: 'expired' }
   | { kind: 'failed'; reason: string }
@@ -204,7 +205,15 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
 
   const present = new Map((await files.list()).map((f) => [f.name, f.bytes]))
   let bytesDone = [...present.values()].reduce((sum, n) => sum + n, 0)
+  // The picture's size as the master stated it; the stream's own header
+  // fills in what it did not, from the first segment's bytes.
   let height = plan.height
+  let width = plan.height === null ? null : (plan.width ?? null)
+  const noteHeader = (size: { width: number | null; height: number } | null): void => {
+    if (size === null) return
+    height = size.height
+    width = size.width
+  }
   const total = plan.segments.length
   const expected = plan.format === 'fmp4' ? 'm4s' : 'ts'
 
@@ -220,7 +229,7 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
     await files.write(name, got.value)
     present.set(name, got.value.length)
     bytesDone += got.value.length
-    if (i === 0 && height === null) height = readStreamHeader('init', got.value)?.height ?? null
+    if (i === 0 && height === null) noteHeader(readStreamHeader('init', got.value))
   }
 
   // Keys, fetched once each, when a segment first needs one: 16 raw bytes,
@@ -304,7 +313,7 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
     }
     if (signal.aborted) return void (await files.discardSegment(name))
     const size = await files.commitSegment(name, got.value.skip)
-    if (index === 0 && height === null && plan.format === 'ts') height = readStreamHeader('segment', got.value.head)?.height ?? null
+    if (index === 0 && height === null && plan.format === 'ts') noteHeader(readStreamHeader('segment', got.value.head))
     segmentsDone += 1
     bytesDone += size
     sample = { bytes: sample.bytes + size, seconds: sample.seconds + segment.seconds }
@@ -332,5 +341,5 @@ async function transfer(plan: DownloadPlan, files: DownloadFiles, options: Trans
 
   await files.writeText(PLAYLIST_FILE, localPlaylist(plan, gaps))
   const bytes = (await files.list()).reduce((sum, f) => sum + f.bytes, 0)
-  return { kind: 'done', bytes, height }
+  return { kind: 'done', bytes, width, height }
 }

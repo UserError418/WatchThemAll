@@ -10,6 +10,8 @@
  */
 
 import type { DownloadView } from '@shared/ipc'
+import { formatQuality } from '@shared/scanrank'
+import { qualityClass } from '@shared/streamquality'
 import { isUnderWay } from './downloads'
 
 /** What a set of downloads adds up to. Sizes and lengths count what is on the device; lengths only finished downloads. */
@@ -22,8 +24,8 @@ export interface DownloadTotals {
   bytes: number
   /** Seconds of video in the finished ones. */
   seconds: number
-  /** Lowest and highest picture height among the finished ones, or null when none said. */
-  heights: { low: number; high: number } | null
+  /** Lowest and highest quality class among the finished ones, or null when none said. See `qualityLabel`. */
+  qualities: { low: number; high: number } | null
   /** The sources they came from, most used first. */
   sources: string[]
 }
@@ -62,7 +64,7 @@ export function totalsOf(downloads: readonly DownloadView[]): DownloadTotals {
   const sources = new Map<string, number>()
   let low = Infinity
   let high = -Infinity
-  const totals: DownloadTotals = { count: downloads.length, done: 0, underWay: 0, paused: 0, failed: 0, bytes: 0, seconds: 0, heights: null, sources: [] }
+  const totals: DownloadTotals = { count: downloads.length, done: 0, underWay: 0, paused: 0, failed: 0, bytes: 0, seconds: 0, qualities: null, sources: [] }
   for (const d of downloads) {
     totals.bytes += d.bytesDone
     if (d.source) sources.set(d.source.name, (sources.get(d.source.name) ?? 0) + 1)
@@ -73,20 +75,22 @@ export function totalsOf(downloads: readonly DownloadView[]): DownloadTotals {
       totals.done += 1
       totals.seconds += d.durationSeconds ?? 0
       if (d.height !== null) {
-        low = Math.min(low, d.height)
-        high = Math.max(high, d.height)
+        const quality = qualityClass({ width: d.width ?? null, height: d.height })
+        low = Math.min(low, quality)
+        high = Math.max(high, quality)
       }
     }
   }
-  if (low !== Infinity) totals.heights = { low, high }
+  if (low !== Infinity) totals.qualities = { low, high }
   totals.sources = [...sources.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name)
   return totals
 }
 
 /** "720p", "480p–1080p", or null. */
-export function heightsLabel(heights: DownloadTotals['heights']): string | null {
-  if (heights === null) return null
-  return heights.low === heights.high ? `${heights.high}p` : `${heights.low}p–${heights.high}p`
+export function qualitiesLabel(qualities: DownloadTotals['qualities']): string | null {
+  if (qualities === null) return null
+  const { low, high } = qualities
+  return low === high ? formatQuality(high) : `${formatQuality(low)}–${formatQuality(high)}`
 }
 
 /** Hours and minutes of video, as a total: "2 h 05 min", "48 min". */

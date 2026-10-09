@@ -8,7 +8,7 @@ import { fakeNetwork, memoryFolder, mediaPlaylist, tsSegment } from './downloads
 function planOf(body: string, bandwidth: number | null = null): DownloadPlan {
   const parsed = parseMediaPlaylist(body, 'https://cdn/ep.m3u8')
   if (!parsed.ok) throw new Error(parsed.reason)
-  return planFrom(parsed.playlist, 'https://cdn/ep.m3u8', {}, { height: null, bandwidth })!
+  return planFrom(parsed.playlist, 'https://cdn/ep.m3u8', {}, { width: null, height: null, bandwidth })!
 }
 
 function options(overrides: Partial<TransferOptions> = {}): TransferOptions & { sleeps: number[]; progress: number[] } {
@@ -36,6 +36,13 @@ describe('runTransfer', () => {
     expect(outcome).toMatchObject({ kind: 'done' })
     expect([...folder.files.keys()].sort()).toEqual(['index.m3u8', 's00000.ts', 's00001.ts', 's00002.ts', 's00003.ts', 's00004.ts'])
     expect(folder.files.get('s00003.ts')![1]).toBe(3)
+  })
+
+  it("reports the picture's size as the master stated it, width included", async () => {
+    // The width is what names a letterboxed 1080p "1080p" in the Downloads tab.
+    const net = fakeNetwork(routesFor(2))
+    const plan = { ...planOf(mediaPlaylist('https://cdn', 2, 6)), width: 1920, height: 800 }
+    expect(await runTransfer(plan, memoryFolder(net), options())).toMatchObject({ kind: 'done', width: 1920, height: 800 })
   })
 
   it('resumes: segments already in the folder are not fetched again', async () => {

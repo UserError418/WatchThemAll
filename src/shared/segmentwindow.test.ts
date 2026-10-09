@@ -1,7 +1,7 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
+import { masterVariants } from './streamquality'
 import {
-  masterVariants,
   parseMediaPlaylist,
   pickVariant,
   segmentExtension,

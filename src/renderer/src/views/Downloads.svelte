@@ -30,8 +30,8 @@
   } from '../lib/downloads'
   import {
     groupDownloads,
-    heightsLabel,
     overviewOf,
+    qualitiesLabel,
     runtimeLabel,
     seasonCountLabel,
     type DownloadGroup,
@@ -118,7 +118,7 @@
   function facts(download: DownloadView): string[] {
     return [
       size(download),
-      qualityLabel(download.height),
+      qualityLabel(download),
       download.durationSeconds !== null ? clock(download.durationSeconds) : null,
       download.source?.name ?? null,
       new Date(download.finishedAt ?? download.createdAt).toLocaleDateString(),
@@ -127,7 +127,7 @@
 
   /** A group's or season's totals, as a line: size, length, quality, sources. */
   function totalsLine(totals: DownloadTotals): string {
-    return [formatBytes(totals.bytes), runtimeLabel(totals.seconds), heightsLabel(totals.heights), totals.sources.slice(0, 2).join(', ') || null]
+    return [formatBytes(totals.bytes), runtimeLabel(totals.seconds), qualitiesLabel(totals.qualities), totals.sources.slice(0, 2).join(', ') || null]
       .filter((fact): fact is string => fact !== null && fact !== '')
       .join(' · ')
   }
@@ -306,7 +306,7 @@
           {#if speed?.secondsLeft != null}<span>{timeLeftLabel(speed.secondsLeft)}</span>{/if}
           {#if running.segmentsTotal > 0}<span>{running.segmentsDone} of {running.segmentsTotal} segments</span>{/if}
           {#if size(running)}<span>{size(running)}</span>{/if}
-          {#if qualityLabel(running.height)}<span>{qualityLabel(running.height)}</span>{/if}
+          {#if qualityLabel(running)}<span>{qualityLabel(running)}</span>{/if}
         </p>
         <div class="dl-actions small">
           <button onclick={() => downloads.pause(running.id)}>Pause</button>

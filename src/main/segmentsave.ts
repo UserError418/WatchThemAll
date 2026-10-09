@@ -20,9 +20,9 @@
 
 import { lengthVerdict } from '@shared/runtimecheck'
 import type { CapturedRequest, StreamFetch } from '@shared/streamfetch'
+import { masterVariants } from '@shared/streamquality'
 import {
   WINDOW_SECONDS,
-  masterVariants,
   parseMediaPlaylist,
   pickVariant,
   segmentExtension,

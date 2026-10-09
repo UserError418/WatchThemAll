@@ -5,6 +5,8 @@
  */
 
 import type { DownloadView, QualityCap } from '@shared/ipc'
+import { formatQuality } from '@shared/scanrank'
+import { qualityClass } from '@shared/streamquality'
 import { episodeCode } from './format'
 
 /** A download is under way: it takes its turn, is being captured, or is downloading. */
@@ -26,9 +28,17 @@ export function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`
 }
 
-/** "1080p", or null when neither the playlist nor the stream said. */
-export function qualityLabel(height: number | null): string | null {
-  return height === null ? null : `${height}p`
+/**
+ * "1080p", or null when neither the playlist nor the stream said.
+ *
+ * The picture's quality class (`qualityClass`), named as the source lists name
+ * it: by its height alone, a download of 1920×800 said "800p" where the list
+ * it was chosen from said 1080p. A download from before its width was kept is
+ * named by its height.
+ */
+export function qualityLabel(download: Pick<DownloadView, 'width' | 'height'>): string | null {
+  if (download.height === null) return null
+  return formatQuality(qualityClass({ width: download.width ?? null, height: download.height }))
 }
 
 export const QUALITY_LABELS: Record<string, string> = { best: 'Best available', 1080: 'Up to 1080p', 720: 'Up to 720p', 480: 'Up to 480p' }

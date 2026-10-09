@@ -10,13 +10,19 @@ import {
   samePlan,
   type DownloadPlan,
 } from './plan'
-import { parseMediaPlaylist, type Variant } from '../segmentwindow'
+import { parseMediaPlaylist } from '../segmentwindow'
+import type { Variant } from '../streamquality'
 import { fakeNetwork, mediaPlaylist } from './downloads.fixture'
 
 const H = { Referer: 'https://source.example/' }
 const options = { expectedMinutes: 24, cap: 'best' as const, sourceName: 'VidRock', kind: 'episode' as const }
 
-const v = (height: number | null, bandwidth: number): Variant => ({ url: `https://cdn/${height}-${bandwidth}.m3u8`, height, bandwidth })
+const v = (height: number | null, bandwidth: number, width: number | null = null): Variant => ({
+  url: `https://cdn/${width}x${height}-${bandwidth}.m3u8`,
+  bandwidth,
+  width,
+  height,
+})
 
 describe('pickForCap', () => {
   const ladder = [v(480, 1_000), v(1080, 5_000), v(720, 2_500), v(1080, 6_000)]
@@ -36,6 +42,13 @@ describe('pickForCap', () => {
 
   it('judges by bit rate alone when no height is stated', () => {
     expect(pickForCap([v(null, 1_000), v(null, 3_000)], 480)).toEqual(v(null, 3_000))
+  })
+
+  it('judges a letterboxed rendition by its class, not its height', () => {
+    // 1068 lines is under 1080, but 2560 wide is 1440p, which "up to 1080p" is not.
+    const wide = [v(1068, 9_000, 2560), v(800, 5_000, 1920), v(536, 2_500, 1280)]
+    expect(pickForCap(wide, 1080)).toEqual(v(800, 5_000, 1920))
+    expect(pickForCap(wide, 720)).toEqual(v(536, 2_500, 1280))
   })
 })
 
@@ -122,7 +135,7 @@ describe('planDownload', () => {
 function planOf(body: string, url = 'https://cdn/ep.m3u8'): DownloadPlan {
   const parsed = parseMediaPlaylist(body, url)
   if (!parsed.ok) throw new Error(parsed.reason)
-  return planFrom(parsed.playlist, url, H, { height: 720, bandwidth: 2_000_000 })!
+  return planFrom(parsed.playlist, url, H, { width: 1280, height: 720, bandwidth: 2_000_000 })!
 }
 
 describe('the local playlist', () => {

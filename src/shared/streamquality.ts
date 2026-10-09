@@ -158,24 +158,77 @@ export function readMediaPlaylist(body: string): MediaPlaylist {
   return { init, initRange, firstSegment, seconds }
 }
 
+/** One variant of an HLS master: its media playlist, and what the master says about it. */
+export interface Variant {
+  /** Absolute URL of the variant's media playlist. */
+  url: string
+  /** `BANDWIDTH`, bits per second; 0 when not given. */
+  bandwidth: number
+  /** From `RESOLUTION`; both null when the master gave none. */
+  width: number | null
+  height: number | null
+}
+
+/** One `#EXT-X-STREAM-INF` line, and the URI on the line after it, as written. */
+interface StreamInf {
+  bandwidth: number
+  width: number | null
+  height: number | null
+  uri: string | null
+}
+
 /**
- * The renditions of an HLS master.
+ * Every variant an HLS master lists: the one reading of a master in the app.
+ *
+ * There used to be two, this module's (sizes, for the quality) and the
+ * segment window's (URLs, for downloads and the preview cache), and they
+ * read the same lines differently: that one kept only the height, so a
+ * download of 1920×800 said "800p" where the source list said 1080p, and it
+ * matched attributes unanchored, so `AVERAGE-BANDWIDTH` could be read as the
+ * bandwidth.
  *
  * Only `#EXT-X-STREAM-INF` lines count. `#EXT-X-I-FRAME-STREAM-INF` carries a
  * `RESOLUTION` too, but it describes the thumbnails a player shows while
  * scrubbing — counting one would be reading a quality off the preview strip.
  * Audio renditions are `#EXT-X-MEDIA` lines and carry no resolution at all.
  */
-function hlsRenditions(text: string): Rendition[] {
-  const renditions: Rendition[] = []
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith('#EXT-X-STREAM-INF:')) continue
-    // Anchored on a separator: a quoted CODECS value contains commas, and a
-    // custom attribute could end in "RESOLUTION" without being it.
-    const match = /(?:^|[:,])RESOLUTION=(\d+)x(\d+)/.exec(line)
-    if (match) renditions.push({ width: Number(match[1]), height: Number(match[2]) })
+function streamInfs(text: string): StreamInf[] {
+  const found: StreamInf[] = []
+  let pending: StreamInf | null = null
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line.startsWith('#EXT-X-STREAM-INF:')) {
+      // Anchored on a separator: a quoted CODECS value contains commas, and a
+      // custom attribute could end in "RESOLUTION" without being it.
+      const size = /(?:^|[:,])RESOLUTION=(\d+)x(\d+)/.exec(line)
+      const bandwidth = Number(/(?:^|[:,])BANDWIDTH=(\d+)/.exec(line)?.[1] ?? 0)
+      pending = { bandwidth, width: size ? Number(size[1]) : null, height: size ? Number(size[2]) : null, uri: null }
+      found.push(pending)
+    } else if (pending !== null && line !== '' && !line.startsWith('#')) {
+      pending.uri = line
+      pending = null
+    }
   }
-  return renditions
+  return found
+}
+
+/** The variants of an HLS master fetched from `url`, with their playlists' URLs made absolute. */
+export function masterVariants(body: string, url: string): Variant[] {
+  return streamInfs(body).flatMap((inf) => {
+    if (inf.uri === null) return []
+    let resolved: string
+    try {
+      resolved = new URL(inf.uri, url).toString()
+    } catch {
+      return []
+    }
+    return [{ url: resolved, bandwidth: inf.bandwidth, width: inf.width, height: inf.height }]
+  })
+}
+
+/** The renditions of an HLS master that state their size. */
+function hlsRenditions(text: string): Rendition[] {
+  return streamInfs(text).flatMap((inf) => (inf.height === null ? [] : [{ width: inf.width, height: inf.height }]))
 }
 
 /**

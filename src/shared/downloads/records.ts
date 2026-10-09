@@ -49,6 +49,7 @@ function isRecord(v: unknown): v is DownloadRecord {
     (r.source === null || (typeof r.source === 'object' && typeof (r.source as { id?: unknown }).id === 'string')) &&
     Array.isArray(r.refusals) &&
     isNumberOrNull(r.height) &&
+    (r.width === undefined || isNumberOrNull(r.width)) &&
     (r.format === null || r.format === 'ts' || r.format === 'fmp4') &&
     isNumberOrNull(r.durationSeconds) &&
     typeof r.segmentsTotal === 'number' &&
@@ -154,6 +155,7 @@ export function newRecord(subject: DownloadSubject, preferredProviderId: string 
     source: null,
     refusals: [],
     height: null,
+    width: null,
     format: null,
     durationSeconds: null,
     segmentsTotal: 0,

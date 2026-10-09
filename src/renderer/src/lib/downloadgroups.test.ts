@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupDownloads, heightsLabel, overviewOf, runtimeLabel, seasonCountLabel, totalsOf } from './downloadgroups'
+import { groupDownloads, overviewOf, qualitiesLabel, runtimeLabel, seasonCountLabel, totalsOf } from './downloadgroups'
 import { SpeedMeter, speedLabel, timeLeftLabel } from './downloadspeed'
 import type { DownloadView } from '@shared/ipc'
 
@@ -72,18 +72,19 @@ describe('totals', () => {
   it('counts states, and lengths and qualities of finished downloads only', () => {
     const t = totalsOf([
       episode(1, 1, 1, { height: 480 }),
-      episode(1, 1, 2, { height: 1080, source: { id: 'vidrock', name: 'VidRock' } }),
+      // Letterboxed 1080p: its class, as the source lists name it, not "800p".
+      episode(1, 1, 2, { width: 1920, height: 800, source: { id: 'vidrock', name: 'VidRock' } }),
       episode(1, 1, 3, { state: 'downloading', height: 2160, bytesDone: 50e6 }),
       episode(1, 1, 4, { state: 'failed', bytesDone: 0 }),
     ])
-    expect(t).toMatchObject({ count: 4, done: 2, underWay: 1, failed: 1, bytes: 450e6, seconds: 2640, heights: { low: 480, high: 1080 } })
+    expect(t).toMatchObject({ count: 4, done: 2, underWay: 1, failed: 1, bytes: 450e6, seconds: 2640, qualities: { low: 480, high: 1080 } })
     expect(t.sources[0]).toBe('VidSrc')
   })
 
   it('reads as words', () => {
-    expect(heightsLabel({ low: 720, high: 720 })).toBe('720p')
-    expect(heightsLabel({ low: 480, high: 1080 })).toBe('480p–1080p')
-    expect(heightsLabel(null)).toBeNull()
+    expect(qualitiesLabel({ low: 720, high: 720 })).toBe('720p')
+    expect(qualitiesLabel({ low: 480, high: 1080 })).toBe('480p–1080p')
+    expect(qualitiesLabel(null)).toBeNull()
     expect(runtimeLabel(0)).toBeNull()
     expect(runtimeLabel(48 * 60)).toBe('48 min')
     expect(runtimeLabel(125 * 60)).toBe('2 h 05 min')

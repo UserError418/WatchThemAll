@@ -11,7 +11,7 @@ describe('downloadCastBundle', () => {
   it('names every file by an id, and keeps the timing', () => {
     const parsed = parseMediaPlaylist(mediaPlaylist('https://cdn', 3, 6), 'https://cdn/ep.m3u8')
     if (!parsed.ok) throw new Error(parsed.reason)
-    const plan = planFrom(parsed.playlist, 'https://cdn/ep.m3u8', {}, { height: null, bandwidth: null })!
+    const plan = planFrom(parsed.playlist, 'https://cdn/ep.m3u8', {}, { width: null, height: null, bandwidth: null })!
     const bundle = downloadCastBundle(localPlaylist(plan), ids)!
     const body = bundle.playlists[bundle.rootId]!
     expect(Object.values(bundle.files).sort()).toEqual(['s00000.ts', 's00001.ts', 's00002.ts'])
