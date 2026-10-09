@@ -31,6 +31,8 @@
  * the film among the reporting frames by length (`chooseFilm`).
  */
 
+import { trackLanguages } from './audiotracks'
+import { ENGINE_READERS } from './enginereader'
 import { PRESS_PLAY_SCRIPT } from './pressplayscript'
 import { qualityClass } from './streamquality'
 
@@ -130,6 +132,11 @@ export interface FilmQuality {
   /** The picture's size as decoded, 0 before the first frame. */
   width: number
   height: number
+  /**
+   * The languages the sound is offered in, from the engine's audio tracks
+   * (`audiotracks.ts`); empty when it lists none. Filed with a play's offer.
+   */
+  audio: string[]
 }
 
 /**
@@ -227,6 +234,7 @@ export function parseQuality(data: unknown): { id: string; quality: FilmQuality 
       canAuto: raw.canAuto === true,
       width: finite(raw.width) ?? 0,
       height: finite(raw.height) ?? 0,
+      audio: trackLanguages(raw.audio),
     },
   }
 }
@@ -461,123 +469,18 @@ export function filmRelayScript(appOrigin: string, options: { guardNavigation?: 
   const COMMANDS = ['watch', 'play', 'pause', 'toggle', 'setPaused', 'seek', 'seekBy', 'volume', 'mute', 'hide', 'unhide', 'track', 'levels', 'level', 'press']
 
   // ── Quality: the page's streaming engine, found by its shape ──────────────
-  // An hls.js-like engine: a list of levels, the one playing, and an
-  // automatic mode. Found wherever a script can reach it, and only if it is
-  // attached to this very video.
-  const isEngine = (value) => {
-    try {
-      return Array.isArray(value.levels) && value.levels.length > 0 &&
-        typeof value.currentLevel === 'number' && 'autoLevelEnabled' in value
-    } catch (error) { return false }
-  }
-  // Every fiber of the React tree the video is in: first the ones above it,
-  // cheaply (VidLux keeps its hls.js there), then the rest from the root down
-  // (Videasy keeps its own in a component beside the video that renders
-  // nothing).
-  const reactFibers = function* (video) {
-    const key = Object.keys(video).find((name) => name.startsWith('__reactFiber') || name.startsWith('__reactInternalInstance'))
-    let fiber = key ? video[key] : null
-    const above = new Set()
-    for (let hops = 0; fiber && hops < 60; hops++) {
-      above.add(fiber)
-      yield fiber
-      if (!fiber.return) break
-      fiber = fiber.return
-    }
-    for (let hops = 0; fiber && fiber.return && hops < 400; hops++) fiber = fiber.return
-    const stack = fiber ? [fiber] : []
-    for (let n = 0; stack.length > 0 && n < 4000; n++) {
-      const next = stack.pop()
-      if (!above.has(next)) yield next
-      if (next.sibling) stack.push(next.sibling)
-      if (next.child) stack.push(next.child)
-    }
-  }
-  const hookStates = function* (fiber) {
-    let hook = fiber.memoizedState
-    for (let n = 0; hook && typeof hook === 'object' && n < 40; n++, hook = hook.next) yield hook.memoizedState
-  }
+  // The readers are shared with the source tests (\`enginereader.ts\`). Only
+  // an engine attached to this very video counts, and the one found is kept
+  // while it still plays this video: a search walks the page's globals and
+  // its React tree, and the quality menu asks often.
+  ${ENGINE_READERS}
   let engine = null
   const findEngine = (video) => {
     if (engine && (engine.media === video || !engine.media)) return engine
-    engine = null
-    const seen = new Set()
-    let budget = 0
-    const look = (value, depth) => {
-      if (!value || typeof value !== 'object' || seen.has(value) || budget-- <= 0) return null
-      seen.add(value)
-      if (value === window || (typeof Node === 'function' && value instanceof Node)) return null
-      if (isEngine(value) && (!value.media || value.media === video)) return value
-      if (depth === 0) return null
-      let keys = []
-      try { keys = Object.keys(value).slice(0, 80) } catch (error) { return null }
-      for (const key of keys) {
-        let child
-        try { child = value[key] } catch (error) { continue }
-        const found = look(child, depth - 1)
-        if (found) return found
-      }
-      return null
-    }
-    // The page's own globals (VidSrc: window.__JW.state.hls).
-    budget = 8000
-    for (const key of Object.keys(window)) {
-      let value
-      try { value = window[key] } catch (error) { continue }
-      const found = look(value, 3)
-      if (found) return (engine = found)
-    }
-    // React state: a component's hooks, and a class component's instance.
-    budget = 38000
-    for (const fiber of reactFibers(video)) {
-      for (const state of hookStates(fiber)) {
-        const found = look(state, 2)
-        if (found) return (engine = found)
-      }
-      const found = look(fiber.stateNode !== video ? fiber.stateNode : null, 2)
-      if (found) return (engine = found)
-    }
-    return null
+    engine = searchEngine(video)
+    return engine
   }
 
-  // ── Quality, second kind: whole streams, one per quality ──────────────────
-  // Videasy's hls.js holds a single rendition with no size. Its qualities are
-  // separate streams, listed in React state as \`sources: [{ quality: '1080p',
-  // url }]\`, and its own menu switches by handing one to \`handleChangeQuality\`
-  // (\`setCurrentSource\` does the same without that menu's bookkeeping).
-  const streamHeight = (label) => {
-    // No backslashes: this is a template literal, which drops the one before d.
-    const match = /([0-9]{3,4}) *p/i.exec(String(label))
-    return match ? Number(match[1]) : /4k/i.test(String(label)) ? 2160 : 0
-  }
-  const isStreamList = (value) => {
-    try {
-      return Array.isArray(value) && value.length > 1 &&
-        value.every((stream) => stream && typeof stream.url === 'string' && streamHeight(stream.quality) > 0)
-    } catch (error) { return false }
-  }
-  const findStreams = (video) => {
-    let list = null
-    let handle = null
-    let set = null
-    let current = null
-    for (const fiber of reactFibers(video)) {
-      for (const state of hookStates(fiber)) {
-        if (!state || typeof state !== 'object') continue
-        try {
-          if (!list && isStreamList(state.sources)) list = state.sources
-          if (!handle && typeof state.handleChangeQuality === 'function') handle = state.handleChangeQuality
-          if (!set && typeof state.setCurrentSource === 'function') set = state.setCurrentSource
-          if (!current && state.currentSource && typeof state.currentSource.url === 'string') current = state.currentSource
-        } catch (error) {}
-      }
-      if (list && handle && current) break
-    }
-    const choose = handle || set
-    if (!list || !choose) return null
-    const playing = current ? list.findIndex((stream) => stream.url === current.url) : -1
-    return { list, choose, current: playing }
-  }
   // A new stream starts from its beginning: put the viewer back where they were.
   const resumeAfterSwitch = (video, at) => {
     if (!(at > 5)) return
@@ -595,13 +498,7 @@ export function filmRelayScript(appOrigin: string, options: { guardNavigation?: 
   const reportQuality = (video) => {
     if (!watching || video !== film()) return
     const found = findEngine(video)
-    const levels = []
-    if (found) {
-      found.levels.forEach((level, index) => {
-        const height = Number(level && level.height)
-        if (height > 0) levels.push({ index, width: Number(level.width) || 0, height, bitrate: Number(level.bitrate) || 0 })
-      })
-    }
+    const levels = engineLevels(found)
     let current = found ? Number(found.currentLevel) : -1
     let auto = found ? found.autoLevelEnabled !== false : true
     qualityKind = levels.length > 0 ? 'engine' : null
@@ -623,6 +520,7 @@ export function filmRelayScript(appOrigin: string, options: { guardNavigation?: 
       canAuto: qualityKind === 'engine',
       width: Number(video.videoWidth) || 0,
       height: Number(video.videoHeight) || 0,
+      audio: audioTracksOf(found, video),
     } })
   }
 

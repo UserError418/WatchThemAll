@@ -459,6 +459,7 @@ describe('quality', () => {
       canAuto: true,
       width: 1280,
       height: 720,
+      audio: [],
     })
     command(w, { command: 'level', index: 0, duration: 2_885 })
     expect(engine.currentLevel).toBe(0)
@@ -567,7 +568,19 @@ describe('quality', () => {
     w.player.videos.push(film)
     command(w, { command: 'watch' })
     command(w, { command: 'levels', duration: 2_885 })
-    expect(qualityOf(w.heard)).toEqual({ levels: [], current: -1, auto: true, canAuto: false, width: 1280, height: 720 })
+    expect(qualityOf(w.heard)).toEqual({ levels: [], current: -1, auto: true, canAuto: false, width: 1280, height: 720, audio: [] })
+  })
+
+  /** A play files these with its offer, so a dubbed and a subtitled source can be told apart. */
+  it("reports the languages of the engine's audio tracks", () => {
+    const w = world()
+    const film = new FakeVideo(2_885)
+    w.player.videos.push(film)
+    const engine = { ...engineFor(film), audioTracks: [{ lang: 'jpn', name: 'Japanese' }, { lang: 'en-US', name: 'English' }] }
+    ;(w.player.win as unknown as Record<string, unknown>).hls = engine
+    command(w, { command: 'watch' })
+    command(w, { command: 'levels', duration: 2_885 })
+    expect(qualityOf(w.heard)?.audio).toEqual(['ja', 'en'])
   })
 
   it("ignores an engine attached to another video", () => {
@@ -589,6 +602,7 @@ describe('offeredQuality', () => {
     canAuto: true,
     width: 1280,
     height: 720,
+    audio: [],
   })
 
   it("is the top of the engine's ladder, named as the source lists name it", () => {
