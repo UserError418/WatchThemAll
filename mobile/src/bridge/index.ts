@@ -1972,7 +1972,7 @@ export async function createBridge(): Promise<WtaApi> {
       resume: automatic.resume,
       scan: results.scan,
       sharedFrom: results.sharedFrom,
-      castability: castabilities(order, results.scan, everyRow(sources, 'phone', now), now),
+      castability: castabilities(order, results, everyRow(sources, 'phone', now), now),
       order,
     }
   }

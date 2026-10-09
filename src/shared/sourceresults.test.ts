@@ -1,5 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
+import { castabilities } from './castability'
 import { RESULT_TTL_MS } from './scanrow'
 import {
   deviceRows,
@@ -317,15 +318,92 @@ describe('titleResults', () => {
     expect(read(history).scan).toBeNull()
   })
 
-  it("takes a television's answer from the newest success that saw how the video came, so a newer test replaces it", () => {
-    const cast = result({ origin: 'play', delivery: 'progressive', cast: 'refused', ago: 2 * HOUR })
-    expect(read([cast]).scan?.casts).toEqual({ a: 'refused' })
-    const retested = [cast, result({ delivery: 'segmented', ago: HOUR })]
-    expect(read(retested).scan?.casts).toEqual({})
-    expect(read(retested).scan?.delivery).toEqual({ a: 'segmented' })
-    // A play that did not see the delivery leaves both as they were.
-    const played = [cast, result({ origin: 'play', ms: 1_000, ago: HOUR })]
-    expect(read(played).scan?.casts).toEqual({ a: 'refused' })
+  /*
+   * What a television said is its own fact (rule 5, 2.0.18). Until then the
+   * answer came from the newest success that saw a delivery, so the next test,
+   * which carries none, erased a refusal and the source was offered again.
+   */
+  describe("a television's answer", () => {
+    const refused = (parts: Partial<SourceResult> = {}): SourceResult =>
+      result({ origin: 'play', delivery: 'segmented', cast: 'refused', ago: 2 * HOUR, ...parts })
+
+    it('is kept, with when it was given, by a test after it', () => {
+      const retested = [refused(), result({ delivery: 'segmented', ago: HOUR })]
+      expect(read(retested).scan?.casts).toEqual({ a: 'refused' })
+      expect(read(retested).scan?.castAt).toEqual({ a: now - 2 * HOUR })
+      // The test still decides how the video arrives.
+      expect(read(retested).scan?.delivery).toEqual({ a: 'segmented' })
+    })
+
+    it('on one episode is the answer for the whole title, until a newer cast played', () => {
+      const onE1 = refused({ episode: 1 })
+      const testedE2 = result({ episode: 2, delivery: 'segmented', ago: HOUR })
+      expect(read([onE1, testedE2], { season: 1, episode: 2 }).scan?.casts).toEqual({ a: 'refused' })
+      const playedE3 = result({ episode: 3, origin: 'play', delivery: 'segmented', cast: 'played', ago: 30 * MINUTE })
+      expect(read([onE1, testedE2, playedE3], { season: 1, episode: 2 }).scan?.casts).toEqual({ a: 'played' })
+    })
+
+    it("comes from either kind of device: it is the television's", () => {
+      const fromPhone = refused({ ...PHONE })
+      const testedHere = result({ delivery: 'segmented', ago: HOUR })
+      expect(read([fromPhone, testedHere]).scan?.casts).toEqual({ a: 'refused' })
+    })
+
+    it('is a row of its own when nothing else measured the source', () => {
+      const { scan } = read([refused()])
+      expect(scan?.casts).toEqual({ a: 'refused' })
+      expect(scan?.verdicts).toEqual({})
+      expect(scan?.at).toBe(now - 2 * HOUR)
+    })
+  })
+
+  describe('what the cast list makes of it', () => {
+    const castList = (history: SourceResult[], episode: { season: number; episode: number }) =>
+      castabilities(['a'], read(history, episode), deviceRows(history, now), now).a
+
+    it('hides a source refused on E1 when E2 is opened, though a test of E2 saw HLS', () => {
+      const history = [
+        result({ episode: 1, origin: 'play', delivery: 'segmented', cast: 'refused', ago: 2 * HOUR }),
+        result({ episode: 2, delivery: 'segmented', ago: HOUR }),
+      ]
+      expect(castList(history, { season: 1, episode: 2 })).toBe('no')
+    })
+
+    it("offers a source only the phone saw streaming as likely on the desktop, never as casting", () => {
+      const history = [result({ ...PHONE, delivery: 'segmented' })]
+      expect(castList(history, { season: 1, episode: 1 })).toBe('likely')
+    })
+
+    it('lists a source that blocked the cast as blocked, not as a format the TV cannot play', () => {
+      const history = [result({ origin: 'play', delivery: 'segmented', cast: 'blocked' })]
+      expect(castList(history, { season: 1, episode: 1 })).toBe('blocked')
+    })
+  })
+
+  describe('a cast that did not play', () => {
+    it('is no green: refused or blocked, it says nothing about the source streaming', () => {
+      const dead = result({ verdict: 'dead', ago: 3 * HOUR })
+      for (const cast of ['refused', 'blocked'] as const) {
+        const history = [dead, result({ origin: 'play', delivery: 'segmented', cast, ago: HOUR })]
+        expect(read(history).scan?.verdicts).toEqual({ a: 'dead' })
+      }
+    })
+
+    it('a beam from before 2.0.18, filed with no answer, counts for nothing at all', () => {
+      // Every phone cast, and every desktop cast that failed or never settled.
+      const unanswered = result({ origin: 'play', delivery: 'segmented', ago: HOUR })
+      expect(read([unanswered]).scan).toBeNull()
+      const dead = result({ verdict: 'dead', ago: 3 * HOUR })
+      expect(read([dead, unanswered]).scan?.verdicts).toEqual({ a: 'dead' })
+    })
+
+    it('one that played is a success like any play', () => {
+      const played = result({ origin: 'play', delivery: 'progressive', cast: 'played', ago: HOUR })
+      const { scan } = read([result({ verdict: 'dead', ago: 3 * HOUR }), played])
+      expect(scan?.verdicts).toEqual({ a: 'stream' })
+      expect(scan?.casts).toEqual({ a: 'played' })
+      expect(scan?.delivery).toEqual({ a: 'progressive' })
+    })
   })
 
   it('dates each source by the result that decided it, and the row by the newest', () => {

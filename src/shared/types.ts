@@ -866,11 +866,19 @@ export interface ProviderScan {
    */
   delivery?: Record<string, StreamDelivery>
   /**
-   * What the television said when each provider was cast. Written by a real
-   * cast, not by a test, and replaced like every other detail when the
-   * provider is next measured.
+   * What a television said the last time each provider was cast, for any
+   * episode of the title. Written only by a real cast. A test never replaces
+   * it: it stands until a newer cast answers, or until it ages out. See
+   * `titleResults` in `sourceresults.ts`.
    */
   casts?: Record<string, CastOutcome>
+  /**
+   * When each answer in `casts` was given. Its own time, because the
+   * answer is decided apart from the verdict and is often older than it,
+   * and a source's record across titles goes by the newest answer anywhere
+   * (`sourceCastability`). Absent for rows stored before it existed.
+   */
+  castAt?: Record<string, number>
 }
 
 /**

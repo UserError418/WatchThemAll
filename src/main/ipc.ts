@@ -298,7 +298,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
         resume: automatic.resume,
         scan: results.scan,
         sharedFrom: results.sharedFrom,
-        castability: castabilities(order, results.scan, everyRow(sources, 'desktop', now), now),
+        castability: castabilities(order, results, everyRow(sources, 'desktop', now), now),
         order,
       }
     },

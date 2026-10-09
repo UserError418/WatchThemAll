@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { castabilities, isCastableFileType, sourceCastability, titleCastability, wholeFileDelivery } from './castability'
+import {
+  castabilities,
+  isCastableFileType,
+  liveCastability,
+  sourceCastability,
+  titleCastability,
+  wholeFileDelivery,
+} from './castability'
 import { RESULT_TTL_MS } from './scanrow'
 import type { ProviderScan } from './types'
 
 const now = 1_800_000_000_000
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
 
 const row = (titleKey: string, extra: Partial<ProviderScan>, at = now): ProviderScan => ({
   titleKey,
@@ -41,6 +50,21 @@ describe('titleCastability', () => {
     expect(titleCastability(scan, 'a')).toBe('no')
     expect(titleCastability(scan, 'b')).toBe('yes')
   })
+
+  it('does not report a source that blocked the cast as one whose format the TV refused', () => {
+    const scan = row('tv:tt1', { delivery: { a: 'segmented' }, casts: { a: 'blocked' } })
+    expect(titleCastability(scan, 'a')).toBe('blocked')
+  })
+
+  it("reads the other kind of device's delivery as likely at most", () => {
+    // The phone calls a playlist alone a stream: on the desktop that predicts, and proves nothing.
+    const scan = row('tv:tt1', { delivery: { a: 'segmented', b: 'other' }, casts: { c: 'played' } })
+    const sharedFrom = { a: 'phone', b: 'phone', c: 'phone' }
+    expect(titleCastability(scan, 'a', sharedFrom)).toBe('likely')
+    expect(titleCastability(scan, 'b', sharedFrom)).toBe('no')
+    // A television's answer is the television's, whichever device handed it the stream.
+    expect(titleCastability(scan, 'c', sharedFrom)).toBe('yes')
+  })
 })
 
 describe('sourceCastability', () => {
@@ -55,6 +79,47 @@ describe('sourceCastability', () => {
     expect(sourceCastability([], 'a', now)).toBeNull()
   })
 
+  /*
+   * The rule across titles (2.0.18): `likely` only while the source's last
+   * cast anywhere, if it was ever cast, played. Before, one castable stream
+   * anywhere made it `likely` whatever any television had said since.
+   */
+  it('stops calling a source likely once its last cast anywhere was refused', () => {
+    const tested = row('tv:tt1', { delivery: { a: 'segmented' } }, now - 3 * HOUR)
+    const refused = row('tv:tt2', { delivery: { a: 'segmented' }, casts: { a: 'refused' }, castAt: { a: now - 2 * HOUR } })
+    expect(sourceCastability([tested, refused], 'a', now)).toBeNull()
+    // A test since says how the video arrives, which the refusal has shown is not enough.
+    const retested = row('tv:tt3', { delivery: { a: 'segmented' } }, now - HOUR)
+    expect(sourceCastability([tested, refused, retested], 'a', now)).toBeNull()
+  })
+
+  it('calls it likely again once a newer cast played, anywhere', () => {
+    const refused = row('tv:tt2', { delivery: { a: 'segmented' }, casts: { a: 'refused' }, castAt: { a: now - 2 * HOUR } })
+    const played = row('tv:tt3', { delivery: { a: 'segmented' }, casts: { a: 'played' }, castAt: { a: now - HOUR } })
+    expect(sourceCastability([refused, played], 'a', now)).toBe('likely')
+    // And an older play does not outrank a newer refusal.
+    const playedEarlier = row('tv:tt3', { delivery: { a: 'segmented' }, casts: { a: 'played' }, castAt: { a: now - 3 * HOUR } })
+    expect(sourceCastability([refused, playedEarlier], 'a', now)).toBeNull()
+  })
+
+  it('dates an answer by when the television gave it, not by the newer test beside it', () => {
+    // The row's verdict is from a test an hour ago; the refusal was a day ago, the play elsewhere since.
+    const refusedLongAgo = row('tv:tt2', { delivery: { a: 'segmented' }, casts: { a: 'refused' }, castAt: { a: now - DAY }, testedAt: { a: now - HOUR } })
+    const played = row('tv:tt3', { delivery: { a: 'segmented' }, casts: { a: 'played' }, castAt: { a: now - 2 * HOUR } })
+    expect(sourceCastability([refusedLongAgo, played], 'a', now)).toBe('likely')
+  })
+
+  it('treats a block as a failed cast but not as a format the TV cannot play', () => {
+    const tested = row('tv:tt1', { delivery: { a: 'segmented' } }, now - 3 * HOUR)
+    const blocked = row('tv:tt2', { delivery: { a: 'segmented' }, casts: { a: 'blocked' }, castAt: { a: now - HOUR } })
+    expect(sourceCastability([tested, blocked], 'a', now)).toBeNull()
+    // Blocked and nothing else: not known to cast, and not hidden either.
+    expect(sourceCastability([blocked], 'a', now)).toBeNull()
+    // Refused and nothing else is a source never seen castable, as before.
+    const refused = row('tv:tt2', { delivery: { a: 'segmented' }, casts: { a: 'refused' }, castAt: { a: now - HOUR } })
+    expect(sourceCastability([refused], 'a', now)).toBe('no')
+  })
+
   it('forgets what a source did past the lifetime of a result', () => {
     // A castable stream long ago, only MKV since: the old one must not keep it "likely".
     const old = row('tv:tt1', { delivery: { a: 'progressive' } }, now - RESULT_TTL_MS - 1)
@@ -65,15 +130,37 @@ describe('sourceCastability', () => {
 
 describe('castabilities', () => {
   it("uses the title's evidence where there is any and the source's record elsewhere", () => {
-    const title = row('tv:tt1', { delivery: { a: 'other', b: 'segmented' } })
+    const title = row('tv:tt1', { delivery: { a: 'other', b: 'segmented', f: 'segmented' }, casts: { g: 'blocked' } })
     const elsewhere = [row('tv:tt2', { delivery: { a: 'progressive', c: 'progressive', d: 'other' } })]
-    expect(castabilities(['a', 'b', 'c', 'd', 'e'], title, [title, ...elsewhere], now)).toEqual({
+    expect(castabilities(['a', 'b', 'c', 'd', 'e', 'f', 'g'], { scan: title, sharedFrom: { f: 'phone' } }, [title, ...elsewhere], now)).toEqual({
       // Castable elsewhere, but MKV for this very title: the title decides.
       a: 'no',
       b: 'yes',
       c: 'likely',
       d: 'no',
       e: 'unknown',
+      // Seen streaming HLS by the phone only.
+      f: 'likely',
+      // The source refused the proxy the last time it was cast: listed, not hidden.
+      g: 'blocked',
     })
+  })
+})
+
+describe('liveCastability', () => {
+  it("never lets a test's delivery override what a television said", () => {
+    // The test still running in the cast list sees the playlist the TV refused.
+    expect(liveCastability('no', 'refused', 'segmented')).toBe('no')
+    expect(liveCastability('blocked', 'blocked', 'segmented')).toBe('blocked')
+    expect(liveCastability('yes', 'played', 'other')).toBe('yes')
+  })
+
+  it('lets it fill in, and correct, a prediction', () => {
+    // MKV last time, HLS now: the source changed its form.
+    expect(liveCastability('no', undefined, 'segmented')).toBe('yes')
+    expect(liveCastability('likely', undefined, 'progressive')).toBe('yes')
+    // A test that could not see the form says nothing.
+    expect(liveCastability('likely', undefined, 'unknown')).toBe('likely')
+    expect(liveCastability(undefined, undefined, undefined)).toBe('unknown')
   })
 })

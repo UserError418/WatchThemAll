@@ -62,6 +62,7 @@ import { MAX_SCANS, RESULT_TTL_MS, testedAtOf } from '@shared/scanrow'
 import type { TitleResults } from '@shared/scanshare'
 import {
   deviceRows,
+  isPlaybackEvidence,
   legacyResults,
   measurement,
   titleResults as decideTitle,
@@ -496,6 +497,8 @@ export function lastPlayedHere(sources: ResultSources, key: string): string | nu
   for (const result of sources.history) {
     if (result.titleKey !== key || result.deviceId !== sources.doc.deviceId) continue
     if (result.origin !== 'play' || result.verdict !== 'stream') continue
+    // A cast the television refused, or the source blocked, was not watched.
+    if (!isPlaybackEvidence(result)) continue
     if (!best || result.at > best.at) best = result
   }
   return best?.providerId ?? null

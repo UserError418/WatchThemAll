@@ -34,7 +34,7 @@
     sharedLabel,
     tagText,
   } from '@shared/scanrank'
-  import { deliveryCastability, type Castability } from '@shared/castability'
+  import { liveCastability, type Castability } from '@shared/castability'
   import { untrack } from 'svelte'
   import { fade } from 'svelte/transition'
   import type { Episode, Season, StreamDelivery } from '@shared/types'
@@ -486,13 +486,25 @@
   let castFailureNote = $state<string | null>(null)
 
   /**
-   * Whether a source can cast this title, with the live test's findings first.
-   * A test run from the list itself fills the list in as each source settles.
+   * Whether a source can cast this title. A test run from the list itself
+   * fills the list in as each source settles, but never over what a
+   * television said (`liveCastability`).
    */
   function castabilityOf(id: string): Castability {
     // A download is a playlist and segments served from this device: it casts.
     if (isDownloadedSource(id)) return 'yes'
-    return deliveryCastability(liveRun ? scanDelivery[id] : undefined) ?? sourceState.castability[id] ?? 'unknown'
+    return liveCastability(sourceState.castability[id], sourceState.scan?.casts?.[id], liveRun ? scanDelivery[id] : undefined)
+  }
+
+  /**
+   * Why a `likely` row is expected to cast. The other kind of device's test
+   * of this very title predicts it and proves nothing (`titleCastability`),
+   * so the row says where it was seen rather than "casts".
+   */
+  function likelyTag(id: string): string {
+    const from = sourceState.sharedFrom[id]
+    if (from !== undefined) return from === 'phone' ? 'streamed on your phone' : 'streamed on your PC'
+    return 'cast on another title'
   }
 
   /**
@@ -500,6 +512,12 @@
    * checked — a source seen handing out a file elsewhere ahead of the rest.
    * Sources known not to cast are left out and counted, except one the user
    * just tried, which stays so its row can say what happened.
+   *
+   * A source that blocked its last cast is listed after the unknowns, not
+   * hidden: a block is the source's servers refusing the proxy, which comes
+   * and goes from day to day, so it may well cast now. It goes last because
+   * every other row has nothing against it. Greyed in place was the other
+   * choice, and would have read as "cannot be picked".
    */
   const castGroups = $derived.by(() => {
     const rows = sourceRows.map((provider) => ({ provider, castable: castabilityOf(provider.id) }))
@@ -511,6 +529,7 @@
         ...rows.filter((r) => r.castable === 'unknown' && !tried(r.provider.id)),
         ...rows.filter((r) => tried(r.provider.id)),
       ],
+      blocked: rows.filter((r) => r.castable === 'blocked' && !tried(r.provider.id)),
       hidden: rows.filter((r) => r.castable === 'no' && !tried(r.provider.id)).length,
     }
   })
@@ -1598,7 +1617,9 @@
     {:else if castable === 'yes'}
       <span class="tag">{current ? `${currentLabel} · ` : ''}casts{measurement(provider.id)}</span>
     {:else if castable === 'likely'}
-      <span class="tag">cast on another title</span>
+      <span class="tag">{likelyTag(provider.id)}</span>
+    {:else if castable === 'blocked'}
+      <span class="tag">blocked by the source</span>
     {:else if current}
       <span class="tag">{currentLabel}</span>
     {:else if dot.label || measurement(provider.id)}
@@ -1642,13 +1663,21 @@
         {@render castRow(row.provider, row.castable)}
       {/each}
     {/if}
+    {#if castGroups.blocked.length > 0}
+      <p class="cast-group">Blocked casting when last tried</p>
+      {#each castGroups.blocked as row (row.provider.id)}
+        {@render castRow(row.provider, row.castable)}
+      {/each}
+    {/if}
     {#if castGroups.hidden > 0}
       <!-- Counted rather than silently dropped: a list that shrank for
-           no stated reason reads as sources having gone missing. -->
+           no stated reason reads as sources having gone missing. A TV's
+           refusal, another container and DASH all land here; a source's
+           block does not (the group above). -->
       <p class="hint">
         {castGroups.hidden === 1
           ? '1 source only streams'
-          : `${castGroups.hidden} sources only stream`} in a format this TV cannot play.
+          : `${castGroups.hidden} sources only stream`} in a form that cannot be cast to this TV.
       </p>
     {/if}
   </div>

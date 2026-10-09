@@ -22,8 +22,15 @@
  *   the desktop its picture), and when the source's own servers declare a
  *   failure: an error status for its page or its backend, or its video
  *   refused. A slow source, a dropped network or a crash is not a result.
- *   The phone files successes only. See `PlayMeasurement`.
+ *   The phone files successes only. See `PlayMeasurement`. A cast is filed
+ *   as a play too, once the television has answered (`castResults`); only
+ *   one that played counts as the source streaming (`isPlaybackEvidence`).
  * - `preview`: the detail view's stream preview, once its film plays.
+ *
+ * Never for a download: it is not a source (`DOWNLOADED_SOURCE_ID`), and a
+ * result filed under it would teach the resume rule that the title streams
+ * on a source that does not exist. `isSourceResult` turns such a record
+ * away, and the store does not keep one (`store/results.ts`).
  *
  * Each device keeps its history in a file of its own, and it syncs as a
  * file of its own (`store/results.ts`, `sync/results.ts`).
@@ -48,6 +55,11 @@
  *    median of the latest successes (`SAMPLE_SIZE`), so one slow evening does not move a
  *    source down. The quality is the best of them, since a player's first
  *    picture is often a lower rung of the stream's ladder.
+ *
+ * 5. **What a television said is its own fact.** A cast's answer is read
+ *    apart from the rules above, across the whole title and both kinds of
+ *    device, newest first, and a test never replaces it (2.0.18; see
+ *    `titleResults`).
  *
  * ## Old results
  *
@@ -352,6 +364,32 @@ function isStrong(result: SourceResult): boolean {
   return result.origin === 'test' || result.verdict === 'stream'
 }
 
+/**
+ * Whether a result says anything about the source streaming here, which is
+ * what the verdict, the speed and the resume rule are decided from.
+ *
+ * A cast says so only when it played. One the television refused, or the
+ * source blocked, is filed with the verdict casts always had (`stream`: the
+ * beam fetched the source's stream to find it), so that older builds read
+ * it as they did; but it is evidence about casting, read by rule 5, and a
+ * cast that did not play must not make a source green.
+ *
+ * A play that carries a delivery and no answer is a beam from before
+ * 2.0.18, filed whether or not the television ever played it: every phone
+ * cast, and every desktop cast that failed or never settled. Nothing else
+ * files a play with a delivery. It is not evidence of anything, and is read
+ * as nothing until it ages out.
+ */
+export function isPlaybackEvidence(result: SourceResult): boolean {
+  if (result.origin !== 'play' || result.delivery === undefined) return true
+  return result.cast === 'played'
+}
+
+/** Whether a result is a television's answer, for rule 5; a beam from before 2.0.18 with no answer is not. */
+function isCastAnswer(result: SourceResult): result is SourceResult & { cast: CastOutcome } {
+  return result.cast !== undefined
+}
+
 /** Rule 3: the newest strong result, overruled by weak failures newer than it. */
 function decide(results: readonly SourceResult[]): Decision | null {
   let strong: SourceResult | null = null
@@ -407,18 +445,34 @@ function median(values: readonly number[]): number {
   return sorted.length % 2 === 1 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2)
 }
 
-/**
- * How the source hands out its video, and what a television said when it was
- * cast: from the newest success that saw it. A cast carries both, and a test
- * after it carries only the delivery, so a newer test replaces the
- * television's answer as it always did (a source that changed its form has
- * to be cast again to be known).
- */
-function castDetails(results: readonly SourceResult[]): Pick<SourceResult, 'delivery' | 'cast'> {
-  const newest = results
+/** How the source hands out its video: from the newest success that saw it. */
+function newestDelivery(results: readonly SourceResult[]): StreamDelivery | undefined {
+  return results
     .filter((r) => r.verdict === 'stream' && r.delivery !== undefined)
-    .sort((a, b) => b.at - a.at)[0]
-  return { delivery: newest?.delivery, cast: newest?.cast }
+    .sort((a, b) => b.at - a.at)[0]?.delivery
+}
+
+/**
+ * Rule 5: what a television said the last time this source was cast, for
+ * any episode of the title, from either kind of device.
+ *
+ * Tracked apart from the delivery, because the two used to be one field:
+ * the newest success that saw a delivery gave both, and a test carries no
+ * answer, so the next test erased a refusal and the cast list offered the
+ * source again. Now an answer stands until a newer answer or its lifetime.
+ *
+ * The whole title rather than the episode: a refusal on E1 hid the source
+ * on E1 and left it offered on E2, where it failed the same way (a source
+ * serves a title's episodes alike). A newer `played` anywhere on the title
+ * lifts it. Either kind of device: a television's answer is about the stream
+ * and the television, whichever device handed it over.
+ */
+function newestAnswer(results: readonly SourceResult[]): { cast: CastOutcome; at: number } | null {
+  let newest: { cast: CastOutcome; at: number } | null = null
+  for (const result of results) {
+    if (isCastAnswer(result) && (newest === null || result.at > newest.at)) newest = { cast: result.cast, at: result.at }
+  }
+  return newest
 }
 
 /**
@@ -457,11 +511,19 @@ export function titleResults(input: {
     qualities: {},
     delivery: {},
     casts: {},
+    castAt: {},
   }
   const sharedFrom: Record<string, DeviceKind> = {}
   const playedHereAfter = (providerId: string, at: number): boolean => (playedAt[providerId] ?? -Infinity) > at
 
-  for (const [providerId, results] of byProvider) {
+  for (const [providerId, everything] of byProvider) {
+    const answer = newestAnswer(everything)
+    if (answer !== null) {
+      row.casts[providerId] = answer.cast
+      row.castAt[providerId] = answer.at
+    }
+
+    const results = everything.filter(isPlaybackEvidence)
     const ownScope = inScope(
       results.filter((r) => r.deviceKind === here),
       episode,
@@ -475,7 +537,7 @@ export function titleResults(input: {
         const { ms, quality } = measurements(ownScope)
         if (ms !== undefined) row.timings[providerId] = ms
         if (quality !== undefined) row.qualities[providerId] = quality
-        fillCastDetails(row, providerId, ownScope)
+        fillDelivery(row, providerId, ownScope)
       }
       continue
     }
@@ -492,18 +554,20 @@ export function titleResults(input: {
     row.verdicts[providerId] = 'unsure'
     row.testedAt[providerId] = other.at
     sharedFrom[providerId] = otherScope[0]!.deviceKind
-    fillCastDetails(row, providerId, otherScope)
+    fillDelivery(row, providerId, otherScope)
   }
 
-  if (Object.keys(row.verdicts).length === 0) return { scan: null, sharedFrom }
-  row.at = Math.max(...Object.values(row.testedAt))
+  // A source a television answered for and nothing else measured has an
+  // answer and no verdict: still a row, for the cast list.
+  const dates = [...Object.values(row.testedAt), ...Object.values(row.castAt)]
+  if (dates.length === 0) return { scan: null, sharedFrom }
+  row.at = Math.max(...dates)
   return { scan: row, sharedFrom }
 }
 
-function fillCastDetails(row: Required<ProviderScan>, providerId: string, results: readonly SourceResult[]): void {
-  const { delivery, cast } = castDetails(results)
+function fillDelivery(row: Required<ProviderScan>, providerId: string, results: readonly SourceResult[]): void {
+  const delivery = newestDelivery(results)
   if (delivery !== undefined) row.delivery[providerId] = delivery
-  if (cast !== undefined) row.casts[providerId] = cast
 }
 
 /**

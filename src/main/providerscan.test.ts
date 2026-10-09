@@ -400,6 +400,19 @@ describe('titleResults', () => {
     expect(lastPlayedHere(sources({ history: [play('b', now, 'phone-1')] }), 'tv:tt1')).toBeNull()
   })
 
+  it('does not resume on a source whose cast did not play', () => {
+    const play = (providerId: string, at: number) => ({ ...tested(providerId, 'stream', at), origin: 'play' as const })
+    const cast = (providerId: string, at: number, outcome?: 'played' | 'refused' | 'blocked') => ({
+      ...play(providerId, at),
+      delivery: 'segmented' as const,
+      ...(outcome ? { cast: outcome } : {}),
+    })
+    // Refused, blocked, and a beam from before 2.0.18 that never heard the TV.
+    const history = [play('a', now - 3 * day), cast('b', now - 2 * day, 'refused'), cast('c', now - day, 'blocked'), cast('d', now)]
+    expect(lastPlayedHere(sources({ history }), 'tv:tt1')).toBe('a')
+    expect(lastPlayedHere(sources({ history: [...history, cast('e', now + 1, 'played')] }), 'tv:tt1')).toBe('e')
+  })
+
   it('reads the history for the episode asked about', () => {
     const history = [tested('a', 'stream', now - day, 1), tested('a', 'dead', now - day, 2)]
     expect(titleResults(sources({ history }), 'tv:tt1', { season: 1, episode: 1 }, 'desktop', now).scan?.verdicts).toEqual({ a: 'stream' })
