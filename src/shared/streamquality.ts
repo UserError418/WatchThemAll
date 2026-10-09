@@ -22,6 +22,8 @@
  * standard frame it was encoded to fill; see `qualityClass`.
  */
 
+import type { QualityKind } from './types'
+
 /** One rendition a manifest offers. Width is null when the manifest gave only a height. */
 export interface Rendition {
   width: number | null
@@ -275,16 +277,26 @@ function sorted(renditions: Rendition[]): Rendition[] {
 }
 
 /**
- * What one probe of one source could say about its quality.
+ * What one probe of one source could say about its quality, and what the
+ * answer is worth (`QualityKind`: the best on offer, or a floor under it).
  *
- * - `ladder` — a manifest listed its renditions, so the best is known.
+ * - `ladder` — a manifest listed its renditions, so the best is known. Offered.
  * - `player` — the player's own list of qualities, read from its API or from
- *   its quality menu, hidden or not.
- * - `single-file` — the source served one whole file. There is only one
- *   rendition, so the picture the page decoded *is* the best it offers.
- * - `single-rendition` — HLS without a master: the page fetched media playlists
- *   and never a list of renditions, so there is one, and its size is the best.
- *   Read from its init segment, or failing that from the picture.
+ *   its quality menu, hidden or not. Offered.
+ * - `single-file` — the source served a whole file. When it is the only thing
+ *   the page fetched, there is one rendition and the picture the page decoded
+ *   *is* the best it offers (offered); beside other files or playlists it is
+ *   one of several (a floor).
+ * - `single-rendition` — HLS without a master: every playlist the page fetched
+ *   was read, each a media playlist. Its size, from its init segment or its
+ *   picture, is a floor: a source can keep its other qualities as separate
+ *   streams that no master lists (Videasy's 1080p, 720p and 480p are each
+ *   their own playlist, chosen in the page).
+ * - `rung` — a media playlist was read, but another playlist the page fetched
+ *   would not answer again, and a master may have been among those. What was
+ *   read is the rung the player started on, a floor. Measured 2026-10-08:
+ *   VidRock's master did not answer the scan, which read its variant as
+ *   "single-rendition 480p" where the same episode's ladder offered 1080p.
  * - `unlabelled` — HLS that names no sizes and cannot be pinned down: a master
  *   without `RESOLUTION`, or no playlist or picture to go on.
  * - `sealed` — playlists went by, but none answered when asked for again.
@@ -297,6 +309,7 @@ export type QualityOutcome =
   | 'player'
   | 'single-file'
   | 'single-rendition'
+  | 'rung'
   | 'unlabelled'
   | 'sealed'
   | 'unreadable'
@@ -326,8 +339,10 @@ export interface QualityEvidence {
 
 export interface QualityJudgement {
   outcome: QualityOutcome
-  /** The best class the source offers, when that is known. */
+  /** The best class the source offers, when that is known; or, as `kind` says, the least of it. */
   best: number | null
+  /** What `best` is worth: the best on offer, or a floor under it. Null when `best` is. */
+  kind: QualityKind | null
   /** The class the page was decoding, whatever the outcome; null if unknown or not the title. */
   playing: number | null
   /**
@@ -345,15 +360,18 @@ export interface QualityJudgement {
  *
  * The ladder outranks the picture: an adaptive player decodes whatever rung
  * suits its bandwidth and the size of its window — the probe's is 1280×720 —
- * so the picture is a floor for the best quality, never a ceiling. Only a
- * single whole file makes the two the same thing.
+ * so the picture is a floor for the best quality, never a ceiling. So is a
+ * stream's own header, which describes the same one rendition. Only a list
+ * of what is on offer is the best (`offered`): a ladder, the player's own
+ * list, or a single whole file with nothing else beside it.
  */
 export function judgeQuality(evidence: QualityEvidence): QualityJudgement {
   const decoy = evidence.video?.runtime === 'implausible'
   const playing = evidence.video && !decoy ? qualityClass(evidence.video.rendition) : null
-  const verdict = (outcome: QualityOutcome, best: number | null): QualityJudgement => ({
+  const verdict = (outcome: QualityOutcome, best: number | null, kind: QualityKind = 'floor'): QualityJudgement => ({
     outcome,
     best,
+    kind: best === null ? null : kind,
     playing,
     contradiction: best !== null && playing !== null && playing > best,
     decoy,
@@ -365,22 +383,30 @@ export function judgeQuality(evidence: QualityEvidence): QualityJudgement {
   const offered = answered
     .map((p) => bestQuality(p.ladder))
     .filter((best): best is number => best !== null)
-  if (offered.length > 0) return verdict('ladder', Math.max(...offered))
+  if (offered.length > 0) return verdict('ladder', Math.max(...offered), 'offered')
 
   // The player's own list outranks the picture for the same reason the ladder
   // does: an adaptive player decodes what suits it, not the best it has.
   const player = evidence.player ?? null
-  if (player !== null) return verdict('player', Math.max(player, playing ?? 0))
+  if (player !== null) return verdict('player', Math.max(player, playing ?? 0), 'offered')
 
   const masters = answered.some((p) => p.ladder.kind === 'hls-master')
   const media = answered.some((p) => p.ladder.kind === 'hls-media')
-  if (evidence.wholeFiles > 0 && !masters && !media) return verdict('single-file', playing)
-  // Every playlist a media playlist, and the page's whole traffic watched from
-  // the first request: there was no master, so there is one rendition. Its
-  // init segment and its picture describe the same frames; either will do.
+  if (evidence.wholeFiles > 0 && !masters && !media) {
+    // One file and nothing else fetched: its picture is all there is. A
+    // second file, or any playlist, read or not, may be another quality.
+    const alone = evidence.wholeFiles === 1 && evidence.playlists.length === 0
+    return verdict('single-file', playing, alone ? 'offered' : 'floor')
+  }
+  // Media playlists and no master. The init segment and the picture describe
+  // the same frames, so either names the rendition, and either is a floor: a
+  // source may keep its other qualities as streams no master lists. Called a
+  // single rendition only when every playlist the page fetched was read; one
+  // that would not answer may have been the master.
   const declared = (evidence.declared ?? []).map(qualityClass)
   if (media && !masters && (declared.length > 0 || playing !== null)) {
-    return verdict('single-rendition', Math.max(...declared, playing ?? 0))
+    const unread = evidence.playlists.length > answered.length
+    return verdict(unread ? 'rung' : 'single-rendition', Math.max(...declared, playing ?? 0))
   }
   if (masters || media) return verdict('unlabelled', null)
   if (evidence.playlists.length > answered.length) return verdict('sealed', null)

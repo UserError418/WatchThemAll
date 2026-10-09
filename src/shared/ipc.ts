@@ -21,6 +21,7 @@ import type {
   ProbeVerdict,
   Provider,
   ProviderScan,
+  QualityKind,
   ScanReason,
   Season,
   StreamDelivery,
@@ -36,7 +37,7 @@ import type {
  * `TitleProviderState` and `ProviderScanProgress`, and importing the same
  * concept from two files is how a reader concludes there are two concepts.
  */
-export type { ProbeVerdict, ProviderScan, ScanReason }
+export type { ProbeVerdict, ProviderScan, QualityKind, ScanReason }
 import type { SyncStatus } from './sync/types'
 import type { PlayerAction, TransportAction } from './playerkeys'
 import type { LoadedSubtitles, SubtitleLanguage } from './subtitles'
@@ -628,6 +629,8 @@ export interface ProviderScanProgress {
   timings: Record<string, number>
   /** Best quality class offered, for each streaming provider whose stream says. See `ProviderScan.qualities`. */
   qualities: Record<string, number>
+  /** What each of `qualities` is worth: the best on offer, or a floor under it. See `QualityKind`. */
+  qualityKinds: Record<string, QualityKind>
   /** Why each settled provider that did not stream failed. See `ProviderScan.reasons`. */
   reasons: Record<string, ScanReason>
   /** How each streaming provider's video arrived, so the cast list fills in live. See `ProviderScan.delivery`. */

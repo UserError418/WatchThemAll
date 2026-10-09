@@ -24,7 +24,7 @@
  */
 
 import type { ProbeVerdict, ResumeSource, TitleOutcome } from './ipc'
-import type { DeviceKind, ScanReason, SourceSortKey } from './types'
+import type { DeviceKind, QualityKind, ScanReason, SourceSortKey } from './types'
 import { describeReason } from './scanreason'
 
 /**
@@ -245,13 +245,20 @@ export function formatStreamTime(ms: number): string {
 }
 
 /**
- * A quality class as a label: "1080p".
+ * A quality class as a label: "1080p", or "720p+" for a floor.
  *
  * Players' own menus say "1080p", so a user can hold this against the menu of
- * the source they picked and see that it agrees.
+ * the source they picked and see that it agrees. A floor (`QualityKind`) is
+ * one rendition seen with the best not known, and reads as the least the
+ * source has (the owner, 2026-10-09): an adaptive player's first rung,
+ * labelled plainly, read as the source's best and sent the viewer elsewhere.
+ *
+ * The one naming function: both source lists, the player's quality menu, the
+ * Downloads tab and the quality probe's report print a quality through here.
+ * A rendition known exactly (a rung of the menu, a download) prints plainly.
  */
-export function formatQuality(quality: number): string {
-  return `${quality}p`
+export function formatQuality(quality: number, kind: QualityKind = 'offered'): string {
+  return kind === 'floor' ? `${quality}p+` : `${quality}p`
 }
 
 /** Every key a source order can hold, in the default priority. See `Settings.sourceOrder`. */

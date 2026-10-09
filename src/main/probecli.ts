@@ -30,6 +30,7 @@ import { extractStream, type ExtractResult } from './streamextract'
 import { probeThroughPlayer, score, type UiProbeResult, type UiProbeScore } from './probeui'
 import { probeQuality, type QualityProbeResult } from './qualityprobe'
 import type { QualityOutcome } from '@shared/streamquality'
+import { formatQuality } from '@shared/scanrank'
 import { playerShellUrl, startRendererServer, stopRendererServer } from './localserver'
 
 /**
@@ -721,7 +722,7 @@ export async function runQualityCli(providers: Provider[], argv: string[]): Prom
 
   console.log(`\nReading the best quality of ${targets.length} provider(s) on ${subjects.length} titles.`)
   console.log(
-    'L ladder · P player\'s own list · F one file · R one rendition · U HLS naming no sizes · S sealed · ? unreadable · - no stream\n',
+    'L ladder · P player\'s own list · F one file · R one rendition · r one rung, a playlist unread · U HLS naming no sizes · S sealed · ? unreadable · - no stream\n',
   )
 
   const shellBaseUrl = await startRendererServer(join(app.getAppPath(), 'out/renderer'))
@@ -767,6 +768,7 @@ const QUALITY_MARK: Record<QualityOutcome, string> = {
   player: 'P',
   'single-file': 'F',
   'single-rendition': 'R',
+  rung: 'r',
   unlabelled: 'U',
   sealed: 'S',
   unreadable: '?',
@@ -777,7 +779,7 @@ const QUALITY_MARK: Record<QualityOutcome, string> = {
 function describeQuality(r: QualityProbeResult): string {
   const j = r.judgement
   const parts = [QUALITY_MARK[j.outcome], r.subject.padEnd(26), j.outcome.padEnd(11)]
-  parts.push(j.best !== null ? `best ${j.best}p` : 'best ?')
+  parts.push(j.best !== null ? `best ${formatQuality(j.best, j.kind ?? 'floor')}` : 'best ?')
   if (r.video) {
     const minutes = Number.isFinite(r.video.duration) ? `${Math.round(r.video.duration / 60)}m` : 'live'
     parts.push(`playing ${r.video.width}x${r.video.height} ${minutes}`)

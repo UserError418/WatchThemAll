@@ -66,7 +66,7 @@
  */
 
 import type { CapturedRequest } from './segmentsave'
-import type { Provider, StreamDelivery } from '@shared/types'
+import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
 import type { ProbeSubject } from './streamprobe'
 import { probeQuality } from './qualityprobe'
@@ -90,6 +90,8 @@ interface Measured {
   verdict: ProbeVerdict
   ms: number | null
   quality: number | null
+  /** What `quality` is worth: the best on offer, or a floor under it. Null with no quality. */
+  qualityKind: QualityKind | null
   /** Why it did not stream; null when it did. */
   reason: ScanReason | null
   /** How the video arrived, for a source that streamed; null otherwise. See `StreamDelivery`. */
@@ -247,6 +249,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       verdict: streamed || !result.reason ? 'stream' : verdictForReason(result.reason),
       ms: streamed ? result.timeToMediaMs : null,
       quality: streamed ? result.judgement.best : null,
+      qualityKind: streamed ? result.judgement.kind : null,
       reason: streamed ? null : result.reason,
       // A stream whose traffic showed nothing identifiable is still an answer
       // (`unknown`), so the tester does not keep coming back to ask.
@@ -270,7 +273,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         testedAt: { [provider.id]: at },
       }
       if (measured.ms !== null) scan.timings = { [provider.id]: measured.ms }
-      if (measured.quality !== null) scan.qualities = { [provider.id]: measured.quality }
+      if (measured.quality !== null) {
+        scan.qualities = { [provider.id]: measured.quality }
+        scan.qualityKinds = { [provider.id]: measured.qualityKind ?? 'floor' }
+      }
       if (measured.reason !== null) scan.reasons = { [provider.id]: measured.reason }
       if (measured.delivery !== null) scan.delivery = { [provider.id]: measured.delivery }
       return scan
@@ -294,6 +300,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const timings: Record<string, number> = {}
       /** Best quality class offered, for streaming providers whose stream says. */
       const qualities: Record<string, number> = {}
+      /** What each of `qualities` is worth. */
+      const qualityKinds: Record<string, QualityKind> = {}
       /** Why each provider that did not stream failed. */
       const reasons: Record<string, ScanReason> = {}
       /** When each provider's standing result was measured. */
@@ -323,6 +331,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           verdicts: { ...verdicts },
           timings: { ...timings },
           qualities: { ...qualities },
+          qualityKinds: { ...qualityKinds },
           reasons: { ...reasons },
           delivery: { ...delivery },
           finished,
@@ -337,8 +346,13 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         else delete reasons[provider.id]
         if (measured.ms !== null) timings[provider.id] = measured.ms
         else delete timings[provider.id]
-        if (measured.quality !== null) qualities[provider.id] = measured.quality
-        else delete qualities[provider.id]
+        if (measured.quality !== null) {
+          qualities[provider.id] = measured.quality
+          qualityKinds[provider.id] = measured.qualityKind ?? 'floor'
+        } else {
+          delete qualities[provider.id]
+          delete qualityKinds[provider.id]
+        }
         if (measured.delivery !== null) delivery[provider.id] = measured.delivery
         else delete delivery[provider.id]
       }
@@ -408,7 +422,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, reasons, delivery }
       if (token === mine) running = false
       publish(true)
       return scan

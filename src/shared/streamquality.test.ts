@@ -243,7 +243,7 @@ describe('judgeQuality', () => {
       wholeFiles: 0,
       video: video(1280, 720),
     })
-    expect(judged).toMatchObject({ outcome: 'ladder', best: 1080, playing: 720, contradiction: false })
+    expect(judged).toMatchObject({ outcome: 'ladder', best: 1080, kind: 'offered', playing: 720, contradiction: false })
   })
 
   it('takes the best across every master the page fetched', () => {
@@ -273,7 +273,19 @@ describe('judgeQuality', () => {
 
   it('reads a single whole file off the picture, which is its only rendition', () => {
     const judged = judgeQuality({ streamed: true, playlists: [], wholeFiles: 1, video: video(1920, 800) })
-    expect(judged).toMatchObject({ outcome: 'single-file', best: 1080 })
+    expect(judged).toMatchObject({ outcome: 'single-file', best: 1080, kind: 'offered' })
+  })
+
+  it('reads a whole file beside anything else only as a floor: it may be one quality of several', () => {
+    const twoFiles = judgeQuality({ streamed: true, playlists: [], wholeFiles: 2, video: video(1280, 720) })
+    expect(twoFiles).toMatchObject({ outcome: 'single-file', best: 720, kind: 'floor' })
+    const besidePlaylist = judgeQuality({
+      streamed: true,
+      playlists: [{ status: 403, ladder: { kind: 'unknown', renditions: [] } }],
+      wholeFiles: 1,
+      video: video(1280, 720),
+    })
+    expect(besidePlaylist).toMatchObject({ outcome: 'single-file', best: 720, kind: 'floor' })
   })
 
   it('ignores the size of a video whose length does not fit the title', () => {
@@ -296,7 +308,7 @@ describe('judgeQuality', () => {
       wholeFiles: 0,
       video: video(1920, 800),
     })
-    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080 })
+    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080, kind: 'floor' })
   })
 
   it('reads HLS with no master off its init segment when there is no picture', () => {
@@ -309,7 +321,40 @@ describe('judgeQuality', () => {
       video: null,
       declared: [{ width: 1920, height: 1080 }],
     })
-    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080, playing: null })
+    expect(judged).toMatchObject({ outcome: 'single-rendition', best: 1080, kind: 'floor', playing: null })
+  })
+
+  it('reads a rendition beside a playlist that would not answer as a rung, a floor, not the only rendition', () => {
+    // VidRock, 2026-10-08: its master answered 403 when the scan asked again,
+    // its variant answered, and the variant's header said 480p. Read as the
+    // only rendition, the start rung was labelled the best; the ladder,
+    // read another time, offered 1080p.
+    const media = '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:6.0,\nseg.m4s\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [
+        { status: 403, ladder: { kind: 'unknown', renditions: [] } },
+        { status: 200, ladder: ladderOf(media) },
+      ],
+      wholeFiles: 0,
+      video: null,
+      declared: [{ width: 854, height: 480 }],
+    })
+    expect(judged).toMatchObject({ outcome: 'rung', best: 480, kind: 'floor' })
+  })
+
+  it('reads a rendition beside a playlist that timed out as a rung too', () => {
+    const media = '#EXTM3U\n#EXTINF:6.0,\nseg.ts\n'
+    const judged = judgeQuality({
+      streamed: true,
+      playlists: [
+        { status: 0, ladder: { kind: 'unknown', renditions: [] } },
+        { status: 200, ladder: ladderOf(media) },
+      ],
+      wholeFiles: 0,
+      video: video(1280, 720),
+    })
+    expect(judged).toMatchObject({ outcome: 'rung', best: 720, kind: 'floor' })
   })
 
   it('does not read a master without sizes off its init segments either', () => {
@@ -356,7 +401,7 @@ describe('judgeQuality', () => {
       video: video(1280, 720),
       player: 1080,
     })
-    expect(fromPlayer).toMatchObject({ outcome: 'player', best: 1080 })
+    expect(fromPlayer).toMatchObject({ outcome: 'player', best: 1080, kind: 'offered' })
 
     const fromLadder = judgeQuality({
       streamed: true,
@@ -375,7 +420,7 @@ describe('judgeQuality', () => {
       wholeFiles: 0,
       video: null,
     })
-    expect(judged.outcome).toBe('sealed')
+    expect(judged).toMatchObject({ outcome: 'sealed', best: null, kind: null })
   })
 
   it('does not judge a source that did not stream', () => {

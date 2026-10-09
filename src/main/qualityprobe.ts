@@ -28,14 +28,15 @@
  * `capture.peek` has exactly this keyhole, so what works here works there —
  * and read by `streamquality.ts`. The picture is a floor on the best quality,
  * never a ceiling (see `judgeQuality`), and it is the whole answer only for a
- * source that serves one file or one rendition.
+ * source that serves one whole file and nothing else.
  *
  * The third is the stream's own bytes. A media playlist that carries fMP4
  * points at an init segment stating the rendition's size (`initsegment.ts`);
  * one that carries MPEG-TS opens its first segment with an H.264 SPS stating
  * the same (`transportstream.ts`). Either is readable where the picture is
  * not: Videasy's player keeps its `<video>` out of reach, but its segments
- * answer like any other file.
+ * answer like any other file. It describes the one rendition being played,
+ * so it is a floor too, like the picture.
  */
 
 import type { CapturedRequest } from './segmentsave'
@@ -484,9 +485,11 @@ function playlistRequests(
  * Ask for every captured playlist again and read what comes back.
  *
  * Certain playlists before possible ones, so a page's early API calls cannot
- * use up the cap ahead of the manifests. An opaque candidate that turns out not
- * to be a manifest was never a playlist, and is dropped rather than counted as
- * a sealed one.
+ * use up the cap ahead of the manifests. An opaque candidate that answers with
+ * something other than a manifest was never a playlist, and is dropped rather
+ * than counted as a sealed one. One that does not answer is kept, unread: it
+ * may have been the master, and dropping it let the variant beside it pass for
+ * the only rendition there was (`judgeQuality`'s `rung`).
  */
 async function readPlaylists(
   candidates: Map<string, { kind: Candidate; headers: Record<string, string> }>,
@@ -504,7 +507,7 @@ async function readPlaylists(
     if (!answer) continue
     const body = new TextDecoder().decode(answer.bytes)
     const ladder = readLadder(body)
-    if (candidate.kind === 'maybe-playlist' && ladder.kind === 'unknown') continue
+    if (candidate.kind === 'maybe-playlist' && ladder.kind === 'unknown' && answer.status === 200) continue
     const reading: PlaylistReading = { url, status: answer.status, kind: ladder.kind, renditions: ladder.renditions }
     if (ladder.kind === 'hls-media') {
       const media = readMediaPlaylist(body)

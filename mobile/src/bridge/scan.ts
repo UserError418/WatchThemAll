@@ -44,7 +44,7 @@
  * fail, the solo run's reason does, because it had the phone to itself.
  */
 
-import type { Provider, StreamDelivery } from '@shared/types'
+import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
 import { piecesDelivery, wholeFileDelivery } from '@shared/castability'
 import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
@@ -187,6 +187,8 @@ interface Measured {
   /** Milliseconds to the first sign of a stream, for a stream only. */
   ms: number | null
   quality: number | null
+  /** What `quality` is worth: the best on offer, or a floor under it. Null with no quality. */
+  qualityKind: QualityKind | null
   reason: ScanReason | null
   /** How the video arrived, for a stream only. See `StreamDelivery`. */
   delivery: StreamDelivery | null
@@ -256,6 +258,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     const timings: Record<string, number> = {}
     /** Best quality class offered, for streaming providers whose playlists say. */
     const qualities: Record<string, number> = {}
+    /** What each of `qualities` is worth. */
+    const qualityKinds: Record<string, QualityKind> = {}
     /** Why each provider that did not stream failed. */
     const reasons: Record<string, ScanReason> = {}
     /** When each provider's standing result was measured. */
@@ -288,6 +292,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         verdicts: { ...verdicts },
         timings: { ...timings },
         qualities: { ...qualities },
+        qualityKinds: { ...qualityKinds },
         reasons: { ...reasons },
         delivery: { ...delivery },
         finished,
@@ -303,8 +308,13 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       else delete reasons[provider.id]
       if (measured.ms !== null) timings[provider.id] = measured.ms
       else delete timings[provider.id]
-      if (measured.quality !== null) qualities[provider.id] = measured.quality
-      else delete qualities[provider.id]
+      if (measured.quality !== null) {
+        qualities[provider.id] = measured.quality
+        qualityKinds[provider.id] = measured.qualityKind ?? 'floor'
+      } else {
+        delete qualities[provider.id]
+        delete qualityKinds[provider.id]
+      }
       if (measured.delivery !== null) delivery[provider.id] = measured.delivery
       else delete delivery[provider.id]
     }
@@ -314,7 +324,9 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       // The provider cannot express this request at all — no template for
       // this media type, or an id it needs and the title lacks. Nothing to
       // load, and nothing transient about it.
-      if (url === null) return Promise.resolve({ verdict: 'dead', ms: null, quality: null, reason: { kind: 'unsupported' }, delivery: null })
+      if (url === null) {
+        return Promise.resolve({ verdict: 'dead', ms: null, quality: null, qualityKind: null, reason: { kind: 'unsupported' }, delivery: null })
+      }
       return probeOne(url, budgetMs, cancelled)
     }
 
@@ -375,7 +387,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       if (token === mine) running = false
     }
 
-    const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, reasons, delivery }
+    const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, reasons, delivery }
     testing.clear()
     publish(true)
     return result
@@ -515,7 +527,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   } catch {
     // No session at all: the plugin is missing (the browser preview harness)
     // or refused. That says nothing about the provider.
-    return { verdict: 'unsure', ms: null, quality: null, reason: null, delivery: null }
+    return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, reason: null, delivery: null }
   }
 
   /** Every request the session has logged, oldest first. */
@@ -577,7 +589,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
       if (!open || gone) {
         // The renderer went, and took the provider with it. A crash is not a
         // verdict on the provider's catalogue, so amber, with nothing to add.
-        return { verdict: 'unsure', ms: null, quality: null, reason: null, delivery: null }
+        return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, reason: null, delivery: null }
       }
       // The document failed in a way no waiting changes; nothing will follow.
       if (documentError && documentFailedForGood(documentError)) break
@@ -585,10 +597,12 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
       const proven = await streamProven(playingAtMs)
       if (proven !== null) {
         const ms = Math.max(0, proven.at - session.openedAtMs)
+        const quality = await readQuality(bodies, latestCandidates)
         return {
           verdict: 'stream',
           ms,
-          quality: await readQuality(bodies, latestCandidates),
+          quality: quality.best,
+          qualityKind: quality.kind,
           reason: null,
           delivery: proven.delivery,
           requests: [...candidates()].reverse(),
@@ -604,7 +618,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
     }
 
     const judged = judgeMissedStream({ documentError, lastRequestAtMs, endedAtMs: Date.now(), budgetMs })
-    return { verdict: judged.verdict, ms: null, quality: null, reason: judged.reason, delivery: null }
+    return { verdict: judged.verdict, ms: null, quality: null, qualityKind: null, reason: judged.reason, delivery: null }
   } finally {
     await session.close().catch(() => {})
   }
@@ -616,22 +630,26 @@ function documentFailedForGood(error: ProbeDocumentError): boolean {
 }
 
 /**
- * The best quality the captured playlists name, or null when none does.
+ * The best quality the captured playlists name, and what it is worth; null
+ * when none does.
  *
  * The phone's counterpart of the desktop's `probeQuality` scan reading, with
  * one reading fewer: it cannot reach into the provider's frame to ask the
  * `<video>` its size, so a source serving one whole file stays unknown here.
  * A single rendition without a master is read from its own header instead —
- * see `readDeclaredSizes`. The parsers and the judgement are the desktop's,
- * from `shared/`, so a stream reads the same on both.
+ * see `readDeclaredSizes` — and is a floor, never the best: a playlist that
+ * would not answer (`read` keeps those, with an empty body) may have been
+ * the master. MoviesAPI read 240p here from one rung where every desktop
+ * reading of the same title is a 720p ladder. The parsers and the judgement
+ * are the desktop's, from `shared/`, so a stream reads the same on both.
  *
  * Keeps watching the session's requests for up to `QUALITY_WAIT_MS`, because
  * the playlist that proved the stream is not always the one that names sizes.
  */
-async function readQuality(
+export async function readQuality(
   bodies: Map<string, string>,
   requests: () => Promise<Candidate[]>,
-): Promise<number | null> {
+): Promise<{ best: number | null; kind: QualityKind | null }> {
   const deadline = Date.now() + QUALITY_WAIT_MS
   /** Every playlist read so far, oldest first: its request and its body ('' if it would not answer). */
   const read: Array<{ candidate: Candidate; body: string }> = []
@@ -657,16 +675,17 @@ async function readQuality(
     const ladders = read.map((r) => readLadder(r.body))
     // A ladder settles it; only without one is a header worth a fetch.
     if (!ladders.some((ladder) => bestQuality(ladder) !== null)) await readDeclaredSizes(read, declared)
-    const best = judgeQuality({
+    const judged = judgeQuality({
       streamed: true,
       playlists: ladders.map((ladder, i) => ({ status: read[i]?.body ? 200 : 0, ladder })),
       wholeFiles: 0,
       video: null,
       declared: [...declared.values()].filter((size): size is Rendition => size !== null),
-    }).best
+    })
+    const found = { best: judged.best, kind: judged.kind }
 
-    if (best !== null || answered(read) >= QUALITY_PEEKS || read.length >= QUALITY_FETCHES) return best
-    if (Date.now() >= deadline) return best
+    if (found.best !== null || answered(read) >= QUALITY_PEEKS || read.length >= QUALITY_FETCHES) return found
+    if (Date.now() >= deadline) return found
     await sleep(POLL_MS)
   }
 }

@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
+import type { Provider, QualityKind, ScanReason, StreamDelivery } from '@shared/types'
 import type { ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import type { ProbeSubject, StreamVerdict } from './streamprobe'
 import type { QualityProbeResult } from './qualityprobe'
@@ -21,6 +21,7 @@ const script = new Map<
     verdict: StreamVerdict
     ms: number | null
     quality?: number
+    qualityKind?: QualityKind
     reason?: ScanReason
     delivery?: StreamDelivery | null
     hold?: Promise<void>
@@ -67,6 +68,7 @@ vi.mock('./qualityprobe', () => ({
       judgement: {
         outcome: best === null ? 'unreadable' : 'ladder',
         best,
+        kind: best === null ? null : (answer.qualityKind ?? 'offered'),
         playing: null,
         contradiction: false,
         decoy: false,
@@ -150,6 +152,18 @@ describe('scan timings and qualities', () => {
     const scan = await run()
 
     expect(scan.qualities).toEqual({ ladder: 1080 })
+  })
+
+  it('records what each quality is worth beside it, for the results and the live lists', async () => {
+    script.set('ladder', [{ verdict: 'stream', ms: 2_000, quality: 1080, qualityKind: 'offered' }])
+    script.set('rung', [{ verdict: 'stream', ms: 2_000, quality: 480, qualityKind: 'floor' }])
+    script.set('silent', [{ verdict: 'stream', ms: 3_000 }])
+
+    const { run, progress } = scanOf([provider('ladder'), provider('rung'), provider('silent')])
+    const scan = await run()
+
+    expect(scan.qualityKinds).toEqual({ ladder: 'offered', rung: 'floor' })
+    expect(progress.at(-1)?.qualityKinds).toEqual({ ladder: 'offered', rung: 'floor' })
   })
 
   it('publishes the times as they settle, so the pickers can show them live', async () => {

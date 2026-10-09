@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote, tagText } from './scanrank'
+import { formatQuality, formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote, tagText } from './scanrank'
 
 const rows = (...ids: string[]): Array<{ id: string }> => ids.map((id) => ({ id }))
 const ids = (items: Array<{ id: string }>): string[] => items.map((item) => item.id)
@@ -64,6 +64,20 @@ describe('formatStreamTime', () => {
   it('never claims a measured stream took no time', () => {
     expect(formatStreamTime(0)).toBe('0.1 s')
     expect(formatStreamTime(20)).toBe('0.1 s')
+  })
+})
+
+describe('formatQuality', () => {
+  it('reads plainly for what the source offers, and as a lower bound for a floor', () => {
+    expect(formatQuality(1080, 'offered')).toBe('1080p')
+    // One rendition seen, the best unknown: the source has at least this.
+    expect(formatQuality(720, 'floor')).toBe('720p+')
+    // A rendition known exactly: a rung of the menu, a download.
+    expect(formatQuality(480)).toBe('480p')
+  })
+
+  it('reads as the tag the source lists end with', () => {
+    expect(tagText(null, ` · 3.4 s · ${formatQuality(720, 'floor')}`)).toBe('3.4 s · 720p+')
   })
 })
 

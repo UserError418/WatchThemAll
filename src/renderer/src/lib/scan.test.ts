@@ -29,6 +29,7 @@ function progress(
     verdicts: { vidsrc: verdict },
     timings: {},
     qualities: {},
+    qualityKinds: {},
     reasons: {},
     delivery: {},
     finished,
