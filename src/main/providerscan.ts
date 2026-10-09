@@ -377,6 +377,10 @@ export function castResults(where: MeasuredAt, learned: CastLearned | undefined,
       verdict: 'stream',
       delivery: learned.delivery,
       cast: learned.outcome,
+      // Which television, and what it was handed: what lets a refusal apply
+      // to every source serving the same class to the same model (2.0.19).
+      ...(learned.receiver ? { castReceiver: learned.receiver } : {}),
+      ...(learned.signature ? { castSignature: learned.signature } : {}),
     }),
   ]
 }

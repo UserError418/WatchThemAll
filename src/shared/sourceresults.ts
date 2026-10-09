@@ -76,10 +76,13 @@
  */
 
 import { isAudioList } from './audiotracks'
+import { isCastCheck } from './castability'
 import { isDownloadedSource } from './downloads/types'
 import { RESULT_TTL_MS, testedAtOf } from './scanrow'
+import { isStreamSignature, type StreamSignature } from './streamsignature'
 import type { TitleResults } from './scanshare'
 import type {
+  CastCheck,
   CastOutcome,
   DeviceKind,
   ProbeVerdict,
@@ -180,6 +183,22 @@ export interface SourceResult {
   delivery?: StreamDelivery
   /** What a television said when this source was cast. */
   cast?: CastOutcome
+  /**
+   * The model of the television that gave `cast` (`CastDevice.model`), and
+   * what the stream it was handed held: a refusal applies to every source
+   * whose stream is of the same class on the same model (`castability.ts`).
+   * Absent where unknown, and on answers from before 2.0.19, which are read
+   * as applying to every television, as they always were.
+   */
+  castReceiver?: string
+  castSignature?: StreamSignature
+  /**
+   * The cast check a test made of a source that streamed, after its verdict
+   * (2.0.19, `main/castcheck.ts`): whether the stream could be fetched as a
+   * cast fetches it, whether it is the title, and what it holds. Filed on the
+   * test's own result, under its time. Never a verdict on the source.
+   */
+  castCheck?: CastCheck
 }
 
 export interface ResultDevice {
@@ -239,7 +258,10 @@ export function isSourceResult(value: unknown): value is SourceResult {
     optional(r.audio, isAudioList) &&
     optional(r.reason, (v) => typeof v === 'object' && v !== null && typeof (v as { kind?: unknown }).kind === 'string') &&
     optional(r.delivery, (v) => DELIVERIES.includes(v)) &&
-    optional(r.cast, (v) => CASTS.includes(v))
+    optional(r.cast, (v) => CASTS.includes(v)) &&
+    optional(r.castReceiver, (v) => typeof v === 'string') &&
+    optional(r.castSignature, isStreamSignature) &&
+    optional(r.castCheck, isCastCheck)
   )
 }
 
@@ -305,6 +327,9 @@ function knowsMore(a: SourceResult, b: SourceResult): SourceResult {
   if (isOffer(a) !== isOffer(b)) return isOffer(a) ? a : b
   if ((a.ms === undefined) !== (b.ms === undefined)) return a.ms === undefined ? b : a
   if ((a.audio === undefined) !== (b.audio === undefined)) return a.audio === undefined ? b : a
+  // A test's result with its cast check over the same result without: the
+  // check is filed with the result, so a copy without it is one from before.
+  if ((a.castCheck === undefined) !== (b.castCheck === undefined)) return a.castCheck === undefined ? b : a
   return JSON.stringify(a) >= JSON.stringify(b) ? a : b
 }
 
@@ -385,6 +410,7 @@ export function resultsFromScan(
     setOptional(result, 'reason', verdict === 'stream' ? undefined : scan.reasons?.[providerId])
     setOptional(result, 'delivery', scan.delivery?.[providerId])
     setOptional(result, 'cast', scan.casts?.[providerId])
+    setOptional(result, 'castCheck', verdict === 'stream' ? scan.castChecks?.[providerId] : undefined)
     return result
   })
 }
@@ -622,7 +648,8 @@ export function titleResults(input: {
     byProvider.set(result.providerId, [...(byProvider.get(result.providerId) ?? []), result])
   }
 
-  const row: Required<ProviderScan> = {
+  // Every field but the checks a test hands to `resultsFromScan`, which a decided row never carries.
+  const row: Required<Omit<ProviderScan, 'castChecks'>> = {
     titleKey,
     at: 0,
     verdicts: {},
@@ -701,7 +728,7 @@ export function titleResults(input: {
   return { scan: row, sharedFrom }
 }
 
-function fillDelivery(row: Required<ProviderScan>, providerId: string, results: readonly SourceResult[]): void {
+function fillDelivery(row: Pick<Required<ProviderScan>, 'delivery'>, providerId: string, results: readonly SourceResult[]): void {
   const delivery = newestDelivery(results)
   if (delivery !== undefined) row.delivery[providerId] = delivery
 }

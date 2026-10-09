@@ -1648,6 +1648,7 @@ if (!isProbeRun(process.argv) && !app.requestSingleInstanceLock()) {
           titleKey: titleKey(context),
           providerId: provider?.id ?? null,
           episode: episodeOf(context),
+          runtimeMinutes: context.runtimeMinutes ?? null,
           downloadDir: downloadDirFor(provider?.id ?? null, context),
         }
       },

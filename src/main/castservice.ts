@@ -28,29 +28,18 @@
 import type { Session } from 'electron'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { blockedCastMessage, castOutcomeOf, type CastLearned } from '@shared/castanswer'
-import { isCastableFileType } from '@shared/castability'
+import type { StreamSignature } from '@shared/streamsignature'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildCastBundle, isPlaylist, isWholeVideoFile, unguessableId } from './hlsrewrite'
+import { buildCastBundle, unguessableId } from './hlsrewrite'
 import { downloadCastBundle } from '@shared/downloads/castbundle'
 import { PLAYLIST_FILE } from '@shared/downloads/plan'
 import { createCastCapture, type Candidate, type CastCapture } from './castcapture'
 import { createCastProxy, replayableHeaders } from './castproxy'
 import { discover } from './castdiscovery'
 import { CastSession, ReceiverRefusedError } from './castsender'
-
-/**
- * How much of a candidate to read while deciding what it is.
- *
- * A playlist announces itself in its first seven bytes, so this only has to
- * hold a whole one for the case where the candidate *is* the manifest — a
- * feature-length VOD playlist runs to a few hundred kilobytes. Anything bigger
- * is not being parsed anyway, and reading a video file into a string would take
- * the process out.
- */
-const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
-
-const FETCH_TIMEOUT_MS = 15_000
+import { chooseCastRoot, PLAYLIST_BYTES, rootRefusal, rootSignature } from './castroot'
+import { desktopRootFetch } from './castfetch'
 
 /** For a receiver that refused a stream it never fetched: see `castOutcomeOf`. */
 const UNREACHED_MESSAGE =
@@ -67,6 +56,12 @@ export interface NowPlaying {
   providerId: string | null
   /** The episode being cast, null for a film: a cast's result is filed under it. */
   episode: { season: number; episode: number } | null
+  /**
+   * TMDB's runtime for what is being cast, in minutes, or null: the stream
+   * chosen must run about as long (`castroot.ts`), or it is an advert or a
+   * decoy.
+   */
+  runtimeMinutes?: number | null
   /**
    * The download's folder when the player is on a download: then the files
    * are served from it, and nothing is captured. Null for a source.
@@ -125,69 +120,6 @@ export interface CastService {
   onSessionEnded(callback: () => void): void
 }
 
-/** Read a URL with headers a browser would refuse to set. */
-async function fetchText(url: string, headers: Record<string, string>): Promise<{ status: number; contentType: string; body: string }> {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-  const buffer = Buffer.from(await response.arrayBuffer())
-  return {
-    status: response.status,
-    contentType: response.headers.get('content-type') ?? '',
-    body: buffer.subarray(0, SNIFF_LIMIT_BYTES).toString('utf8'),
-  }
-}
-
-interface Identified {
-  url: string
-  headers: Record<string, string>
-  kind: 'hls' | 'progressive'
-}
-
-/**
- * Find the best candidate something other than this app could play.
- *
- * **A whole progressive file is taken before a playlist.** That order was set
- * on 2026-09-13 in the belief that a plain Chromecast refuses HLS; measured
- * again on 2026-09-26 it plays both, as long as the playlist is served with
- * a CORS header, which the proxy always sends (see `shared/castability.ts`).
- * The order stands because a file is the shorter path — one upstream URL, no
- * rewriting — but which of the two gives the better picture is not measured,
- * and a whole file can be a decoy: VidLux's 297 MB "episode" for Silo was an
- * unrelated clip with a warning banner. Worth measuring before relying on it.
- *
- * **Pieces of a film are not the film.** A media fragment plays for six seconds
- * and an initialisation segment for none, and both are served as `video/mp4`
- * exactly like the real thing - see `isWholeVideoFile`. They are skipped rather
- * than reported as an error, because a later candidate is usually the real one.
- */
-async function identifyStream(candidates: Candidate[]): Promise<Identified | null> {
-  /** The first playlist seen, used only if no whole file turns up. */
-  let playlist: Identified | null = null
-
-  for (const candidate of candidates) {
-    const headers = replayableHeaders(candidate.headers)
-
-    let response: Awaited<ReturnType<typeof fetchText>>
-    try {
-      response = await fetchText(candidate.url, headers)
-    } catch {
-      continue // Unreachable, or a URL that has already expired.
-    }
-
-    if (response.status !== 200 && response.status !== 206) continue
-    if (isPlaylist(response.body)) {
-      playlist ??= { url: candidate.url, headers, kind: 'hls' }
-      continue
-    }
-
-    // The same test a scan uses to record `progressive`, so "this source
-    // casts" and "the cast sends this" cannot disagree.
-    if (isCastableFileType(response.contentType) && isWholeVideoFile(response.body)) {
-      return { url: candidate.url, headers, kind: 'progressive' }
-    }
-  }
-  return playlist
-}
-
 export function createCastService(): CastService {
   const capture: CastCapture = createCastCapture()
   const proxy = createCastProxy()
@@ -197,6 +129,8 @@ export function createCastService(): CastService {
   const routes = new Map<string, { address: string; port: number; name: string; model: string | null }>()
 
   let session: CastSession | null = null
+  /** The connected television's model (mDNS `md`), filed with what it says about a stream. */
+  let sessionModel: string | null = null
   let sessionEnded: (() => void) | null = null
 
   const endSession = (): void => {
@@ -284,6 +218,7 @@ export function createCastService(): CastService {
       try {
         await next.connect()
         session = next
+        sessionModel = route.model
         return { ok: true }
       } catch (error) {
         next.close()
@@ -306,19 +241,42 @@ export function createCastService(): CastService {
 
       /** How the identified stream arrived, once there is one. */
       let delivery: CastLearned['delivery'] | null = null
+      /** What the stream holds, read beside the load; see `learnedOf`. */
+      let signature: Promise<StreamSignature | null> = Promise.resolve(null)
+      const receiver = sessionModel
+      const learnedOf = async (outcome: CastLearned['outcome']): Promise<CastLearned> => ({
+        delivery: delivery!,
+        outcome,
+        receiver,
+        signature: await signature,
+      })
       try {
-        const stream = await identifyStream(candidates)
-        if (stream === null) {
+        // Each candidate asked about with its own headers; the root then
+        // served with its headers alone, as the proxy replays one set.
+        const runtime = now.runtimeMinutes ?? null
+        const choice = await chooseCastRoot(
+          candidates.map((c) => ({ url: c.url, headers: replayableHeaders(c.headers) })),
+          desktopRootFetch,
+          runtime,
+        )
+        const root = choice.root
+        if (root === null) {
           return {
             ok: false,
-            error: `${now.providerName} does not hand out a stream a TV can play. Try another source.`,
+            error:
+              rootRefusal(choice.passedOver, now.providerName, runtime) ??
+              `${now.providerName} does not hand out a stream a TV can play. Try another source.`,
             waiting: true,
           }
         }
 
-        delivery = stream.kind === 'progressive' ? 'progressive' : 'segmented'
-        const bundle = await buildCastBundle(stream.url, stream.kind, async (url) => {
-          const response = await fetchText(url, stream.headers)
+        delivery = root.kind === 'progressive' ? 'progressive' : 'segmented'
+        const bundle = await buildCastBundle(root.url, root.kind, async (url) => {
+          // The playlists the choice read a moment ago; the rest with the root's headers.
+          const known = choice.bodies.get(url)
+          if (known !== undefined) return known
+          const response = await desktopRootFetch.text(url, root.headers, PLAYLIST_BYTES)
+          if (response === null) throw new Error('the source did not answer')
           if (response.status !== 200 && response.status !== 206) {
             throw new Error(`the source answered ${response.status}`)
           }
@@ -328,23 +286,27 @@ export function createCastService(): CastService {
         const base = await proxy.start({
           playlists: Object.fromEntries(bundle.playlists.map((p) => [p.id, p.body])),
           targets: Object.fromEntries(bundle.targets.map((t) => [t.id, t.url])),
-          headers: stream.headers,
+          headers: root.headers,
         })
 
+        // Read while the receiver loads, so the answer is filed under what
+        // it was handed and the beam waits no longer for it.
+        signature = rootSignature(root, desktopRootFetch).catch(() => null)
         const answer = await session.load({
           // The `.m3u8` suffix is for the receiver, which sniffs the extension
           // before it reads the content type.
-          url: stream.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
-          contentType: stream.kind === 'hls' ? 'application/x-mpegurl' : 'video/mp4',
+          url: root.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
+          contentType: root.kind === 'hls' ? 'application/x-mpegurl' : 'video/mp4',
           title: now.title,
           subtitle: now.subtitle,
           startSeconds: now.startSeconds,
+          fmp4: root.kind === 'hls' && root.media.init !== null,
         })
 
         // A load still loading or buffering when the wait ran out goes ahead,
         // as it always has, and proves nothing either way: nothing is filed.
         if (answer === 'unsettled') return { ok: true }
-        return { ok: true, learned: { delivery, outcome: 'played' } }
+        return { ok: true, learned: await learnedOf('played') }
       } catch (error) {
         // Only a refusal is an answer; anything else failed before there was
         // one. Read before `stop`: what the proxy saw decides what it says.
@@ -369,7 +331,7 @@ export function createCastService(): CastService {
           // The receiver's own sentence blames the stream; a block is the source's doing.
           error: outcome === 'blocked' ? blockedCastMessage(now.providerName) : message,
           final: true,
-          learned: { delivery, outcome },
+          learned: await learnedOf(outcome),
         }
       }
     },

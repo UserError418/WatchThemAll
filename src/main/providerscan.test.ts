@@ -504,6 +504,21 @@ describe('castResults', () => {
     expect(castResults(where, { delivery: 'segmented', outcome: 'blocked' }, now)[0]).toMatchObject({ cast: 'blocked' })
   })
 
+  it('files which television answered and what it was handed, so a refusal applies to its class', () => {
+    const signature = {
+      container: 'ts' as const,
+      video: { codec: 'h264' as const, profile: 'high', level: 5, width: 2160, height: 1080, fps: 24 },
+      audio: ['aac' as const],
+      encryption: 'none' as const,
+    }
+    const [filed] = castResults(where, { delivery: 'segmented', outcome: 'refused', receiver: 'Chromecast', signature }, now)
+    expect(filed).toMatchObject({ cast: 'refused', castReceiver: 'Chromecast', castSignature: signature })
+    // Neither, when the beam could not say: the answer is filed as it always was.
+    const [bare] = castResults(where, { delivery: 'segmented', outcome: 'refused', receiver: null, signature: null }, now)
+    expect(bare).not.toHaveProperty('castReceiver')
+    expect(bare).not.toHaveProperty('castSignature')
+  })
+
   it('files nothing for a beam that failed or never settled: it learned nothing', () => {
     // Until 2.0.18 such a beam filed its delivery as a success: "casts to this TV", and a green.
     expect(castResults(where, undefined, now)).toEqual([])

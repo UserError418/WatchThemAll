@@ -6,6 +6,8 @@
  * rather than at runtime on one of them — which is the whole point.
  */
 
+import type { StreamSignature } from './streamsignature'
+
 /* ── Media ──────────────────────────────────────────────────────────────── */
 
 /** TMDB distinguishes these two, and so must we: the URL templates differ. */
@@ -789,6 +791,47 @@ export type CastOutcome =
   | 'blocked'
 
 /**
+ * What the cast check made of a source that streamed in a test (2.0.19,
+ * `main/castcheck.ts`): the stream a cast would hand over (`castroot.ts`),
+ * fetched through the cast proxy's own path with its one set of headers,
+ * right after the test's verdict while the source's tokens were fresh.
+ *
+ * Filed on the test's result (`SourceResult.castCheck`), and never a verdict
+ * on the source: a source that streams in its page may still be one a
+ * television cannot be given. Read by the cast list (`castability.ts`) with
+ * the chosen television's profile. Words this build does not know, from a
+ * newer one, are kept and read as unknown.
+ */
+export interface CastCheck {
+  /**
+   * Whether the stream could be fetched as a cast would fetch it:
+   * - `ok`: the playlists, any key or init segment, and one whole segment
+   *   (or a whole file's head) came through, as media, fast enough;
+   * - `blocked`: the source answered an error status (`status`), or nothing
+   *   (`status` 0), to the proxy's single set of headers;
+   * - `not-media`: it answered, but not with a stream: no castable root,
+   *   or a "segment" that is a web page;
+   * - `slow`: one segment took longer to arrive than it plays (`pace` > 1).
+   */
+  reach: 'ok' | 'blocked' | 'not-media' | 'slow' | (string & {})
+  /** The status that blocked it; 0 for no answer. */
+  status?: number
+  /** Seconds to fetch one segment through the proxy, per second it plays. */
+  pace?: number
+  /**
+   * Whether the stream is the title, by its length (`lengthVerdict`):
+   * `film` within the band around TMDB's runtime; `wrong-length` too short
+   * for it (an advert, a clip; or off its runtime the other way); `unknown`
+   * when the length or the runtime was not to be had.
+   */
+  identity: 'film' | 'wrong-length' | 'unknown' | (string & {})
+  /** How long the stream runs, in seconds, when known. */
+  seconds?: number
+  /** What it holds (`streamsignature.ts`), when the stream was reached and read. */
+  signature?: StreamSignature
+}
+
+/**
  * Which kind of device measured something.
  *
  * Their tests do not mean the same thing. The desktop calls a source working
@@ -924,6 +967,13 @@ export interface ProviderScan {
    * (`sourceCastability`). Absent for rows stored before it existed.
    */
   castAt?: Record<string, number>
+  /**
+   * What the cast check made of each source that streamed, in a test's own
+   * row only: how a run hands its checks to `resultsFromScan`, which files
+   * each on its source's result. A decided row does not carry them; the
+   * cast list reads them from the results (`castability.ts`).
+   */
+  castChecks?: Record<string, CastCheck>
 }
 
 /**

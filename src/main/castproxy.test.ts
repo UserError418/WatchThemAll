@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   byteRange,
   createCastProxy,
+  disguisedStreamOffset,
   idFromPath,
   isUpstreamSuccess,
   lanAddress,
@@ -196,5 +197,163 @@ describe('what the proxy saw', () => {
     // The next stream starts counting from nothing.
     await proxy.start({ playlists: {}, targets: {}, headers: {} })
     expect(proxy.upstreamFailures()).toBe(0)
+  })
+})
+
+describe('disguisedStreamOffset', () => {
+  const ts = new Uint8Array(4 * 188)
+  for (let i = 0; i < 4; i++) ts[i * 188] = 0x47
+  const behind = (prefix: number[]): Uint8Array => {
+    const out = new Uint8Array(prefix.length + ts.length)
+    out.set(prefix)
+    out.set(ts, prefix.length)
+    return out
+  }
+
+  it('finds a transport stream behind a PNG or JPEG signature', () => {
+    expect(disguisedStreamOffset(behind([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(8)
+    expect(disguisedStreamOffset(behind([0xff, 0xd8, 0xff, 0xe0, 0, 16]))).toBe(6)
+  })
+
+  it('leaves alone a plain segment, and bytes that only happen to hold sync bytes', () => {
+    expect(disguisedStreamOffset(ts)).toBe(0)
+    // fMP4: a box, not a picture, whatever 0x47s it carries.
+    expect(disguisedStreamOffset(behind([0, 0, 0, 24, 0x73, 0x74, 0x79, 0x70]))).toBe(0)
+  })
+})
+
+describe('serving a body', () => {
+  let source: Server | null = null
+  let proxy: CastProxy | null = null
+
+  afterEach(() => {
+    proxy?.stop()
+    proxy = null
+    source?.closeAllConnections()
+    source?.close()
+    source = null
+  })
+
+  const serve = (handler: Parameters<typeof createServer>[1]): Promise<string> =>
+    new Promise((resolve) => {
+      source = createServer(handler)
+      source.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(source!.address() as { port: number }).port}`))
+    })
+
+  const through = async (targets: Record<string, string>): Promise<string> => {
+    proxy = createCastProxy({ loopback: true })
+    return proxy.start({ playlists: {}, targets, headers: {} })
+  }
+
+  /*
+   * The bug: every body was read whole before the receiver got a byte, under
+   * one 20-second timeout. A film asked for with an open range never
+   * arrived in time and was answered 502. Here the source sends a megabyte
+   * and then holds the rest back until the receiver has the first bytes:
+   * buffered, this would wait for ever.
+   */
+  it('streams a whole film asked for with an open range, before the source has finished', async () => {
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const size = 40 * 1024 * 1024
+    const origin = await serve((request, response) => {
+      expect(request.headers.range).toBe('bytes=0-')
+      response.writeHead(206, { 'Content-Type': 'video/mp4', 'Content-Length': size, 'Content-Range': `bytes 0-${size - 1}/${size}` })
+      response.write(Buffer.alloc(1024 * 1024, 1))
+      void held.then(() => {
+        for (let sent = 1024 * 1024; sent < size; sent += 1024 * 1024) response.write(Buffer.alloc(1024 * 1024, 2))
+        response.end()
+      })
+    })
+    const base = await through({ s0: `${origin}/film.mp4` })
+
+    const answer = await fetch(`${base}s0`, { headers: { Range: 'bytes=0-' } })
+    expect(answer.status).toBe(206)
+    expect(answer.headers.get('content-length')).toBe(String(size))
+    expect(answer.headers.get('content-range')).toBe(`bytes 0-${size - 1}/${size}`)
+    const reader = answer.body!.getReader()
+    const first = await reader.read()
+    expect(first.value?.[0]).toBe(1)
+    release()
+    let total = first.value!.byteLength
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+    }
+    expect(total).toBe(size)
+    expect(proxy!.upstreamFailures()).toBe(0)
+  })
+
+  it('strips an image disguise off a whole segment, and names it a transport stream', async () => {
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]
+    const ts = Buffer.alloc(188 * 20)
+    for (let i = 0; i < 20; i++) ts[i * 188] = 0x47
+    const disguised = Buffer.concat([Buffer.from(png), ts])
+    const origin = await serve((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': disguised.length })
+      response.end(disguised)
+    })
+    const base = await through({ s0: `${origin}/seg0.png` })
+
+    const answer = await fetch(`${base}s0`)
+    expect(answer.headers.get('content-type')).toBe('video/mp2t')
+    expect(answer.headers.get('content-length')).toBe(String(ts.length))
+    expect(Buffer.from(await answer.arrayBuffer()).equals(ts)).toBe(true)
+  })
+
+  it('leaves a range of a disguised segment as the source sent it: its offsets count the disguise', async () => {
+    const disguised = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(188 * 4, 0x47)])
+    const origin = await serve((_request, response) => {
+      response.writeHead(206, { 'Content-Type': 'image/png', 'Content-Range': `bytes 0-99/${disguised.length}`, 'Content-Length': 100 })
+      response.end(disguised.subarray(0, 100))
+    })
+    const base = await through({ s0: `${origin}/seg0.png` })
+    const answer = await fetch(`${base}s0`, { headers: { Range: 'bytes=0-99' } })
+    expect(answer.headers.get('content-type')).toBe('image/png')
+    expect((await answer.arrayBuffer()).byteLength).toBe(100)
+  })
+
+  it('gives a segment sent without a length one, as the phone does', async () => {
+    const origin = await serve((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp2t' })
+      response.write(Buffer.alloc(300_000, 0x47))
+      response.end(Buffer.alloc(200_000, 0x47))
+    })
+    const base = await through({ s0: `${origin}/seg0.ts` })
+    const answer = await fetch(`${base}s0`)
+    expect(answer.headers.get('content-length')).toBe('500000')
+    expect((await answer.arrayBuffer()).byteLength).toBe(500_000)
+  })
+
+  it('does not count a receiver hanging up as the source failing', async () => {
+    const origin = await serve((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': 50_000_000 })
+      response.write(Buffer.alloc(1024 * 1024))
+      // And then nothing: the receiver gives up first.
+    })
+    const base = await through({ s0: `${origin}/film.mp4` })
+    const controller = new AbortController()
+    const answer = await fetch(`${base}s0`, { signal: controller.signal })
+    await answer.body!.getReader().read()
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(proxy!.served()).toBe(1)
+    expect(proxy!.upstreamFailures()).toBe(0)
+  })
+
+  it('counts a source that refuses, as soon as it answers', async () => {
+    const origin = await serve((_request, response) => {
+      response.writeHead(403, { 'Content-Type': 'text/plain' })
+      response.end('forbidden')
+    })
+    const base = await through({ s0: `${origin}/seg0.ts` })
+    expect((await fetch(`${base}s0`)).status).toBe(403)
+    expect(proxy!.upstreamFailures()).toBe(1)
+  })
+
+  it('listens on loopback only when asked for the cast check', async () => {
+    proxy = createCastProxy({ loopback: true })
+    expect(await proxy.start({ playlists: {}, targets: {}, headers: {} })).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/)
   })
 })

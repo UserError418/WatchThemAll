@@ -73,6 +73,15 @@ export interface CastMedia {
   title: string
   subtitle: string
   startSeconds: number
+  /**
+   * HLS whose segments are fragmented MP4 (the media playlist names an
+   * `#EXT-X-MAP`). The Default Media Receiver otherwise takes every HLS
+   * segment for MPEG-TS: Google's reference says the segment formats are
+   * "only required for HLS content playback using MPL", and MPL is what it
+   * plays HLS with. `scripts/cast-receiver-trace.ts` sends the same two
+   * fields under `HLS_FMP4=1`.
+   */
+  fmp4?: boolean
 }
 
 export interface CastPlaybackStatus {
@@ -302,6 +311,7 @@ export class CastSession {
           contentId: media.url,
           contentType: media.contentType,
           streamType: 'BUFFERED',
+          ...(media.fmp4 ? { hlsSegmentFormat: 'fmp4', hlsVideoSegmentFormat: 'fmp4' } : {}),
           metadata: {
             metadataType: 0,
             title: media.title,

@@ -29,9 +29,30 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
+import { transportStreamOffset } from '@shared/downloads/transfer'
 
-/** Long enough for a slow provider, short enough not to wedge a connection. */
+/**
+ * Long enough for a slow provider, short enough not to wedge a connection:
+ * how long the source may take to answer, and then how long its body may
+ * go without a byte. Not a limit on the whole body: a whole film streams
+ * for as long as the receiver reads it (see `handle`).
+ */
 const UPSTREAM_TIMEOUT_MS = 20_000
+
+/**
+ * The most of a body held to give the receiver a length when the source
+ * gave none, as `CastProxyServer.java` does: a segment is a few megabytes,
+ * and a receiver that insists on a length would stall on every chunked one.
+ * Past this the rest streams on without a length; a whole film never fits.
+ */
+const BUFFERABLE_BYTES = 24 * 1024 * 1024
+
+/**
+ * How much of a segment is read before answering, to see whether it is a
+ * transport stream disguised as an image (`disguisedStreamOffset`): the
+ * search window `transportStreamOffset` uses, plus three packets to confirm.
+ */
+const DISGUISE_PEEK_BYTES = 4096 + 3 * 188
 
 /**
  * Headers that must never be replayed upstream.
@@ -72,6 +93,29 @@ export function mediaContentType(upstreamType: string | undefined, url: string):
   if (path.endsWith('.aac')) return 'audio/aac'
   if (path.endsWith('.webm')) return 'video/webm'
   return 'application/octet-stream'
+}
+
+/**
+ * Where a transport stream starts behind an image disguise, or 0 when there
+ * is none.
+ *
+ * Some sources serve their segments as pictures: a PNG's opening bytes in
+ * front of the transport stream, on an image CDN that would refuse to host
+ * video (2Embed's, measured 2026-09-30). The source's own player skips the
+ * prefix. A Cast receiver's does not, and the proxy used to pass the prefix
+ * through with `image/png` as the type. Downloads strip it already
+ * (`transportStreamOffset` in `shared/downloads/transfer.ts`), by the same
+ * rule reused here: three sync bytes 188 apart.
+ *
+ * Only behind a PNG or JPEG signature, so the search never runs over a
+ * fragmented-MP4 segment or anything else that merely contains three 0x47
+ * bytes at the wrong distances. GIF is left alone: its signature starts
+ * with the sync byte itself, and none has been seen.
+ */
+export function disguisedStreamOffset(head: Uint8Array): number {
+  const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
+  const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
+  return png || jpeg ? transportStreamOffset(head) : 0
 }
 
 /** `/p3.m3u8` -> `p3`, `/s41` -> `s41`. The suffix is for the receiver's sniffing. */
@@ -188,6 +232,16 @@ async function serveFile(request: IncomingMessage, response: ServerResponse, pat
   createReadStream(path, { start, end }).on('error', () => response.destroy()).pipe(response)
 }
 
+export interface CastProxyOptions {
+  /**
+   * Listen on 127.0.0.1 and hand out that address: for the cast check
+   * during a test (`castcheck.ts`), which fetches a stream through the
+   * proxy's own path from this machine, and must never be reachable from
+   * the network.
+   */
+  loopback?: boolean
+}
+
 export interface CastProxy {
   /** Start listening and return the base URL a receiver should be given. */
   start(bundle: CastBundleForProxy): Promise<string>
@@ -215,7 +269,7 @@ export function isUpstreamSuccess(status: number): boolean {
   return status >= 200 && status < 300
 }
 
-export function createCastProxy(): CastProxy {
+export function createCastProxy(options: CastProxyOptions = {}): CastProxy {
   let server: Server | null = null
   let playlists = new Map<string, string>()
   let targets = new Map<string, string>()
@@ -273,35 +327,10 @@ export function createCastProxy(): CastProxy {
     const failed = (): void => {
       if (askedFor === generation) failedUpstream += 1
     }
-    void fetch(upstream, { headers: forward, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) })
-      .then(async (upstreamResponse) => {
-        if (!isUpstreamSuccess(upstreamResponse.status)) failed()
-        const body = Buffer.from(await upstreamResponse.arrayBuffer())
-        const contentRange = upstreamResponse.headers.get('content-range')
-
-        response.writeHead(upstreamResponse.status, {
-          'Content-Type': mediaContentType(upstreamResponse.headers.get('content-type') ?? undefined, upstream),
-          // Measured from what was actually read, so a chunked upstream still
-          // produces a well-formed response. A receiver that insists on a
-          // length would otherwise stall on every segment.
-          'Content-Length': body.length,
-          ...(contentRange ? { 'Content-Range': contentRange } : {}),
-          'Access-Control-Allow-Origin': '*',
-          'Accept-Ranges': 'bytes',
-          'Cache-Control': 'no-store',
-        })
-        response.end(request.method === 'HEAD' ? undefined : body)
-      })
-      .catch((error: unknown) => {
-        if (response.headersSent) {
-          response.destroy()
-          return
-        }
-        // Unreachable, timed out, or cut off: the source did not serve it.
-        failed()
-        response.writeHead(502, { 'Access-Control-Allow-Origin': '*' })
-        response.end(error instanceof Error ? error.message : String(error))
-      })
+    // An error status, or no answer at all: the source did not serve it.
+    void relay(upstream, forward, request, response, (status) => {
+      if (status === null || !isUpstreamSuccess(status)) failed()
+    })
   }
 
   return {
@@ -314,7 +343,7 @@ export function createCastProxy(): CastProxy {
       failedUpstream = 0
       generation += 1
 
-      const address = lanAddress()
+      const address = options.loopback ? '127.0.0.1' : lanAddress()
       if (address === null) {
         return Promise.reject(new Error('no local network address — casting needs a network'))
       }
@@ -327,7 +356,7 @@ export function createCastProxy(): CastProxy {
       return new Promise((resolve, reject) => {
         const next = createServer(handle)
         next.on('error', reject)
-        next.listen(0, '0.0.0.0', () => {
+        next.listen(0, options.loopback ? '127.0.0.1' : '0.0.0.0', () => {
           server = next
           const port = (next.address() as { port: number }).port
           resolve(`http://${address}:${port}/`)
@@ -356,4 +385,136 @@ export function createCastProxy(): CastProxy {
       return failedUpstream
     },
   }
+}
+
+/**
+ * Fetch one upstream response and stream it to the receiver; the source's
+ * status once answered, which the caller counts.
+ *
+ * Streamed, as `CastProxyServer.java` streams: until 2.0.19 this read each
+ * whole body into memory under one 20-second timeout before answering, so a
+ * whole film asked for with an open `Range: bytes=0-` was cut off at twenty
+ * seconds and answered 502. Now the timeout covers the source's answer and
+ * then each pause in its body, the receiver going away (a seek, a stop)
+ * stops the fetch, and a slow receiver slows the fetch rather than filling
+ * memory.
+ *
+ * What is still held: a body the source sent without a length, up to
+ * `BUFFERABLE_BYTES`, so a segment reaches the receiver with one; and the
+ * opening of a whole segment, to strip an image disguise
+ * (`disguisedStreamOffset`), which also names it `video/mp2t`. Only a whole
+ * answer (a 200 to no `Range`) is stripped: a range of a disguised segment
+ * counts its bytes from the disguise, and moving them would make the
+ * receiver's offsets lie.
+ */
+async function relay(
+  upstream: string,
+  forward: Record<string, string>,
+  request: IncomingMessage,
+  response: ServerResponse,
+  /** The source's status as soon as it answers, or null when it did not answer at all. */
+  answered: (status: number | null) => void,
+): Promise<void> {
+  const abort = new AbortController()
+  let idle = setTimeout(() => abort.abort(new Error('the source took too long to answer')), UPSTREAM_TIMEOUT_MS)
+  const stillReading = (): void => {
+    clearTimeout(idle)
+    idle = setTimeout(() => abort.abort(new Error('the source stopped sending')), UPSTREAM_TIMEOUT_MS)
+  }
+  // The receiver hung up before the answer was through: a seek or a stop.
+  // Nothing more is wanted from the source, and what stops is not its fault.
+  let receiverGone = false
+  response.on('close', () => {
+    receiverGone = !response.writableFinished
+    abort.abort()
+  })
+
+  let status: number | null = null
+  try {
+    const answer = await fetch(upstream, { headers: forward, signal: abort.signal })
+    status = answer.status
+    answered(status)
+    stillReading()
+    const reader = request.method === 'HEAD' ? null : (answer.body?.getReader() ?? null)
+    if (reader === null) await answer.body?.cancel().catch(() => {})
+
+    // The source's own length, unless the body was decoded on the way in.
+    const encoded = (answer.headers.get('content-encoding') ?? 'identity') !== 'identity'
+    const declared = Number(answer.headers.get('content-length'))
+    let length: number | null = !encoded && answer.headers.has('content-length') && Number.isFinite(declared) ? declared : null
+
+    // Read ahead: the opening of a whole segment, or a body with no length up to the cap.
+    const wholeAnswer = answer.status === 200 && typeof request.headers.range !== 'string'
+    const readAhead = length === null ? BUFFERABLE_BYTES + 1 : wholeAnswer ? DISGUISE_PEEK_BYTES : 0
+    const held: Uint8Array[] = []
+    let heldBytes = 0
+    let finished = reader === null
+    while (reader !== null && heldBytes < readAhead) {
+      const { done, value } = await reader.read()
+      stillReading()
+      if (done) {
+        finished = true
+        break
+      }
+      held.push(value)
+      heldBytes += value.byteLength
+    }
+    let opening = Buffer.concat(held)
+    if (finished) length = opening.byteLength
+
+    const offset = wholeAnswer ? disguisedStreamOffset(opening) : 0
+    if (offset > 0) {
+      opening = opening.subarray(offset)
+      if (length !== null) length -= offset
+    }
+    const contentRange = answer.headers.get('content-range')
+    response.writeHead(answer.status, {
+      'Content-Type': offset > 0 ? 'video/mp2t' : mediaContentType(answer.headers.get('content-type') ?? undefined, upstream),
+      ...(length !== null ? { 'Content-Length': length } : {}),
+      ...(contentRange ? { 'Content-Range': contentRange } : {}),
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    })
+    if (reader === null) {
+      response.end()
+      return
+    }
+    if (opening.byteLength > 0 && !response.write(opening)) await drained(response)
+    while (!finished && !receiverGone) {
+      const { done, value } = await reader.read()
+      stillReading()
+      if (done) break
+      // Backpressure: a receiver reading slowly slows the fetch, rather than the film piling up here.
+      if (!response.write(value)) await drained(response)
+    }
+    response.end()
+  } catch (error) {
+    if (receiverGone) return
+    if (response.headersSent) {
+      // Cut off mid-body: the receiver sees the connection close short of the length.
+      response.destroy()
+      return
+    }
+    // Unreachable, timed out, or cut off before the receiver got a byte: the
+    // source did not serve it. An error status was counted when it came.
+    if (status === null || isUpstreamSuccess(status)) answered(null)
+    response.writeHead(502, { 'Access-Control-Allow-Origin': '*' })
+    response.end(error instanceof Error ? error.message : String(error))
+  } finally {
+    clearTimeout(idle)
+  }
+}
+
+/** Until the response can take more, or the receiver has gone. */
+function drained(response: ServerResponse): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      response.off('drain', done)
+      response.off('close', done)
+      resolve()
+    }
+    response.on('drain', done)
+    response.on('close', done)
+  })
 }

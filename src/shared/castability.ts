@@ -42,9 +42,12 @@
  * see `sourceCastability`.
  */
 
+import { fitsProfile, type ReceiverProfile } from './receivers'
 import { RESULT_TTL_MS, testedAtOf } from './scanrow'
 import type { TitleResults } from './scanshare'
-import type { CastOutcome, ProviderScan, StreamDelivery } from './types'
+import type { SourceResult } from './sourceresults'
+import { describeVideo, isStreamSignature, signatureClass, type StreamSignature } from './streamsignature'
+import type { CastCheck, CastOutcome, ProviderScan, StreamDelivery } from './types'
 
 /**
  * The content types a whole file is handed to the receiver as.
@@ -257,4 +260,229 @@ export function liveCastability(
     if (fromTest !== null) return fromTest
   }
   return stored ?? 'unknown'
+}
+
+/* ── The cast list's tiers, for the television chosen (2.0.19) ───────────── */
+
+/*
+ * Until 2.0.19 the list predicted from the delivery's form alone, and nearly
+ * every source streams HLS, so it promised "Casts to this TV" for streams
+ * that then failed. Agreed with the owner (2026-10-09), the list now says,
+ * for the television being cast to:
+ *
+ * - `plays`: proven. A television of this model played this source, with a
+ *   stream of the class it serves now (or, before signatures were filed,
+ *   played it on this title).
+ * - `checked`: the cast check during a test reached the stream through the
+ *   proxy, it is the title, and its signature fits this model's profile.
+ * - `hidden`, with the reason: a television of this model refused it on
+ *   this title, or refused a stream of the same class from any source, or
+ *   its signature is outside the profile. Also, as before, a stream only
+ *   ever seen as DASH or another container.
+ * - `blocked`, with the reason: blocked, unreachable, slow or not the title
+ *   today. Listed, not hidden: that changes from day to day.
+ * - `unchecked`: nothing checked, or nothing the profile can settle; the
+ *   reason says which, where there is one.
+ */
+
+/** One of the cast list's groups; see above. */
+export type CastTier = 'plays' | 'checked' | 'unchecked' | 'blocked' | 'hidden'
+
+export interface TierDecision {
+  tier: CastTier
+  /** Why, in words, for the row; null where the group's heading says it all. */
+  reason: string | null
+}
+
+/** A television's answer about one source, as the tiers weigh it. */
+export interface CastAnswerFact {
+  providerId: string
+  titleKey: string
+  outcome: CastOutcome
+  at: number
+  /** The television's model; null for an answer from before 2.0.19, which is read as any television's. */
+  receiver: string | null
+  /** What it was handed; null when that could not be read, or before 2.0.19. */
+  signature: StreamSignature | null
+}
+
+/** The newest cast check of one source on the title, with when it was made. */
+export type DatedCastCheck = CastCheck & { at: number }
+
+/**
+ * What the tiers are decided from, for one title: each source's newest cast
+ * check on it, and every television answer on record (any title, any
+ * source: a refusal's class applies across them). Travels with the source
+ * list's state (`TitleProviderState.castEvidence`), so the renderer decides
+ * for whichever television is chosen, without asking again.
+ */
+export interface CastEvidence {
+  checks: Record<string, DatedCastCheck>
+  answers: CastAnswerFact[]
+}
+
+/** Whether a stored cast check is one this build can read: words it does not know are kept. */
+export function isCastCheck(value: unknown): value is CastCheck {
+  if (typeof value !== 'object' || value === null) return false
+  const c = value as Record<string, unknown>
+  const optionalNumber = (v: unknown): boolean => v === undefined || (typeof v === 'number' && Number.isFinite(v))
+  return (
+    typeof c.reach === 'string' &&
+    typeof c.identity === 'string' &&
+    optionalNumber(c.status) &&
+    optionalNumber(c.pace) &&
+    optionalNumber(c.seconds) &&
+    (c.signature === undefined || isStreamSignature(c.signature))
+  )
+}
+
+/**
+ * The evidence for one title, from every result there is (this device's
+ * and the others', as `titleResults` is given them). Results past their
+ * lifetime do not count, as everywhere else.
+ */
+export function castEvidence(results: readonly SourceResult[], titleKey: string, now: number): CastEvidence {
+  const checks: Record<string, DatedCastCheck> = {}
+  const answers: CastAnswerFact[] = []
+  for (const result of results) {
+    if (now - result.at > RESULT_TTL_MS) continue
+    if (result.cast !== undefined) {
+      answers.push({
+        providerId: result.providerId,
+        titleKey: result.titleKey,
+        outcome: result.cast,
+        at: result.at,
+        receiver: result.castReceiver ?? null,
+        signature: result.castSignature ?? null,
+      })
+    }
+    if (result.titleKey !== titleKey || result.castCheck === undefined) continue
+    const held = checks[result.providerId]
+    if (held === undefined || result.at > held.at) checks[result.providerId] = { ...result.castCheck, at: result.at }
+  }
+  answers.sort((a, b) => b.at - a.at)
+  return { checks, answers }
+}
+
+/** Whether an answer was given by a television of this model; an answer from before models were filed counts for any. */
+function byThisModel(answer: CastAnswerFact, model: string | null): boolean {
+  if (answer.receiver === null) return true
+  return model !== null && answer.receiver.trim().toLowerCase() === model.trim().toLowerCase()
+}
+
+/** The class of a check's signature, when it reached the stream and read it. */
+function checkClass(check: DatedCastCheck | undefined): string | null {
+  return check?.signature ? signatureClass(check.signature) : null
+}
+
+/** What was refused or played, in words: "H.264 2160×1080", or "it" when unknown. */
+function whatWas(signature: StreamSignature | null): string {
+  return signature?.video ? describeVideo(signature.video) : 'it'
+}
+
+/**
+ * Which group a source goes in for the television chosen, and why; see the
+ * section's header for the groups.
+ *
+ * `base` is what the source's delivery predicts (`castabilities`, or
+ * `liveCastability` while a test runs): it decides only where nothing about
+ * casting was measured. `model` is the television's (`CastDevice.model`),
+ * and `profile` its profile (`receiverProfile`).
+ */
+export function castTier(input: {
+  providerId: string
+  titleKey: string
+  evidence: CastEvidence
+  base: Castability
+  model: string | null
+  profile: ReceiverProfile
+}): TierDecision {
+  const { providerId, titleKey, evidence, base, model, profile } = input
+  const check = evidence.checks[providerId]
+  const current = checkClass(check)
+  const answer = evidence.answers.find((a) => a.providerId === providerId && a.titleKey === titleKey && byThisModel(a, model))
+
+  // 1. What a television of this model said about this title, unless a newer
+  //    check shows the stream has changed since: another class, or not
+  //    reachable today.
+  if (answer !== undefined) {
+    const answeredClass = answer.signature ? signatureClass(answer.signature) : null
+    const newerCheck = check !== undefined && check.at > answer.at
+    const changed = newerCheck && current !== null && answeredClass !== null && current !== answeredClass
+    const unwellToday = newerCheck && (check.reach !== 'ok' || check.identity === 'wrong-length')
+    if (answer.outcome === 'played' && !changed && !unwellToday) {
+      return { tier: 'plays', reason: answer.receiver === null ? 'played when cast' : 'played on a TV like this one' }
+    }
+    if (answer.outcome === 'refused' && !changed) {
+      return { tier: 'hidden', reason: `a TV like this one refused ${whatWas(answer.signature)}` }
+    }
+    if (answer.outcome === 'blocked' && !(newerCheck && check.reach === 'ok')) {
+      return { tier: 'blocked', reason: 'the source blocked the TV when last cast' }
+    }
+  }
+
+  // 2. The cast check: today's reach, the title's identity, then the signature.
+  if (check !== undefined) {
+    const today = reachToday(check)
+    if (today !== null) return { tier: 'blocked', reason: today }
+    if (check.reach === 'ok') {
+      if (!check.signature) return { tier: 'unchecked', reason: 'reached, but what it holds could not be read' }
+      const refusedClass = current === null ? undefined : classAnswer(evidence.answers, current, model)
+      if (refusedClass?.outcome === 'refused') {
+        return { tier: 'hidden', reason: `a TV like this one refused ${whatWas(check.signature)}` }
+      }
+      const fit = fitsProfile(check.signature, profile)
+      if (fit.fit === 'no') return { tier: 'hidden', reason: fit.reason }
+      const played = current === null ? undefined : classAnswer(evidence.answers, current, model, providerId)
+      if (played?.outcome === 'played') return { tier: 'plays', reason: `played ${whatWas(check.signature)} on a TV like this one` }
+      if (fit.fit === 'yes') return { tier: 'checked', reason: null }
+      return { tier: 'unchecked', reason: fit.reason }
+    }
+  }
+
+  // 3. Nothing measured: what the delivery predicts, as before 2.0.19.
+  if (base === 'no') return { tier: 'hidden', reason: 'it streams only in a form that cannot be cast' }
+  if (base === 'blocked') return { tier: 'blocked', reason: 'the source blocked the TV when last cast' }
+  return { tier: 'unchecked', reason: null }
+}
+
+/**
+ * The newest answer a television of this model gave for a stream of this
+ * class, from any source and title, or from one source only. Answers with a
+ * model only: one from before models were filed has no signature either.
+ */
+function classAnswer(
+  answers: readonly CastAnswerFact[],
+  wanted: string,
+  model: string | null,
+  providerId?: string,
+): CastAnswerFact | undefined {
+  return answers.find(
+    (a) =>
+      a.receiver !== null &&
+      a.outcome !== 'blocked' &&
+      byThisModel(a, model) &&
+      (providerId === undefined || a.providerId === providerId) &&
+      a.signature !== null &&
+      signatureClass(a.signature) === wanted,
+  )
+}
+
+/** Why a check found the stream not castable today, in words; null when it found nothing against it. */
+function reachToday(check: DatedCastCheck): string | null {
+  switch (check.reach) {
+    case 'blocked':
+      return check.status ? `the source refused the cast's request (${check.status})` : 'the source did not answer the cast'
+    case 'not-media':
+      return 'the source handed out nothing a TV can play'
+    case 'slow':
+      return check.pace !== undefined
+        ? `too slow: a piece of the stream took ${check.pace.toFixed(1)}× its length to arrive`
+        : 'too slow to keep up on a TV'
+  }
+  if (check.identity === 'wrong-length') {
+    const minutes = check.seconds !== undefined ? `a ${Math.max(1, Math.round(check.seconds / 60))} min video` : 'a video'
+    return `it served ${minutes}, not the title`
+  }
+  return null
 }

@@ -32,6 +32,7 @@
  *   and nothing is filed.
  */
 
+import type { StreamSignature } from './streamsignature'
 import type { CastOutcome } from './types'
 
 /**
@@ -133,8 +134,17 @@ export function blockedCastMessage(providerName: string): string {
 /**
  * What a beam learned about its source, for filing (`castResults` in
  * `providerscan.ts`). Exists only when the television answered.
+ *
+ * With the television's model and the signature of what it was handed
+ * (2.0.19), when known: an answer is about this stream on this kind of
+ * television, and a refusal applies to every source serving a stream of the
+ * same class to the same model (`castability.ts`).
  */
 export interface CastLearned {
   delivery: 'progressive' | 'segmented'
   outcome: CastOutcome
+  /** The television's model (`CastDevice.model`); null when it did not say. */
+  receiver?: string | null
+  /** What the stream was found to hold (`castroot.ts` `rootSignature`); null when it could not be read. */
+  signature?: StreamSignature | null
 }

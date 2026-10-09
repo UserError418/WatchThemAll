@@ -320,6 +320,26 @@ describe('CastSession', () => {
     expect(load?.payload.autoplay).toBe(true)
     // The resume position, which is the whole reason casting mid-film is useful.
     expect(load?.payload.currentTime).toBe(1200)
+    // MPEG-TS segments: nothing said, which is what the receiver assumes.
+    expect(media.hlsSegmentFormat).toBeUndefined()
+    expect(media.hlsVideoSegmentFormat).toBeUndefined()
+  })
+
+  /*
+   * The receiver plays HLS with MPL, which takes every segment for MPEG-TS
+   * unless told otherwise: a fragmented-MP4 stream it was not told about is
+   * fed to the wrong demuxer.
+   */
+  it('tells the receiver when the segments are fragmented MP4', async () => {
+    receiver = new FakeReceiver()
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
+    await session.connect()
+    await session.load({ ...MEDIA, fmp4: true })
+
+    const media = receiver.received.find((m) => m.payload.type === 'LOAD')?.payload.media as Record<string, unknown>
+    expect(media.hlsSegmentFormat).toBe('fmp4')
+    expect(media.hlsVideoSegmentFormat).toBe('fmp4')
   })
 
   it('reports what the receiver said about playback', async () => {
