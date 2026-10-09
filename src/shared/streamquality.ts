@@ -127,6 +127,13 @@ export interface MediaPlaylist {
   firstSegment: string | null
   /** The length the segments add up to, in seconds. */
   seconds: number
+  /**
+   * The first `#EXT-X-KEY` method other than `NONE` (`AES-128`,
+   * `SAMPLE-AES`, …), as written; null when the segments are in the clear.
+   * What a stream's signature says about its encryption
+   * (`streamsignature.ts`): a receiver plays AES-128, and the others are DRM.
+   */
+  keyMethod: string | null
 }
 
 /**
@@ -142,10 +149,14 @@ export function readMediaPlaylist(body: string): MediaPlaylist {
   let initRange: MediaPlaylist['initRange'] = null
   let firstSegment: string | null = null
   let seconds = 0
+  let keyMethod: string | null = null
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim()
     if (line !== '' && !line.startsWith('#')) {
       firstSegment ??= line
+    } else if (line.startsWith('#EXT-X-KEY:') && keyMethod === null) {
+      const method = /(?:^|[:,])METHOD=([^,]+)/.exec(line)?.[1] ?? null
+      if (method !== null && method !== 'NONE') keyMethod = method
     } else if (line.startsWith('#EXTINF:')) {
       const value = parseFloat(line.slice('#EXTINF:'.length))
       if (Number.isFinite(value) && value > 0) seconds += value
@@ -157,7 +168,7 @@ export function readMediaPlaylist(body: string): MediaPlaylist {
       if (range) initRange = { length: Number(range[1]), offset: Number(range[2] ?? 0) }
     }
   }
-  return { init, initRange, firstSegment, seconds }
+  return { init, initRange, firstSegment, seconds, keyMethod }
 }
 
 /** One variant of an HLS master: its media playlist, and what the master says about it. */
@@ -171,11 +182,25 @@ export interface Variant {
   height: number | null
 }
 
+/**
+ * A variant with what the master says about its encoding: `CODECS` as
+ * written (`avc1.640028,mp4a.40.2`) and `FRAME-RATE`, each null when not
+ * given. What a television can decode is read from them
+ * (`streamsignature.ts`); the quality is not, so `masterVariants` leaves
+ * them out.
+ */
+export interface VariantDetails extends Variant {
+  codecs: string | null
+  frameRate: number | null
+}
+
 /** One `#EXT-X-STREAM-INF` line, and the URI on the line after it, as written. */
 interface StreamInf {
   bandwidth: number
   width: number | null
   height: number | null
+  codecs: string | null
+  frameRate: number | null
   uri: string | null
 }
 
@@ -204,7 +229,16 @@ function streamInfs(text: string): StreamInf[] {
       // custom attribute could end in "RESOLUTION" without being it.
       const size = /(?:^|[:,])RESOLUTION=(\d+)x(\d+)/.exec(line)
       const bandwidth = Number(/(?:^|[:,])BANDWIDTH=(\d+)/.exec(line)?.[1] ?? 0)
-      pending = { bandwidth, width: size ? Number(size[1]) : null, height: size ? Number(size[2]) : null, uri: null }
+      const codecs = /(?:^|[:,])CODECS="([^"]*)"/.exec(line)?.[1]?.trim() || null
+      const rate = Number(/(?:^|[:,])FRAME-RATE=([\d.]+)/.exec(line)?.[1])
+      pending = {
+        bandwidth,
+        width: size ? Number(size[1]) : null,
+        height: size ? Number(size[2]) : null,
+        codecs,
+        frameRate: Number.isFinite(rate) && rate > 0 ? rate : null,
+        uri: null,
+      }
       found.push(pending)
     } else if (pending !== null && line !== '' && !line.startsWith('#')) {
       pending.uri = line
@@ -216,6 +250,11 @@ function streamInfs(text: string): StreamInf[] {
 
 /** The variants of an HLS master fetched from `url`, with their playlists' URLs made absolute. */
 export function masterVariants(body: string, url: string): Variant[] {
+  return masterVariantDetails(body, url).map(({ url, bandwidth, width, height }) => ({ url, bandwidth, width, height }))
+}
+
+/** `masterVariants`, with each variant's codecs and frame rate as the master states them. */
+export function masterVariantDetails(body: string, url: string): VariantDetails[] {
   return streamInfs(body).flatMap((inf) => {
     if (inf.uri === null) return []
     let resolved: string
@@ -224,7 +263,8 @@ export function masterVariants(body: string, url: string): Variant[] {
     } catch {
       return []
     }
-    return [{ url: resolved, bandwidth: inf.bandwidth, width: inf.width, height: inf.height }]
+    const { bandwidth, width, height, codecs, frameRate } = inf
+    return [{ url: resolved, bandwidth, width, height, codecs, frameRate }]
   })
 }
 

@@ -20,8 +20,17 @@
  * H.264 only. HEVC in TS (stream type 0x24) is rare among the providers and
  * its SPS is a different, longer structure; it reads as null, i.e. unknown.
  * Anything malformed or cut short is null too, never a best guess.
+ *
+ * ## What else the same bytes say: `readTransportStreamCodecs`
+ *
+ * Whether a television can decode the stream (`streamsignature.ts`) needs
+ * more than the size: which codec the PMT lists for the video and for every
+ * audio stream, and the SPS's profile, level and frame rate. HEVC is read
+ * there too, as far as its size; its frame rate sits past structures this
+ * does not walk, and stays unknown.
  */
 
+import { h264Level, h264Profile, hevcLevel, hevcProfile, type AudioCodec, type VideoSignature } from './codecnames'
 import type { Rendition } from './streamquality'
 
 const PACKET = 188
@@ -205,10 +214,33 @@ function skipScalingList(bits: Bits, size: number): void {
  * Follows the syntax of H.264 section 7.3.2.1.1 up to the cropping fields.
  */
 export function readSpsSize(nal: Uint8Array): Rendition | null {
+  const facts = readSpsFacts(nal)
+  return facts && { width: facts.width, height: facts.height }
+}
+
+/** What an H.264 SPS declares: its profile, constraints and level as coded, its frame size, and its frame rate. */
+export interface SpsFacts {
+  profileIdc: number
+  /** The constraint flags byte: `constraint_set1_flag` makes Baseline constrained. */
+  constraints: number
+  levelIdc: number
+  width: number
+  height: number
+  /** From the VUI's timing, when the encoder wrote it; null otherwise. */
+  fps: number | null
+}
+
+/**
+ * Everything `SpsFacts` holds, read in one walk of the SPS. Null when the
+ * size cannot be read; a frame rate that cannot be (a VUI cut short, or
+ * none) is null on its own, since the size before it is still good.
+ */
+export function readSpsFacts(nal: Uint8Array): SpsFacts | null {
   try {
     const bits = new Bits(unescape(nal))
     const profile = bits.bits(8)
-    bits.bits(16) // constraint flags, level
+    const constraints = bits.bits(8)
+    const levelIdc = bits.bits(8)
     bits.ue() // seq_parameter_set_id
 
     let chroma = 1
@@ -258,7 +290,44 @@ export function readSpsSize(nal: Uint8Array): Rendition | null {
 
     const width = widthInMbs * 16 - cropUnitX * (crop.left + crop.right)
     const height = (2 - frameMbsOnly) * heightInMapUnits * 16 - cropUnitY * (crop.top + crop.bottom)
-    return width > 0 && height > 0 && width <= 8192 && height <= 8192 ? { width, height } : null
+    if (!(width > 0 && height > 0 && width <= 8192 && height <= 8192)) return null
+    return { profileIdc: profile, constraints, levelIdc, width, height, fps: vuiFrameRate(bits) }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The frame rate in an SPS's VUI, read from just past the cropping fields;
+ * null when the VUI or its timing is absent, or cut short.
+ *
+ * H.264 times fields, not frames (E.2.1): a frame lasts two ticks, so the
+ * rate is `time_scale / (2 × num_units_in_tick)`. x264 writes 48 / 2 for a
+ * 24 fps film.
+ */
+function vuiFrameRate(bits: Bits): number | null {
+  try {
+    if (!bits.bit()) return null // vui_parameters_present_flag
+    if (bits.bit()) {
+      // aspect_ratio_info_present_flag; 255 is "extended": a width and height follow.
+      if (bits.bits(8) === 255) bits.bits(32)
+    }
+    if (bits.bit()) bits.bit() // overscan_info_present_flag, overscan_appropriate_flag
+    if (bits.bit()) {
+      // video_signal_type_present_flag: format, range, and maybe the colour description.
+      bits.bits(4)
+      if (bits.bit()) bits.bits(24)
+    }
+    if (bits.bit()) {
+      bits.ue() // chroma_sample_loc_type_top_field
+      bits.ue() // chroma_sample_loc_type_bottom_field
+    }
+    if (!bits.bit()) return null // timing_info_present_flag
+    const unitsInTick = bits.bits(32)
+    const timeScale = bits.bits(32)
+    if (unitsInTick === 0 || timeScale === 0) return null
+    const fps = timeScale / (2 * unitsInTick)
+    return fps > 0 && fps <= 300 ? Math.round(fps * 1000) / 1000 : null
   } catch {
     return null
   }
@@ -287,4 +356,231 @@ export function readTransportStreamSize(bytes: Uint8Array): Rendition | null {
   }
   const sps = firstSps(stream)
   return sps ? readSpsSize(sps) : null
+}
+
+/* ── Codecs: what a television would have to decode ───────────────────── */
+
+/** PMT stream types, as ISO/IEC 13818-1 and the ATSC and HLS specifications number them. */
+const STREAM_TYPE_MPEG1_VIDEO = 0x01
+const STREAM_TYPE_MPEG2_VIDEO = 0x02
+const STREAM_TYPE_HEVC = 0x24
+/** H.264 under HLS SAMPLE-AES: the slices encrypted, the SPS still in the clear. */
+const STREAM_TYPE_H264_SAMPLE_AES = 0xdb
+/** Private data: AC-3 or E-AC-3 in DVB's way of carrying them, told apart by a descriptor. */
+const STREAM_TYPE_PRIVATE = 0x06
+
+/** Audio stream types and what they carry; the SAMPLE-AES ones are encrypted copies of the first. */
+const AUDIO_STREAM_TYPES: ReadonlyMap<number, AudioCodec> = new Map([
+  [0x03, 'mp3'],
+  [0x04, 'mp3'],
+  [0x0f, 'aac'], // ADTS
+  [0x11, 'aac'], // LATM
+  [0x81, 'ac3'], // ATSC
+  [0x87, 'eac3'], // ATSC
+  [0xcf, 'aac'], // SAMPLE-AES
+  [0xc1, 'ac3'], // SAMPLE-AES
+  [0xc2, 'eac3'], // SAMPLE-AES
+])
+const SAMPLE_AES_STREAM_TYPES = new Set([STREAM_TYPE_H264_SAMPLE_AES, 0xcf, 0xc1, 0xc2])
+
+/** One elementary stream the PMT lists, with its descriptors' tags and bodies. */
+interface ElementaryStream {
+  pid: number
+  type: number
+  descriptors: Array<{ tag: number; body: Uint8Array }>
+}
+
+/** Every elementary stream the PMT lists, in its order. */
+function elementaryStreams(all: Packet[], pmt: number): ElementaryStream[] {
+  for (const packet of all) {
+    if (packet.pid !== pmt) continue
+    const table = section(packet)
+    if (!table || table[0] !== 0x02 || table.length < 12) continue
+    const streams: ElementaryStream[] = []
+    let at = 12 + (((table[10]! & 0x0f) << 8) | table[11]!)
+    while (at + 5 <= table.length - 4) {
+      const type = table[at]!
+      const pid = ((table[at + 1]! & 0x1f) << 8) | table[at + 2]!
+      const infoLength = ((table[at + 3]! & 0x0f) << 8) | table[at + 4]!
+      const descriptors: ElementaryStream['descriptors'] = []
+      const end = Math.min(at + 5 + infoLength, table.length - 4)
+      for (let d = at + 5; d + 2 <= end; ) {
+        const length = table[d + 1]!
+        descriptors.push({ tag: table[d]!, body: table.subarray(d + 2, Math.min(d + 2 + length, end)) })
+        d += 2 + length
+      }
+      streams.push({ pid, type, descriptors })
+      at += 5 + infoLength
+    }
+    return streams
+  }
+  return []
+}
+
+/**
+ * What a private-data stream carries, if it is audio this names: DVB's
+ * AC-3 (descriptor 0x6A) or E-AC-3 (0x7A) descriptor, or a registration
+ * descriptor (0x05) naming either. Anything else private (subtitles, timed
+ * metadata) is not audio, and is left out rather than guessed at.
+ */
+function privateAudio(stream: ElementaryStream): AudioCodec | null {
+  for (const { tag, body } of stream.descriptors) {
+    if (tag === 0x6a) return 'ac3'
+    if (tag === 0x7a) return 'eac3'
+    if (tag === 0x05 && body.length >= 4) {
+      const format = String.fromCharCode(body[0]!, body[1]!, body[2]!, body[3]!)
+      if (format === 'AC-3') return 'ac3'
+      if (format === 'EAC3') return 'eac3'
+    }
+  }
+  return null
+}
+
+/** One PID's payloads, joined: its elementary stream as far as the bytes go. */
+function payloadOf(all: Packet[], pid: number): Uint8Array {
+  const payloads = all.filter((p) => p.pid === pid).map((p) => p.payload)
+  const stream = new Uint8Array(payloads.reduce((sum, p) => sum + p.length, 0))
+  let at = 0
+  for (const payload of payloads) {
+    stream.set(payload, at)
+    at += payload.length
+  }
+  return stream
+}
+
+/**
+ * The first HEVC NAL unit of a type in a byte stream, without its start
+ * code; its two-byte header stays on. HEVC's NAL type is bits 1–6 of the
+ * first header byte, where H.264's is the low five bits of its one.
+ */
+function firstHevcNal(stream: Uint8Array, type: number): Uint8Array | null {
+  for (let at = 0; at + 4 < stream.length; at++) {
+    if (stream[at] !== 0 || stream[at + 1] !== 0 || stream[at + 2] !== 1) continue
+    if (((stream[at + 3]! >> 1) & 0x3f) !== type) continue
+    let end = at + 5
+    while (end + 2 < stream.length && !(stream[end] === 0 && stream[end + 1] === 0 && stream[end + 2]! <= 1)) end++
+    return stream.subarray(at + 3, end + 2 < stream.length ? end : stream.length)
+  }
+  return null
+}
+
+/** HEVC NAL unit type of a sequence parameter set. */
+const HEVC_NAL_SPS = 33
+
+/**
+ * What an HEVC SPS declares: its profile, level and displayed size.
+ * Follows H.265 section 7.3.2.2 as far as the conformance window; the
+ * frame rate lies in the VUI, past fields this does not walk.
+ */
+export function readHevcSps(nal: Uint8Array): Pick<VideoSignature, 'profile' | 'level' | 'width' | 'height'> | null {
+  try {
+    const bits = new Bits(unescape(nal))
+    bits.bits(16) // the NAL unit header
+    bits.bits(4) // sps_video_parameter_set_id
+    const subLayers = bits.bits(3) // sps_max_sub_layers_minus1
+    bits.bit() // sps_temporal_id_nesting_flag
+
+    // profile_tier_level(1, subLayers)
+    bits.bits(3) // general_profile_space, general_tier_flag
+    const profileIdc = bits.bits(5)
+    bits.bits(32) // general_profile_compatibility_flags
+    bits.bits(48) // the source, constraint and reserved flags
+    const levelIdc = bits.bits(8)
+    const present: Array<{ profile: number; level: number }> = []
+    for (let i = 0; i < subLayers; i++) present.push({ profile: bits.bit(), level: bits.bit() })
+    if (subLayers > 0) for (let i = subLayers; i < 8; i++) bits.bits(2)
+    for (const layer of present) {
+      if (layer.profile) {
+        bits.bits(32)
+        bits.bits(32)
+        bits.bits(24)
+      }
+      if (layer.level) bits.bits(8)
+    }
+
+    bits.ue() // sps_seq_parameter_set_id
+    const chroma = bits.ue()
+    if (chroma === 3) bits.bit() // separate_colour_plane_flag
+    let width = bits.ue()
+    let height = bits.ue()
+    if (bits.bit()) {
+      // The conformance window, in chroma samples.
+      const subWidth = chroma === 1 || chroma === 2 ? 2 : 1
+      const subHeight = chroma === 1 ? 2 : 1
+      width -= subWidth * (bits.ue() + bits.ue())
+      height -= subHeight * (bits.ue() + bits.ue())
+    }
+    if (!(width > 0 && height > 0 && width <= 8192 && height <= 8192)) return null
+    return { profile: hevcProfile(profileIdc), level: hevcLevel(levelIdc), width, height }
+  } catch {
+    return null
+  }
+}
+
+/** What the first segment of an MPEG-TS rendition carries, for a television to decode. */
+export interface TransportStreamCodecs {
+  /** The video stream, as far as its SPS was reached; null for audio only. */
+  video: VideoSignature | null
+  /** Every audio stream's codec, in the PMT's order. */
+  audio: AudioCodec[]
+  /** The PMT lists SAMPLE-AES streams: the segments are encrypted beyond what AES-128 HLS does. */
+  sampleAes: boolean
+}
+
+/**
+ * The codecs the first segment of an MPEG-TS rendition carries, from its PMT,
+ * with the video's profile, level, size and frame rate from its SPS.
+ *
+ * Null for anything that is not a transport stream with a PMT. A PMT read
+ * before the video's SPS arrives still names the codec, with the rest null.
+ */
+export function readTransportStreamCodecs(bytes: Uint8Array): TransportStreamCodecs | null {
+  const start = firstPacket(bytes)
+  if (start === null) return null
+  const all = packets(bytes, start)
+  const pmt = pmtPid(all)
+  if (pmt === null) return null
+  const streams = elementaryStreams(all, pmt)
+  if (streams.length === 0) return null
+
+  const audio: AudioCodec[] = []
+  let video: VideoSignature | null = null
+  for (const stream of streams) {
+    const sound = stream.type === STREAM_TYPE_PRIVATE ? privateAudio(stream) : AUDIO_STREAM_TYPES.get(stream.type)
+    if (sound) audio.push(sound)
+    else if (video === null) video = videoOf(all, stream)
+  }
+  return { video, audio, sampleAes: streams.some((s) => SAMPLE_AES_STREAM_TYPES.has(s.type)) }
+}
+
+/** The video a stream carries, read from its SPS where it has one this can read; null when it is not video. */
+function videoOf(all: Packet[], stream: ElementaryStream): VideoSignature | null {
+  const unread = { profile: null, level: null, width: null, height: null, fps: null }
+  switch (stream.type) {
+    case STREAM_TYPE_H264:
+    case STREAM_TYPE_H264_SAMPLE_AES: {
+      const sps = firstSps(payloadOf(all, stream.pid))
+      const facts = sps && readSpsFacts(sps)
+      if (!facts) return { codec: 'h264', ...unread }
+      return {
+        codec: 'h264',
+        profile: h264Profile(facts.profileIdc, facts.constraints),
+        level: h264Level(facts.levelIdc),
+        width: facts.width,
+        height: facts.height,
+        fps: facts.fps,
+      }
+    }
+    case STREAM_TYPE_HEVC: {
+      const sps = firstHevcNal(payloadOf(all, stream.pid), HEVC_NAL_SPS)
+      const facts = sps && readHevcSps(sps)
+      return { codec: 'hevc', ...unread, ...(facts ?? {}) }
+    }
+    case STREAM_TYPE_MPEG2_VIDEO:
+      return { codec: 'mpeg2', ...unread }
+    case STREAM_TYPE_MPEG1_VIDEO:
+      return { codec: 'other', ...unread }
+    default:
+      return null
+  }
 }

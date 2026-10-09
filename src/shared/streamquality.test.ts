@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { bestQuality, judgeQuality, masterVariants, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
+import { bestQuality, judgeQuality, masterVariantDetails, masterVariants, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
 
 const MASTER = [
   '#EXTM3U',
@@ -426,5 +426,35 @@ describe('judgeQuality', () => {
   it('does not judge a source that did not stream', () => {
     const judged = judgeQuality({ streamed: false, playlists: [], wholeFiles: 0, video: null })
     expect(judged).toMatchObject({ outcome: 'no-stream', best: null })
+  })
+})
+
+describe('masterVariantDetails', () => {
+  it("adds each variant's CODECS and FRAME-RATE, which a television's decoder is judged by", () => {
+    const body = [
+      '#EXTM3U',
+      '#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",FRAME-RATE=23.976',
+      '1080/index.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360',
+      '360/index.m3u8',
+    ].join('\n')
+    expect(masterVariantDetails(body, 'https://cdn.example/hls/')).toEqual([
+      { url: 'https://cdn.example/hls/1080/index.m3u8', bandwidth: 5000000, width: 1920, height: 1080, codecs: 'avc1.640028,mp4a.40.2', frameRate: 23.976 },
+      { url: 'https://cdn.example/hls/360/index.m3u8', bandwidth: 800000, width: 640, height: 360, codecs: null, frameRate: null },
+    ])
+  })
+
+  it('leaves masterVariants as it was: the quality is not read from codecs', () => {
+    expect(Object.keys(masterVariants(MASTER, 'https://cdn.example/hls/ep/master.m3u8')[0]!)).toEqual(['url', 'bandwidth', 'width', 'height'])
+  })
+})
+
+describe('readMediaPlaylist key method', () => {
+  it('names the first key method in force, and nothing for segments in the clear', () => {
+    const keyed = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="k.bin",IV=0x01\n#EXTINF:6,\ns0.ts\n'
+    expect(readMediaPlaylist(keyed).keyMethod).toBe('AES-128')
+    expect(readMediaPlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:6,\ns0.ts\n').keyMethod).toBeNull()
+    expect(readMediaPlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://x"\n').keyMethod).toBe('SAMPLE-AES')
+    expect(readMediaPlaylist('#EXTM3U\n#EXTINF:6,\ns0.ts\n').keyMethod).toBeNull()
   })
 })
