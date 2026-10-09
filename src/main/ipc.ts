@@ -44,6 +44,7 @@ import { outcomesForTitle, titleKey } from './outcomes'
 import {
   castResults,
   everyRow,
+  titleCastEvidence,
   previewResult,
   scanEpisode,
   titleResults,
@@ -300,6 +301,7 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
         scan: results.scan,
         sharedFrom: results.sharedFrom,
         castability: castabilities(order, results, everyRow(sources, 'desktop', now), now),
+        castEvidence: titleCastEvidence(sources, key, 'desktop', now),
         order,
       }
     },

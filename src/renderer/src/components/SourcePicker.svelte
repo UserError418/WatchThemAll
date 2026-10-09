@@ -138,6 +138,7 @@
     scan: null,
     sharedFrom: {},
     castability: {},
+    castEvidence: { checks: {}, answers: [] },
     order: [],
   })
 

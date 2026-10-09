@@ -86,6 +86,7 @@ import { progressIsAbout } from '@shared/scanprogress'
 import {
   castResults,
   everyRow,
+  titleCastEvidence,
   PLAY_MIN_FILM_SECONDS,
   PLAY_TIMING_MAX_MS,
   kindTested,
@@ -2017,6 +2018,7 @@ export async function createBridge(): Promise<WtaApi> {
       scan: results.scan,
       sharedFrom: results.sharedFrom,
       castability: castabilities(order, results, everyRow(sources, 'phone', now), now),
+      castEvidence: titleCastEvidence(sources, key, 'phone', now),
       order,
     }
   }

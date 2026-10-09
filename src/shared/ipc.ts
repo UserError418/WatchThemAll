@@ -10,7 +10,7 @@
  * of UI silently did nothing. A shared contract makes that a compile error.
  */
 
-import type { Castability } from './castability'
+import type { CastEvidence, Castability } from './castability'
 import type {
   DeviceKind,
   EpisodeStub,
@@ -725,6 +725,14 @@ export interface TitleProviderState {
    * `shared/castability.ts`. What the cast list is built from.
    */
   castability: Record<string, Castability>
+  /**
+   * What the cast list's tiers are decided from (2.0.19): each source's
+   * newest cast check on this title and every television answer on record.
+   * The renderer decides the tiers for the television chosen
+   * (`castTier` in `shared/castability.ts`), so a change of television needs
+   * no second read.
+   */
+  castEvidence: CastEvidence
   /**
    * The enabled providers' ids in the order Automatic would try them for this
    * title: measured and proven sources first, dead ones last, favourites and

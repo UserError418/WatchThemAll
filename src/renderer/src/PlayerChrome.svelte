@@ -36,7 +36,8 @@
     sharedLabel,
     tagText,
   } from '@shared/scanrank'
-  import { liveCastability, type Castability } from '@shared/castability'
+  import { castTier, liveCastability, type Castability, type TierDecision } from '@shared/castability'
+  import { receiverProfile } from '@shared/receivers'
   import { untrack } from 'svelte'
   import { fade } from 'svelte/transition'
   import type { Episode, Season, StreamDelivery } from '@shared/types'
@@ -214,6 +215,7 @@
     scan: null,
     sharedFrom: {},
     castability: {},
+    castEvidence: { checks: {}, answers: [] },
     order: [],
   }
 
@@ -521,31 +523,77 @@
   }
 
   /**
-   * The list, in the ordinary order: castable first, then what nothing has
-   * checked — a source seen handing out a file elsewhere ahead of the rest.
-   * Sources known not to cast are left out and counted, except one the user
-   * just tried, which stays so its row can say what happened.
+   * The television the list is for: the one chosen in the remote, by its
+   * model (mDNS `md` on the desktop, `getModelName()` on the phone), and
+   * that model's profile (`receivers.ts`); the strictest when it said none.
+   */
+  const castModel = $derived(castDevices.find((d) => d.id === selectedDevice)?.model ?? null)
+  const castProfile = $derived(receiverProfile(castModel))
+
+  /**
+   * Where a source goes in the cast list for that television, and why
+   * (`castTier`): what a television of its model said, the cast check a test
+   * made, the profile, and failing those what the delivery predicts. A
+   * download is on this device, which nothing blocks, but nothing has read
+   * what it holds: checked, not proven.
+   */
+  function tierOf(id: string): TierDecision {
+    if (isDownloadedSource(id)) return { tier: 'checked', reason: 'downloaded to this device' }
+    if (context === null) return { tier: 'unchecked', reason: null }
+    return castTier({
+      providerId: id,
+      titleKey: titleKey(context),
+      evidence: sourceState.castEvidence,
+      base: castabilityOf(id),
+      model: castModel,
+      profile: castProfile,
+    })
+  }
+
+  /**
+   * The list for the chosen television, in the ordinary order within each
+   * group (agreed with the owner, 2026-10-09): what plays on it (proven),
+   * what was checked for it, what nothing has checked yet (a source seen
+   * streaming elsewhere first), then what was blocked or unreachable today,
+   * each with its reason. A source a television of this model refused, or
+   * whose stream is outside its profile, is hidden, and listed under the
+   * list with why, except one the user just tried, which stays so its row
+   * can say what happened.
    *
-   * A source that blocked its last cast is listed after the unknowns, not
-   * hidden: a block is the source's servers refusing the proxy, which comes
-   * and goes from day to day, so it may well cast now. It goes last because
-   * every other row has nothing against it. Greyed in place was the other
-   * choice, and would have read as "cannot be picked".
+   * Blocked sources are listed, not hidden: a block is the source's servers
+   * refusing the proxy, or being slow, which comes and goes from day to day,
+   * so it may well cast now. They go last because every other row has
+   * nothing against it. Greyed in place was the other choice, and would have
+   * read as "cannot be picked".
    */
   const castGroups = $derived.by(() => {
-    const rows = sourceRows.map((provider) => ({ provider, castable: castabilityOf(provider.id) }))
+    const rows = sourceRows.map((provider) => ({
+      provider,
+      decision: tierOf(provider.id),
+      castable: castabilityOf(provider.id),
+    }))
     const tried = (id: string): boolean => id in castFailures
+    const inTier = (tier: TierDecision['tier']): typeof rows =>
+      rows.filter((r) => r.decision.tier === tier && !tried(r.provider.id))
+    const unchecked = inTier('unchecked')
     return {
-      yes: rows.filter((r) => r.castable === 'yes' && !tried(r.provider.id)),
-      maybe: [
-        ...rows.filter((r) => r.castable === 'likely' && !tried(r.provider.id)),
-        ...rows.filter((r) => r.castable === 'unknown' && !tried(r.provider.id)),
+      plays: inTier('plays'),
+      checked: inTier('checked'),
+      unchecked: [
+        ...unchecked.filter((r) => r.castable === 'likely'),
+        ...unchecked.filter((r) => r.castable !== 'likely'),
         ...rows.filter((r) => tried(r.provider.id)),
       ],
-      blocked: rows.filter((r) => r.castable === 'blocked' && !tried(r.provider.id)),
-      hidden: rows.filter((r) => r.castable === 'no' && !tried(r.provider.id)).length,
+      blocked: inTier('blocked'),
+      hidden: inTier('hidden'),
     }
   })
+
+  /** A castable row's tag: what is playing where, and the source's measured start and quality. */
+  function castTag(id: string, current: boolean): string {
+    const label = current ? (casting ? 'on the TV' : 'playing') : ''
+    return [label, measurement(id).replace(/^ · /, '')].filter(Boolean).join(' · ')
+  }
 
   /** Re-read what is known about this title's sources — for the dots, and for castability. */
   async function refreshSourceState(): Promise<void> {
@@ -1600,7 +1648,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#snippet castRow(provider: { id: string; name: string }, castable: Castability)}
+{#snippet castRow(provider: { id: string; name: string }, decision: TierDecision, castable: Castability)}
   {@const dot = providerDot(
     sourceState.outcomes[provider.id],
     verdicts[provider.id],
@@ -1622,17 +1670,18 @@
     {:else}
       <span class="dot none" title={dot.hint}></span>
     {/if}
-    <span class="name">{provider.name}</span>
+    <span class="name"
+      >{provider.name}{#if decision.reason && !failed}<span class="why">{decision.reason}</span
+        >{/if}</span
+    >
     {#if test}
       <span class="tag">{test.recheck ? 'testing again…' : 'testing…'}</span>
     {:else if failed}
       <span class="tag bad">did not cast</span>
-    {:else if castable === 'yes'}
-      <span class="tag">{current ? `${currentLabel} · ` : ''}casts{measurement(provider.id)}</span>
-    {:else if castable === 'likely'}
+    {:else if decision.tier === 'plays' || decision.tier === 'checked'}
+      <span class="tag">{castTag(provider.id, current)}</span>
+    {:else if castable === 'likely' && decision.reason === null}
       <span class="tag">{likelyTag(provider.id)}</span>
-    {:else if castable === 'blocked'}
-      <span class="tag">blocked by the source</span>
     {:else if current}
       <span class="tag">{currentLabel}</span>
     {:else if dot.label || measurement(provider.id)}
@@ -1664,34 +1713,48 @@
         >
       {/if}
     </button>
-    {#if castGroups.yes.length > 0}
-      <p class="cast-group">Casts to this TV</p>
-      {#each castGroups.yes as row (row.provider.id)}
-        {@render castRow(row.provider, row.castable)}
+    {#if castGroups.plays.length > 0}
+      <p class="cast-group">Plays on this TV</p>
+      {#each castGroups.plays as row (row.provider.id)}
+        {@render castRow(row.provider, row.decision, row.castable)}
       {/each}
     {/if}
-    {#if castGroups.maybe.length > 0}
+    {#if castGroups.checked.length > 0}
+      <p class="cast-group">Checked for this TV</p>
+      {#each castGroups.checked as row (row.provider.id)}
+        {@render castRow(row.provider, row.decision, row.castable)}
+      {/each}
+    {/if}
+    {#if castGroups.unchecked.length > 0}
       <p class="cast-group">Not checked for casting yet</p>
-      {#each castGroups.maybe as row (row.provider.id)}
-        {@render castRow(row.provider, row.castable)}
+      {#each castGroups.unchecked as row (row.provider.id)}
+        {@render castRow(row.provider, row.decision, row.castable)}
       {/each}
     {/if}
     {#if castGroups.blocked.length > 0}
-      <p class="cast-group">Blocked casting when last tried</p>
+      <p class="cast-group">Blocked or unreachable today</p>
       {#each castGroups.blocked as row (row.provider.id)}
-        {@render castRow(row.provider, row.castable)}
+        {@render castRow(row.provider, row.decision, row.castable)}
       {/each}
     {/if}
-    {#if castGroups.hidden > 0}
-      <!-- Counted rather than silently dropped: a list that shrank for
-           no stated reason reads as sources having gone missing. A TV's
-           refusal, another container and DASH all land here; a source's
-           block does not (the group above). -->
-      <p class="hint">
-        {castGroups.hidden === 1
-          ? '1 source only streams'
-          : `${castGroups.hidden} sources only stream`} in a form that cannot be cast to this TV.
-      </p>
+    {#if castGroups.hidden.length > 0}
+      <!-- Listed with why rather than silently dropped: a list that shrank
+           for no stated reason reads as sources having gone missing. A TV's
+           refusal, a stream outside this TV's profile, another container and
+           DASH all land here; a source's block does not (the group above). -->
+      <details class="cast-hidden">
+        <summary class="hint">
+          {castGroups.hidden.length === 1
+            ? '1 source hidden'
+            : `${castGroups.hidden.length} sources hidden`}: they cannot be cast to this TV.
+        </summary>
+        {#each castGroups.hidden as row (row.provider.id)}
+          <p class="hidden-row">
+            <span class="hidden-name">{row.provider.name}</span>
+            <span class="why">{row.decision.reason ?? 'it cannot be cast'}</span>
+          </p>
+        {/each}
+      </details>
     {/if}
   </div>
 {/snippet}
@@ -2834,5 +2897,30 @@
   .hint.bad {
     color: #fb5c76;
     padding: 12px 16px;
+  }
+
+  /* Why a row is in its group, under its name: a reason is a sentence, too
+     long for the tag beside it. */
+  .source .why,
+  .hidden-row .why {
+    color: #9a9aa6;
+    display: block;
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.35;
+    margin-top: 3px;
+  }
+
+  .cast-hidden summary {
+    cursor: pointer;
+  }
+
+  .hidden-row {
+    margin: 0;
+    padding: 4px 12px 6px;
+  }
+
+  .hidden-name {
+    color: rgba(255, 255, 255, 0.7);
   }
 </style>

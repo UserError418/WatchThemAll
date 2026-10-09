@@ -54,6 +54,7 @@
 
 import type { DeviceKind, Provider, QualityKind, ScanReason, SourceSortKey, StoreShape } from '@shared/types'
 import type { CastLearned } from '@shared/castanswer'
+import { castEvidence, type CastEvidence } from '@shared/castability'
 import { isDownloadedSource } from '@shared/downloads/types'
 import { verdictForReason } from '@shared/scanreason'
 import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
@@ -176,6 +177,16 @@ export function kindTested(sources: ResultSources, here: DeviceKind, key: string
 /** Every device's title-wide rows: a source's castability record across titles. */
 export function everyRow(sources: ResultSources, here: DeviceKind, now: number = Date.now()): ProviderScan[] {
   return deviceRows(everyResult(sources, here), now)
+}
+
+/**
+ * What the cast list's tiers are decided from, for one title
+ * (`castEvidence`): each source's newest cast check on it, and every
+ * television answer on record, from every device. The tiers themselves are
+ * decided in the renderer, for whichever television is chosen there.
+ */
+export function titleCastEvidence(sources: ResultSources, key: string, here: DeviceKind, now: number = Date.now()): CastEvidence {
+  return castEvidence(everyResult(sources, here), key, now)
 }
 
 /* ── Writing results ─────────────────────────────────────────────────── */
