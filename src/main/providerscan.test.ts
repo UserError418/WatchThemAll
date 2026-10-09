@@ -27,6 +27,7 @@ import {
   titleResults,
   WarmStarts,
   WARM_START_MS,
+  withPlayOffer,
   withQualityReading,
   type ResultSources,
 } from './providerscan'
@@ -553,6 +554,20 @@ describe("a play's quality", () => {
     // The sync merge keeps the copy that knows most, whichever device it comes from.
     expect(mergeResults([first, picture], [listed], at)).toEqual([listed])
     expect(mergeResults([listed], [picture, first], at)).toEqual([listed])
+  })
+
+  it("files the languages its player lists with the player's own list", () => {
+    const offered = withPlayOffer(play, { quality: 1080, audio: ['ja', 'en'] })
+    expect(offered).toEqual({ ...play, quality: 1080, qualityKind: 'offered', audio: ['ja', 'en'] })
+    expect(playResult(where, 'play', offered!)).toMatchObject({ quality: 1080, qualityKind: 'offered', audio: ['ja', 'en'] })
+    // An engine that lists no tracks says nothing about the sound.
+    expect(playResult(where, 'play', withPlayOffer(play, { quality: 1080, audio: [] })!)).not.toHaveProperty('audio')
+  })
+
+  it('keeps the languages even when the list is below a picture already decoded', () => {
+    const picture = { ...play, quality: 1080, qualityKind: 'floor' as const }
+    expect(withPlayOffer(picture, { quality: 720, audio: ['de'] })).toEqual({ ...picture, audio: ['de'] })
+    expect(withPlayOffer(picture, { quality: 720, audio: [] })).toBeNull()
   })
 })
 

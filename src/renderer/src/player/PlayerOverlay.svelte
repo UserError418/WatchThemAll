@@ -701,7 +701,8 @@
     const top = offeredQuality(view.quality)
     if (top === null) return
     offerTold = true
-    api?.offered(top)
+    // A plain copy: the report is reactive state, and only plain data crosses to the host.
+    api?.offered(top, [...view.quality.audio])
   })
 
   function toggleQualityMenu(): void {

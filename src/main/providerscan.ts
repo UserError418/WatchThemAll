@@ -230,6 +230,8 @@ export type PlayMeasurement =
        */
       quality?: number
       qualityKind?: QualityKind
+      /** The languages its sound is offered in, from its player's own list (`withPlayOffer`). */
+      audio?: string[]
     }
   | {
       at: number
@@ -307,6 +309,23 @@ export function withQualityReading<T extends { at: number; quality?: number; qua
   return taken ? { ...seen, quality: reading.quality, qualityKind: reading.kind } : null
 }
 
+/**
+ * A play's measurement with its source's own list, as the player's controls
+ * told it once the film played (`WtaPlayerApi.offered`): its top as the
+ * quality where `withQualityReading` takes it, and the languages its sound
+ * is offered in where none were known. Null when it adds nothing.
+ */
+export function withPlayOffer<T extends { at: number; quality?: number; qualityKind?: QualityKind; audio?: string[] }>(
+  seen: T,
+  offer: { quality: number; audio: readonly string[] },
+): T | null {
+  const offered = withQualityReading(seen, { quality: offer.quality, kind: 'offered' })
+  const takesAudio = offer.audio.length > 0 && (seen.audio === undefined || seen.audio.length === 0)
+  if (offered === null && !takesAudio) return null
+  const base = offered ?? seen
+  return takesAudio ? { ...base, audio: [...offer.audio] } : base
+}
+
 /** A play's or a preview's measurement as a result: weaker than a test when it failed, see `sourceresults.ts`. */
 export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: PlayMeasurement): SourceResult {
   if (!seen.streamed) {
@@ -319,6 +338,7 @@ export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: 
     ...(seen.ms === undefined ? {} : { ms: seen.ms }),
     ...(seen.quality === undefined ? {} : { quality: seen.quality }),
     ...(seen.quality === undefined || seen.qualityKind === undefined ? {} : { qualityKind: seen.qualityKind }),
+    ...(seen.audio === undefined || seen.audio.length === 0 ? {} : { audio: seen.audio }),
   })
 }
 

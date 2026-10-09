@@ -58,7 +58,8 @@ import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
 import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
 import { loadFailureReason } from './loadfailure'
-import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, withQualityReading, type PlayMeasurement } from './providerscan'
+import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, withPlayOffer, withQualityReading, type PlayMeasurement } from './providerscan'
+import { isAudioList } from '@shared/audiotracks'
 import { CarryOver } from '@shared/carryover'
 import type { CarryAction, CarryReport } from '@shared/ipc'
 import { QUALITY_CLASSES, qualityClass } from '@shared/streamquality'
@@ -1327,6 +1328,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     ms?: number
     quality?: number
     qualityKind?: QualityKind
+    audio?: string[]
   } | null = null
   /**
    * How long into playing the picture still counts toward the play's
@@ -1341,7 +1343,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * the list before `media-started-playing` reached here, and the shell asks
    * only once, so dropping the early answer lost the play's offer for good.
    */
-  let heldOffer: number | null = null
+  let heldOffer: { quality: number; audio: string[] } | null = null
 
   const noteStreamed = (providerId: string): void => {
     if (measured?.streamed) return
@@ -1349,7 +1351,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     const ms = at - loadStartedAt
     // Past the silence check, the wait included the user: see `PLAY_TIMING_MAX_MS`.
     measured = { providerId, at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) }
-    const offered = heldOffer === null ? null : withQualityReading(measured, { quality: heldOffer, kind: 'offered' })
+    const offered = heldOffer === null ? null : withPlayOffer(measured, heldOffer)
     heldOffer = null
     if (offered !== null) measured = offered
     options.reportResult?.(providerId, {
@@ -1357,6 +1359,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       streamed: true,
       ...(measured.ms === undefined ? {} : { ms: measured.ms }),
       ...(measured.quality === undefined ? {} : { quality: measured.quality, qualityKind: measured.qualityKind ?? 'floor' }),
+      ...(measured.audio === undefined ? {} : { audio: measured.audio }),
     })
   }
 
@@ -1367,6 +1370,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
       streamed: true,
       ...(success.ms === undefined ? {} : { ms: success.ms }),
       ...(success.quality === undefined ? {} : { quality: success.quality, qualityKind: success.qualityKind ?? 'floor' }),
+      ...(success.audio === undefined ? {} : { audio: success.audio }),
     })
   }
 
@@ -1395,13 +1399,13 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * here. Before the new page has committed, it can only be the page being
    * left, and is dropped.
    */
-  const noteOffered = (quality: number): void => {
+  const noteOffered = (offer: { quality: number; audio: string[] }): void => {
     if (!committed || closed) return
     if (!measured?.streamed) {
-      heldOffer = quality
+      heldOffer = offer
       return
     }
-    const better = withQualityReading(measured, { quality, kind: 'offered' })
+    const better = withPlayOffer(measured, offer)
     if (better === null) return
     measured = better
     refileStreamed(better)
@@ -2349,9 +2353,9 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     void clickPlayInFrames(contents).catch(() => {})
   }
   /** The top of the source's own list of qualities; see `noteOffered`. Checked here: a renderer's message is never trusted by shape. */
-  const onOffered = (event: Electron.IpcMainEvent, quality: unknown): void => {
+  const onOffered = (event: Electron.IpcMainEvent, quality: unknown, audio: unknown): void => {
     if (event.sender !== contents || !alive()) return
-    if (typeof quality === 'number' && QUALITY_CLASSES.includes(quality)) noteOffered(quality)
+    if (typeof quality === 'number' && QUALITY_CLASSES.includes(quality)) noteOffered({ quality, audio: isAudioList(audio) ? audio : [] })
   }
   ipcMain.on(EV.playerKey, onPlayerKey)
   ipcMain.on(EV.playerActivity, onActivity)

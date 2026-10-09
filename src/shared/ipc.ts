@@ -1537,8 +1537,10 @@ export interface WtaPlayerApi {
    * load after the film plays. The host files it with this load's play as
    * what the source offers, where a play otherwise has at most a floor (the
    * desktop's best picture of the first minute) or, on the phone, nothing.
+   * `audio`: the languages its sound is offered in, from the engine's audio
+   * tracks (`FilmQuality.audio`), filed with it; empty when it lists none.
    */
-  offered(quality: number): void
+  offered(quality: number, audio: string[]): void
   /**
    * Hide the controls and the bar now: a tap on the picture while they show.
    * The phone only; on the desktop the pointer leaving does it.

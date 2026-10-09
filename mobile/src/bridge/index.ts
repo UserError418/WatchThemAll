@@ -97,12 +97,13 @@ import {
   scanAwareOrder,
   scanEpisode,
   titleResults,
-  withQualityReading,
+  withPlayOffer,
   type AutomaticOrder,
   type PlayMeasurement,
   type ResultsAccess,
 } from '@main/providerscan'
 import { ResultStore } from '@shared/store/results'
+import { isAudioList } from '@shared/audiotracks'
 import { CarryOver, type HeldFilm } from '@shared/carryover'
 import { FilmLink } from '@/player/filmlink'
 import { episodeOf, resultsFromScan, type MeasuredAt } from '@shared/sourceresults'
@@ -500,10 +501,11 @@ export async function createBridge(): Promise<WtaApi> {
     /** That play as it was filed, to file again with the source's offer (`noteOffered`). */
     filedPlay: { where: MeasuredAt; seen: PlayMeasurement } | null
     /**
-     * The top of this source's own list of qualities, once the overlay has
-     * heard it (`WtaPlayerApi.offered`); filed with its play.
+     * The top of this source's own list of qualities, and the languages its
+     * sound is offered in, once the overlay has heard them
+     * (`WtaPlayerApi.offered`); filed with its play.
      */
-    offered: number | null
+    offered: { quality: number; audio: string[] } | null
     /**
      * The film element's first report at a film's length, for this source:
      * when, and at what second. A play is filed once a later report shows its
@@ -610,7 +612,7 @@ export async function createBridge(): Promise<WtaApi> {
     activity: (hold) => overlayHub.activity(hold),
     pressPlay: () => surface.press(),
     owned: (owned) => overlayHub.owned(owned),
-    offered: (quality) => noteOffered(quality),
+    offered: (quality, audio) => noteOffered({ quality, audio }),
     dismiss: () => overlayHub.dismiss(),
     subtitles: {
       languages: async () => {
@@ -1276,7 +1278,8 @@ export async function createBridge(): Promise<WtaApi> {
       at,
       streamed: true as const,
       ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}),
-      ...(progress.offered === null ? {} : { quality: progress.offered, qualityKind: 'offered' as const }),
+      ...(progress.offered === null ? {} : { quality: progress.offered.quality, qualityKind: 'offered' as const }),
+      ...(progress.offered === null || progress.offered.audio.length === 0 ? {} : { audio: progress.offered.audio }),
     })
     testResults.record([playResult(where, 'play', seen)])
     progress.filedPlay = { where, seen }
@@ -1299,12 +1302,13 @@ export async function createBridge(): Promise<WtaApi> {
    * moment, which replaces it. The overlay is mounted per load, so what it
    * tells is about the source on screen.
    */
-  const noteOffered = (quality: number): void => {
-    if (!progress || progress.offered !== null || !QUALITY_CLASSES.includes(quality)) return
-    progress.offered = quality
+  const noteOffered = (offer: { quality: number; audio: string[] }): void => {
+    if (!progress || progress.offered !== null || !QUALITY_CLASSES.includes(offer.quality)) return
+    const audio = isAudioList(offer.audio) ? offer.audio : []
+    progress.offered = { quality: offer.quality, audio }
     const filed = progress.filedPlay
     if (filed === null || !filed.seen.streamed) return
-    const better = withQualityReading(filed.seen, { quality, kind: 'offered' })
+    const better = withPlayOffer(filed.seen, { quality: offer.quality, audio })
     if (better === null) return
     progress.filedPlay = { where: filed.where, seen: better }
     testResults.record([playResult(filed.where, 'play', better)])
