@@ -19,6 +19,7 @@ const ALL: ScanReason[] = [
   { kind: 'no-stream' },
   { kind: 'unreachable' },
   { kind: 'unsupported' },
+  { kind: 'wrong-video', seconds: 167, expectedMinutes: 139, title: 'film' },
 ]
 
 describe('reason labels', () => {
@@ -28,10 +29,20 @@ describe('reason labels', () => {
     expect(describeReason({ kind: 'refused', status: 403 }).label).toBe('stream refused (403)')
   })
 
-  it('is red for everything the test saw fail, amber only for a bot check', () => {
+  it('is red for everything the test saw fail, amber for a bot check and for something else playing', () => {
     for (const reason of ALL) {
-      expect(verdictForReason(reason)).toBe(reason.kind === 'blocked' ? 'unsure' : 'dead')
+      expect(verdictForReason(reason)).toBe(reason.kind === 'blocked' || reason.kind === 'wrong-video' ? 'unsure' : 'dead')
     }
+  })
+
+  /** The measured case: VidRock served a clip for Fight Club while its test said green. */
+  it('says a clip in the place of the film is something else, in the Downloads tab\'s words', () => {
+    const text = describeReason({ kind: 'wrong-video', seconds: 167, expectedMinutes: 139, title: 'film' })
+    expect(text.label).toBe('something else')
+    expect(text.hint).toBe('Tested — this source plays something else here (a 3 min video for a 139 min film)')
+    expect(describeReason({ kind: 'wrong-video', seconds: 300, expectedMinutes: null, title: 'episode' }).hint).toBe(
+      'Tested — this source plays something else here (a 5 min video)',
+    )
   })
 })
 

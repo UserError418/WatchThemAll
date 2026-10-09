@@ -822,6 +822,13 @@ export type ScanReason =
   | { kind: 'unreachable' }
   /** The provider's link format cannot express this title or episode. */
   | { kind: 'unsupported' }
+  /**
+   * Video arrived, but every length the test was sure of is clearly not the
+   * title's: a clip, an advert or another programme in its place
+   * (`rightfilm.ts`). `seconds` is the longest such length; `expectedMinutes`
+   * TMDB's runtime it was held to, null when TMDB has none.
+   */
+  | { kind: 'wrong-video'; seconds: number; expectedMinutes: number | null; title: 'film' | 'episode' }
 
 /**
  * What a quality reading is worth: what the label may claim.

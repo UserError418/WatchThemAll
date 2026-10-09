@@ -14,18 +14,27 @@
  *   needs more than the test's budget to start is not one Automatic should try
  *   before a working one; the label still says "timeout", so it can be picked
  *   by someone willing to wait.
- * - **amber** only for a bot check. The player carries cookies the throwaway
+ * - **amber** for a bot check. The player carries cookies the throwaway
  *   test session does not, so a challenge often passes there.
+ * - **amber** for a source that played something else (`wrong-video`, since
+ *   2026-10): a clip, an advert or another programme where the title should
+ *   be. Not green, because the stream is not the film. Not red, because a
+ *   red is a source the user never picks and Automatic tries last, and the
+ *   test sees only the first seconds of a page: an advert in front of the
+ *   film reads the same as a clip in its place. Amber keeps it below every
+ *   source that played the film and still in reach; a false red would
+ *   remove a working source without anyone noticing.
  *
  * Every red is re-tested alone before it is believed (`scanservice.ts`), which
  * is what makes red safe to hand out for a single bad answer.
  */
 
+import { somethingElse } from './rightfilm'
 import type { ProbeVerdict, ScanReason } from './types'
 
 /** The verdict a reason stands for. */
 export function verdictForReason(reason: ScanReason): ProbeVerdict {
-  return reason.kind === 'blocked' ? 'unsure' : 'dead'
+  return reason.kind === 'blocked' || reason.kind === 'wrong-video' ? 'unsure' : 'dead'
 }
 
 /** The short label beside a provider's name, and the hover text that spells it out. */
@@ -62,5 +71,10 @@ export function describeReason(reason: ScanReason): ReasonText {
       return { label: 'not supported', hint: "This source's links cannot express this title" }
     case 'no-stream':
       return { label: 'no stream', hint: 'Tested — the page loaded, but no stream appeared' }
+    case 'wrong-video':
+      return {
+        label: 'something else',
+        hint: `Tested — this source ${somethingElse(reason.seconds, reason.expectedMinutes, reason.title)}`,
+      }
   }
 }
