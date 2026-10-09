@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Provider, QualityKind, ScanReason, StreamDelivery } from '@shared/types'
+import type { CastCheck, Provider, QualityKind, ScanReason, StreamDelivery } from '@shared/types'
 import type { ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import type { ProbeSubject, StreamVerdict } from './streamprobe'
 import type { QualityProbeResult } from './qualityprobe'
@@ -638,6 +638,20 @@ describe('the cast check during a test', () => {
     await vi.waitFor(() => expect(scan.progress.some((p) => p.verdicts.fast === 'stream')).toBe(true))
     scan.cancel()
     expect((await running).castChecks).toBeUndefined()
+  })
+
+  it("fills a quality the test could not read from what the check read, as a floor, and never replaces one", async () => {
+    const READ: CastCheck = {
+      reach: 'ok',
+      identity: 'film',
+      signature: { container: 'mp4', video: { codec: 'h264', profile: 'high', level: 4, width: 1280, height: 532, fps: 24 }, audio: [], encryption: 'none' },
+    }
+    script.set('blank', [{ verdict: 'stream', ms: 1_000, castCandidates: CAPTURED }])
+    script.set('known', [{ verdict: 'stream', ms: 1_000, quality: 1080, castCandidates: CAPTURED }])
+    const scan = scanOf([provider('blank'), provider('known')], { castCheck: async () => READ })
+    const result = await scan.run()
+    expect(result.qualities).toEqual({ blank: 720, known: 1080 })
+    expect(result.qualityKinds).toEqual({ blank: 'floor', known: 'offered' })
   })
 
   it("checks the background tester's one source too", async () => {

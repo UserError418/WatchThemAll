@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { bestQuality, judgeQuality, masterVariantDetails, masterVariants, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
+import { bestQuality, checkedQuality, judgeQuality, masterVariantDetails, masterVariants, qualityClass, readLadder, readMediaPlaylist } from './streamquality'
 
 const MASTER = [
   '#EXTM3U',
@@ -456,5 +456,24 @@ describe('readMediaPlaylist key method', () => {
     expect(readMediaPlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:6,\ns0.ts\n').keyMethod).toBeNull()
     expect(readMediaPlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://x"\n').keyMethod).toBe('SAMPLE-AES')
     expect(readMediaPlaylist('#EXTM3U\n#EXTINF:6,\ns0.ts\n').keyMethod).toBeNull()
+  })
+})
+
+describe('checkedQuality', () => {
+  const read = (width: number | null, height: number | null) => ({
+    container: 'mp4' as const,
+    video: { codec: 'h264' as const, profile: 'high', level: 4, width, height, fps: 24 },
+    audio: [],
+    encryption: 'none' as const,
+  })
+
+  it("is the class of the picture the check reached: 111Movies' 1280x532 film", () => {
+    expect(checkedQuality({ reach: 'ok', identity: 'film', signature: read(1280, 532) })).toBe(720)
+  })
+
+  it('says nothing of a stream that is not the title, or of a picture it could not read', () => {
+    expect(checkedQuality({ reach: 'ok', identity: 'unknown', signature: read(1920, 1080) })).toBeNull()
+    expect(checkedQuality({ reach: 'not-media', identity: 'wrong-length', seconds: 30 })).toBeNull()
+    expect(checkedQuality({ reach: 'ok', identity: 'film', signature: read(null, null) })).toBeNull()
   })
 })

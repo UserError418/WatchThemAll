@@ -87,6 +87,7 @@ import { ladderAfterVerdict } from '@shared/filmladder'
 import { wrongVideoReason } from '@shared/rightfilm'
 import { providerRank } from '@shared/scanrank'
 import { verdictForReason } from '@shared/scanreason'
+import { checkedQuality } from '@shared/streamquality'
 
 /*
  * What each network verdict means for the user's dot is decided by its reason,
@@ -366,7 +367,14 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       // background tester files one row, and nobody is watching it arrive.
       const better = await ladderAfterVerdict(measured, measured.requests, io, subject.runtimeMinutes ?? null)
       const scan = rowFor(titleKey, provider.id, at, better ?? measured)
-      if (castCheck !== null) scan.castChecks = { [provider.id]: castCheck }
+      if (castCheck !== null) {
+        scan.castChecks = { [provider.id]: castCheck }
+        const floor = scan.qualities === undefined ? checkedQuality(castCheck) : null
+        if (floor !== null) {
+          scan.qualities = { [provider.id]: floor }
+          scan.qualityKinds = { [provider.id]: 'floor' }
+        }
+      }
       return scan
     },
 
@@ -520,7 +528,15 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         if (measured.verdict !== 'stream') return
         const task: Promise<void> = castCheckOf(measured, subject.runtimeMinutes ?? null)
           .then((check) => {
-            if (check !== null && token === mine) castChecks[provider.id] = check
+            if (check === null || token !== mine) return
+            castChecks[provider.id] = check
+            // A source the test could read no quality for: what the check read, as a floor.
+            const floor = qualities[provider.id] === undefined ? checkedQuality(check) : null
+            if (floor !== null) {
+              qualities[provider.id] = floor
+              qualityKinds[provider.id] = 'floor'
+              publish(false)
+            }
           })
           .finally(() => checking.delete(task))
         checking.add(task)

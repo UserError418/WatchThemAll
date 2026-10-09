@@ -22,7 +22,7 @@
  * standard frame it was encoded to fill; see `qualityClass`.
  */
 
-import type { QualityKind } from './types'
+import type { CastCheck, QualityKind } from './types'
 
 /** One rendition a manifest offers. Width is null when the manifest gave only a height. */
 export interface Rendition {
@@ -451,4 +451,23 @@ export function judgeQuality(evidence: QualityEvidence): QualityJudgement {
   if (masters || media) return verdict('unlabelled', null)
   if (evidence.playlists.length > answered.length) return verdict('sealed', null)
   return verdict('unreadable', null)
+}
+
+/**
+ * The quality a test's cast check read, for a source whose test found none:
+ * the picture of the stream it reached, a floor (`720p+`).
+ *
+ * The check reads what a cast would send, through the cast proxy: a whole
+ * file's `moov`, or an HLS master's first variant and its first segment.
+ * Some sources leave the quality probe nothing to read — 111Movies fetches
+ * its film in pieces from addresses that name nothing, and no frame's
+ * `<video>` could be read (2026-10-09) — and a blank there was one of the
+ * owner's symptoms. A floor, never an offer: a first variant is where an HLS
+ * player starts, not its best, and a file may have siblings in other
+ * qualities. Only for the title: a check that reached an advert says nothing.
+ */
+export function checkedQuality(check: CastCheck): number | null {
+  const video = check.signature?.video
+  if (check.identity !== 'film' || !video || video.height === null) return null
+  return qualityClass({ width: video.width, height: video.height })
 }

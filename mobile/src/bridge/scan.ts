@@ -65,7 +65,7 @@ import { verdictForReason } from '@shared/scanreason'
 import { isDashManifest, isMediaRequest, isMediaResponse, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import { capture, PEEK_LIMIT_BYTES, type Candidate } from './cast'
-import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
+import { bestQuality, checkedQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
 import { readStreamHeader, streamHeaderOf } from '@shared/streamheader'
 import { lengthVerdict } from '@shared/runtimecheck'
 import { closeAllProbes, openProbe, type ProbeDocumentError, type ProbeRequest } from './probeview'
@@ -379,7 +379,15 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       const limit = new Promise<null>((resolve) => (gaveUp = setTimeout(() => resolve(null), CAST_CHECK_LIMIT_MS)))
       const task: Promise<void> = Promise.race([check(measured.castCandidates, request.runtimeMinutes ?? null).catch(() => null), limit])
         .then((found) => {
-          if (found !== null && !cancelled()) castChecks[provider.id] = found
+          if (found === null || cancelled()) return
+          castChecks[provider.id] = found
+          // A source the test could read no quality for: what the check read, as a floor.
+          const floor = qualities[provider.id] === undefined ? checkedQuality(found) : null
+          if (floor !== null) {
+            qualities[provider.id] = floor
+            qualityKinds[provider.id] = 'floor'
+            publish(false)
+          }
         })
         .finally(() => {
           clearTimeout(gaveUp)
