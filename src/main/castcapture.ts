@@ -44,6 +44,20 @@ import { observeSendHeaders } from './webrequesthub'
 const CAPACITY = 40
 
 /**
+ * How many of the first requests after a `clear` are kept for the whole load.
+ *
+ * A player resolves its stream once, at the start of a load: the manifest is
+ * among its first requests. After that an adaptive player fetches segments for
+ * as long as the film plays, and some sources name them with no extension the
+ * filter below could drop (MoviesAPI's `workers.dev/file2/…`, VidRock,
+ * 111Movies' `/api?d=…`). Measured 2026-10-09: twenty seconds into a MoviesAPI
+ * play the forty newest requests were all segments, the manifest had gone, and
+ * the cast found nothing to send although the source casts. So the first
+ * requests are held apart from the rolling forty, and offered first.
+ */
+const HEAD_CAPACITY = 20
+
+/**
  * Extensions that are never the thing to cast.
  *
  * `.ts`, `.m4s` and `.aac` are here for a different reason than the rest: they
@@ -67,10 +81,41 @@ export interface Candidate {
 export interface CastCapture {
   /** Start watching a player session. Safe to call again for a new session. */
   watch(session: Session): void
-  /** Everything captured since the last clear, newest first. */
+  /** What was captured since the last clear: the load's first requests, then the newest; see `CaptureBuffer`. */
   candidates(): Candidate[]
   /** Forget everything. See below — this is not optional. */
   clear(): void
+}
+
+/**
+ * The candidates of one load: its first `HEAD_CAPACITY` for good, and the
+ * newest `CAPACITY` rolling. Pure, so the rule is tested without a session.
+ */
+export class CaptureBuffer {
+  private head: Candidate[] = []
+  private recent: Candidate[] = []
+
+  add(candidate: Candidate): void {
+    if (this.head.length < HEAD_CAPACITY) this.head.push(candidate)
+    this.recent.push(candidate)
+    if (this.recent.length > CAPACITY) this.recent = this.recent.slice(-CAPACITY)
+  }
+
+  /**
+   * The load's first requests, newest of them first, then the rest of the
+   * rolling newest, newest first. The first ones lead because they hold the
+   * manifest, and the cast's choice asks about only so many
+   * (`MAX_CANDIDATES` in `castroot.ts`); each candidate once.
+   */
+  candidates(): Candidate[] {
+    const head = new Set(this.head)
+    return [...[...this.head].reverse(), ...[...this.recent].reverse().filter((c) => !head.has(c))]
+  }
+
+  clear(): void {
+    this.head = []
+    this.recent = []
+  }
 }
 
 function isWorthKeeping(url: string): boolean {
@@ -100,7 +145,7 @@ function flatten(headers: Record<string, string | string[]>): Record<string, str
 }
 
 export function createCastCapture(): CastCapture {
-  let recent: Candidate[] = []
+  const buffer = new CaptureBuffer()
   const watched = new WeakSet<Session>()
 
   return {
@@ -115,17 +160,16 @@ export function createCastCapture(): CastCapture {
         if (details.method !== 'GET') return
         if (!isWorthKeeping(details.url)) return
 
-        recent.push({
+        buffer.add({
           url: details.url,
           headers: flatten(details.requestHeaders),
           atMs: Date.now(),
         })
-        if (recent.length > CAPACITY) recent = recent.slice(-CAPACITY)
       })
     },
 
     candidates(): Candidate[] {
-      return [...recent].reverse()
+      return buffer.candidates()
     },
 
     /**
@@ -138,7 +182,7 @@ export function createCastCapture(): CastCapture {
      * sweep crediting each provider with its predecessor's stream.
      */
     clear(): void {
-      recent = []
+      buffer.clear()
     },
   }
 }

@@ -5,8 +5,11 @@ import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -62,6 +65,17 @@ public final class MediaCapture {
      */
     private static final int CAPACITY = 40;
 
+    /**
+     * How many of the first requests after a clear are kept for the whole load.
+     *
+     * The same rule as the desktop's `CaptureBuffer` (castcapture.ts): a player
+     * resolves its stream at the start of a load, then fetches segments for as
+     * long as the film plays, and some sources name them with no extension the
+     * filter could drop. Measured 2026-10-09 on MoviesAPI: twenty seconds in,
+     * the forty newest requests were all segments and the manifest had gone.
+     */
+    private static final int HEAD_CAPACITY = 20;
+
     /** One captured request. */
     public static final class Candidate {
         public final String url;
@@ -91,6 +105,8 @@ public final class MediaCapture {
     };
 
     private static final Deque<Candidate> RECENT = new ArrayDeque<>();
+    /** The load's first requests, oldest first; guarded by RECENT's lock. */
+    private static final List<Candidate> HEAD = new ArrayList<>();
 
     private MediaCapture() {}
 
@@ -139,19 +155,34 @@ public final class MediaCapture {
             // No cookie store on this WebView. The candidate is still worth having.
         }
 
+        record(new Candidate(url.toString(), headers, System.currentTimeMillis()));
+    }
+
+    /** Keep one candidate: among the load's first, and among the newest. */
+    static void record(Candidate candidate) {
         synchronized (RECENT) {
-            RECENT.addLast(new Candidate(url.toString(), headers, System.currentTimeMillis()));
+            if (HEAD.size() < HEAD_CAPACITY) HEAD.add(candidate);
+            RECENT.addLast(candidate);
             while (RECENT.size() > CAPACITY) RECENT.removeFirst();
         }
     }
 
-    /** Everything captured since the last clear, newest first. */
+    /**
+     * What was captured since the last clear: the load's first requests, newest
+     * of them first, then the rest of the newest, newest first. The first ones
+     * lead because they hold the manifest and the cast's choice asks about only
+     * so many; each candidate once.
+     */
     public static Candidate[] candidates() {
         synchronized (RECENT) {
-            Candidate[] out = new Candidate[RECENT.size()];
-            int index = out.length - 1;
-            for (Candidate candidate : RECENT) out[index--] = candidate;
-            return out;
+            List<Candidate> out = new ArrayList<>();
+            for (int i = HEAD.size() - 1; i >= 0; i--) out.add(HEAD.get(i));
+            Iterator<Candidate> newest = RECENT.descendingIterator();
+            while (newest.hasNext()) {
+                Candidate candidate = newest.next();
+                if (!HEAD.contains(candidate)) out.add(candidate);
+            }
+            return out.toArray(new Candidate[0]);
         }
     }
 
@@ -167,6 +198,7 @@ public final class MediaCapture {
     public static void clear() {
         synchronized (RECENT) {
             RECENT.clear();
+            HEAD.clear();
         }
     }
 }
