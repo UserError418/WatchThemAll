@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { isFalseWholeFile, isMediaRequest, isMediaResponse, totalBytesOf } from './mediarequest'
+import { isDashManifest, isFalseWholeFile, isMediaRequest, isMediaResponse, totalBytesOf } from './mediarequest'
 
 describe('isMediaRequest from the URL alone', () => {
   it.each([
@@ -109,5 +109,18 @@ describe('isMediaResponse', () => {
   it('ignores an ordinary page or API answer', () => {
     expect(isMediaResponse('text/html; charset=UTF-8', '<!doctype html><html>')).toBe(false)
     expect(isMediaResponse('application/json', '{"sources":[]}')).toBe(false)
+  })
+})
+
+describe('isDashManifest', () => {
+  it('knows a DASH manifest by its name or its type, which the cast path cannot send', () => {
+    expect(isDashManifest('https://cdn.example/v/manifest.mpd?token=x')).toBe(true)
+    expect(isDashManifest('https://cdn.example/v/stream', 'application/dash+xml')).toBe(true)
+  })
+
+  it('leaves HLS, and a /manifest path that says neither way, alone', () => {
+    expect(isDashManifest('https://cdn.example/v/index.m3u8')).toBe(false)
+    expect(isDashManifest('https://cdn.example/v/manifest', 'application/vnd.apple.mpegurl')).toBe(false)
+    expect(isDashManifest('https://cdn.example/v/manifest')).toBe(false)
   })
 })

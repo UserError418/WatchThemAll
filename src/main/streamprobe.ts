@@ -24,14 +24,14 @@
 
 import { BrowserWindow, session, type WebContents } from 'electron'
 import type { Provider, StreamDelivery } from '@shared/types'
-import { strongerDelivery, wholeFileDelivery } from '@shared/castability'
+import { piecesDelivery, strongerDelivery, wholeFileDelivery } from '@shared/castability'
 import { isForeignNavigation } from './navguard'
 import { applyBrowserIdentity, applyProviderReferer } from './identity'
 import { decide } from './adblock'
 import { clickCentre, clickPlayInFrames } from './pressplay'
 import { renderTemplate } from './providers'
 import { isSameOrigin } from './sameorigin'
-import { mediaKind, totalBytesOf } from './mediarequest'
+import { isDashManifest, mediaKind, totalBytesOf } from './mediarequest'
 import { STILL_LOADING_WINDOW_MS, classify } from './streamverdict'
 import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
 export { streamReason } from './streamverdict'
@@ -393,6 +393,8 @@ async function runProbe(
   let firstMediaAt: number | null = null
   /** When the page last finished a request, for telling "still loading" from "gave up". */
   let lastActivityAt = startedAt
+  /** Which kinds of playlist the page fetched: what its pieces count as (`piecesDelivery`). */
+  const playlistsSeen = { hls: false, dash: false }
 
   /**
    * Request headers, kept until the matching response arrives.
@@ -443,7 +445,8 @@ async function runProbe(
 
     if (kind !== null && details.statusCode < 400) {
       if (base.mediaSamples.length < 4) base.mediaSamples.push(details.url.slice(0, 160))
-      base.delivery = strongerDelivery(base.delivery, kind === 'file' ? wholeFileDelivery(mime) : 'segmented')
+      if (kind === 'playlist') playlistsSeen[isDashManifest(details.url, mime) ? 'dash' : 'hls'] = true
+      base.delivery = strongerDelivery(base.delivery, kind === 'file' ? wholeFileDelivery(mime) : piecesDelivery(playlistsSeen))
       if (onMedia && !mediaReported) {
         mediaReported = true
         onMedia({ url: details.url, headers: sentHeaders.get(details.url) ?? {}, mime })

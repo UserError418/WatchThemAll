@@ -737,8 +737,17 @@ export type ProbeVerdict =
 export type StreamDelivery =
   /** One whole MP4 or WebM file. */
   | 'progressive'
-  /** An HLS or DASH playlist and its pieces. */
+  /** An HLS playlist and its pieces. */
   | 'segmented'
+  /**
+   * An MPEG-DASH manifest and its pieces. Kept apart from HLS because the
+   * cast path cannot send it: only HLS playlists are rewritten to route
+   * through the proxy (`buildCastBundle`), and a manifest handed over whole
+   * still names the source's hosts, which refuse the receiver's bare
+   * requests. Until 2.0.18 a test filed DASH as `segmented`, and the cast
+   * list offered a source no beam could ever send.
+   */
+  | 'dash'
   /** One whole file in another container, such as ScreenScape's MKV. The app does not hand these to a TV. */
   | 'other'
   /**

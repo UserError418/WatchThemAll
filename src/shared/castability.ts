@@ -17,8 +17,9 @@
  * without the header and played with it. The 2026-09-13 test measured CORS.
  *
  * So: a source can cast a title when it streams it as a whole MP4/WebM file or
- * as HLS/DASH. Not as another container (ScreenScape's MKV is never sent), and
- * not where a television has actually refused it.
+ * as HLS. Not as another container (ScreenScape's MKV is never sent), not as
+ * DASH (the cast path cannot send it, see `StreamDelivery`), and not where a
+ * television has actually refused it.
  *
  * ## Two levels of evidence
  *
@@ -69,17 +70,30 @@ export function wholeFileDelivery(contentType: string): 'progressive' | 'other' 
 }
 
 /**
+ * How a stream that came in pieces counts: as DASH when the only playlist
+ * seen was a DASH manifest, as HLS otherwise.
+ *
+ * Decided from the playlists because a piece cannot say: `.m4s` fragments
+ * serve both. A page with no playlist in sight (one fed from a blob) is
+ * given the benefit of the doubt as HLS, as it always was; the cast itself
+ * then finds out.
+ */
+export function piecesDelivery(playlists: { hls: boolean; dash: boolean }): 'segmented' | 'dash' {
+  return playlists.dash && !playlists.hls ? 'dash' : 'segmented'
+}
+
+/**
  * Which delivery describes a page that showed more than one.
  *
  * The one a cast would send: `identifyStream` takes a whole castable file over
  * a playlist wherever it finds both, so a test that saw both must record the
- * file, or it would call a source uncastable that casts. After that, a
- * playlist over another container (the cast would try the playlist), and
- * `unknown` — a video playing with nothing seen feeding it — only when there
- * is nothing else.
+ * file, or it would call a source uncastable that casts. After that, an HLS
+ * playlist over DASH or another container (the cast would try the playlist),
+ * and `unknown` — a video playing with nothing seen feeding it — only when
+ * there is nothing else.
  */
 export function strongerDelivery(held: StreamDelivery | null, seen: StreamDelivery): StreamDelivery {
-  const rank: Record<StreamDelivery, number> = { progressive: 0, segmented: 1, other: 2, unknown: 3 }
+  const rank: Record<StreamDelivery, number> = { progressive: 0, segmented: 1, dash: 2, other: 3, unknown: 4 }
   return held !== null && rank[held] <= rank[seen] ? held : seen
 }
 
@@ -146,6 +160,7 @@ export function deliveryCastability(delivery: StreamDelivery | undefined): 'yes'
     case 'segmented':
       return 'yes'
     case 'other':
+    case 'dash':
       return 'no'
     default:
       // `unknown`, or tested before deliveries were recorded.

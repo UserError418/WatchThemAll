@@ -164,7 +164,7 @@ export function resultKey(result: Pick<SourceResult, 'deviceId' | 'at' | 'provid
 const VERDICTS: readonly unknown[] = ['stream', 'unsure', 'dead'] satisfies ProbeVerdict[]
 const ORIGINS: readonly unknown[] = ['test', 'play', 'preview'] satisfies ResultOrigin[]
 const KINDS: readonly unknown[] = ['desktop', 'phone'] satisfies DeviceKind[]
-const DELIVERIES: readonly unknown[] = ['progressive', 'segmented', 'other', 'unknown'] satisfies StreamDelivery[]
+const DELIVERIES: readonly unknown[] = ['progressive', 'segmented', 'dash', 'other', 'unknown'] satisfies StreamDelivery[]
 const CASTS: readonly unknown[] = ['played', 'refused', 'blocked'] satisfies CastOutcome[]
 
 /**

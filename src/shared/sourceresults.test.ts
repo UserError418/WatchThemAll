@@ -112,6 +112,11 @@ describe('isSourceResult', () => {
     expect(isSourceResult(null)).toBe(false)
   })
 
+  it('takes the outcome and the delivery added in 2.0.18', () => {
+    expect(isSourceResult(result({ origin: 'play', delivery: 'segmented', cast: 'blocked' }))).toBe(true)
+    expect(isSourceResult(result({ delivery: 'dash' }))).toBe(true)
+  })
+
   it('turns away a result for a download, which is not a source', () => {
     // The phone filed one until 2.0.18, casting a download.
     expect(isSourceResult(result({ providerId: 'downloaded', origin: 'play', delivery: 'segmented' }))).toBe(false)

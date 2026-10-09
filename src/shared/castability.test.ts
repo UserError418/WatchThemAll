@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   castabilities,
+  deliveryCastability,
   isCastableFileType,
   liveCastability,
+  piecesDelivery,
   sourceCastability,
+  strongerDelivery,
   titleCastability,
   wholeFileDelivery,
 } from './castability'
@@ -29,6 +32,25 @@ describe('the receiver rule', () => {
     expect(isCastableFileType('application/octet-stream')).toBe(false)
     expect(wholeFileDelivery('video/mp4')).toBe('progressive')
     expect(wholeFileDelivery('video/x-matroska')).toBe('other')
+  })
+
+  it('never casts DASH, which the cast path cannot send', () => {
+    expect(deliveryCastability('dash')).toBe('no')
+    expect(deliveryCastability('segmented')).toBe('yes')
+  })
+
+  it('counts pieces as DASH only when a DASH manifest was the only playlist seen', () => {
+    expect(piecesDelivery({ hls: false, dash: true })).toBe('dash')
+    expect(piecesDelivery({ hls: true, dash: true })).toBe('segmented')
+    // No playlist in sight (one fed from a blob): HLS, as it always was.
+    expect(piecesDelivery({ hls: false, dash: false })).toBe('segmented')
+  })
+
+  it('records the delivery a cast would send: a file, then HLS, then DASH', () => {
+    expect(strongerDelivery('dash', 'segmented')).toBe('segmented')
+    expect(strongerDelivery('segmented', 'dash')).toBe('segmented')
+    expect(strongerDelivery('unknown', 'dash')).toBe('dash')
+    expect(strongerDelivery('dash', 'progressive')).toBe('progressive')
   })
 })
 

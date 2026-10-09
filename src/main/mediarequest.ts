@@ -167,6 +167,15 @@ export type MediaKind = 'playlist' | 'segment' | 'file'
 export const PLAYLIST_URL = /\.(m3u8|mpd)(\?|$)|\/manifest(\/|\?|$)/i
 const PLAYLIST_MIME = /^application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)/i
 
+/**
+ * A DASH manifest, by its name or its type: what a test files as `dash`,
+ * which the cast path cannot send (see `StreamDelivery`). A `/manifest` path
+ * says neither way and is not counted as one.
+ */
+export function isDashManifest(url: string, mime = ''): boolean {
+  return /dash\+xml/i.test(mime) || /\.mpd(\?|$)/i.test(url)
+}
+
 export function mediaKind(
   url: string,
   resourceType: string,

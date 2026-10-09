@@ -45,11 +45,11 @@
  */
 
 import type { Provider, StreamDelivery } from '@shared/types'
-import { wholeFileDelivery } from '@shared/castability'
+import { piecesDelivery, wholeFileDelivery } from '@shared/castability'
 import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
-import { isMediaRequest, isMediaResponse, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
+import { isDashManifest, isMediaRequest, isMediaResponse, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import { capture, PEEK_LIMIT_BYTES, type Candidate } from './cast'
 import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Rendition } from '@shared/streamquality'
@@ -553,7 +553,12 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   const streamProven = async (playingAtMs: number | null): Promise<{ at: number; delivery: StreamDelivery } | null> => {
     const named = requests.filter((request) => isMediaRequest(request.url))
     const firstSegment = named.find((request) => !WHOLE_FILE_URL.test(request.url) && !PLAYLIST_URL.test(request.url))
-    if (firstSegment) return { at: firstSegment.atMs, delivery: 'segmented' }
+    if (firstSegment) {
+      // A piece is HLS's or DASH's by the playlist it came from; see `piecesDelivery`.
+      const dash = named.some((request) => isDashManifest(request.url))
+      const hls = named.some((request) => PLAYLIST_URL.test(request.url) && !isDashManifest(request.url))
+      return { at: firstSegment.atMs, delivery: piecesDelivery({ hls, dash }) }
+    }
     if (playingAtMs !== null) return { at: playingAtMs, delivery: 'unknown' }
     const playlist = await confirmPlaylists(named, peeked, bodies)
     if (playlist !== null) return { at: playlist.atMs, delivery: 'segmented' }
