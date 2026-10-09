@@ -241,6 +241,49 @@ public class CastProxyServerTest {
         assertNull(uncaught.get());
     }
 
+    /**
+     * A segment disguised as a picture (2Embed's, measured 2026-09-30): the
+     * prefix used to reach the receiver with `image/png` for a type. Stripped
+     * now, as the desktop's proxy and the downloads strip it.
+     */
+    @Test
+    public void aSegmentDisguisedAsAPictureIsServedAsTheTransportStreamBehindIt() throws Exception {
+        int port = startServing(Collections.singletonMap("s0", upstream.disguised(188 * 40)));
+
+        Reply reply = get(port, "/s0");
+
+        assertEquals(200, reply.status);
+        assertEquals("video/mp2t", reply.headers.get("content-type"));
+        assertEquals(String.valueOf(188 * 40), reply.headers.get("content-length"));
+        assertEquals(188 * 40, reply.body.length);
+        for (int i = 0; i < 40; i++) assertEquals(0x47, reply.body[i * 188]);
+        assertNull(uncaught.get());
+    }
+
+    @Test
+    public void aDisguiseIsFoundBehindAPictureSignatureOnly() {
+        byte[] ts = new byte[188 * 4];
+        for (int i = 0; i < 4; i++) ts[i * 188] = 0x47;
+
+        byte[] png = withPrefix(new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, ts);
+        byte[] jpeg = withPrefix(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xe0, 0, 16}, ts);
+        // A fragmented-MP4 box: whatever 0x47s it happens to hold, not a picture.
+        byte[] box = withPrefix(new byte[] {0, 0, 0, 24, 0x73, 0x74, 0x79, 0x70}, ts);
+
+        assertEquals(8, CastProxyServer.disguisedStreamOffset(png, png.length));
+        assertEquals(6, CastProxyServer.disguisedStreamOffset(jpeg, jpeg.length));
+        assertEquals(0, CastProxyServer.disguisedStreamOffset(ts, ts.length));
+        assertEquals(0, CastProxyServer.disguisedStreamOffset(box, box.length));
+        assertEquals(0, CastProxyServer.disguisedStreamOffset(new byte[2], 2));
+    }
+
+    private static byte[] withPrefix(byte[] prefix, byte[] rest) {
+        byte[] out = new byte[prefix.length + rest.length];
+        System.arraycopy(prefix, 0, out, 0, prefix.length);
+        System.arraycopy(rest, 0, out, prefix.length, rest.length);
+        return out;
+    }
+
     private int startServing(Map<String, String> targets) throws IOException {
         int port = proxy.start(InetAddress.getLoopbackAddress());
         proxy.load(new HashMap<>(), new HashMap<>(targets), new HashMap<>());
@@ -318,6 +361,11 @@ public class CastProxyServerTest {
             return "http://127.0.0.1:" + server.getLocalPort() + "/bytes/" + size;
         }
 
+        /** A transport stream of `size` bytes behind a PNG signature, with its length: a disguised segment. */
+        String disguised(int size) {
+            return "http://127.0.0.1:" + server.getLocalPort() + "/disguised/" + size;
+        }
+
         /** A URL this server refuses with `status`, as a source refuses a request without its headers. */
         String refusing(int status) {
             return "http://127.0.0.1:" + server.getLocalPort() + "/status/" + status;
@@ -348,6 +396,17 @@ public class CastProxyServerTest {
                 String path = head.toString().split(" ")[1];
                 int size = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
                 OutputStream out = open.getOutputStream();
+                if (path.startsWith("/disguised/")) {
+                    byte[] png = {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13};
+                    out.write(("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: " + (png.length + size)
+                        + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
+                    out.write(png);
+                    byte[] ts = new byte[size];
+                    for (int i = 0; i < size; i += 188) ts[i] = 0x47;
+                    out.write(ts);
+                    out.flush();
+                    return;
+                }
                 if (path.startsWith("/status/")) {
                     out.write(("HTTP/1.1 " + size + " Refused\r\nContent-Length: 7\r\nConnection: close\r\n\r\nrefused")
                         .getBytes(StandardCharsets.ISO_8859_1));

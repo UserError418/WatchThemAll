@@ -13,9 +13,13 @@ import { beforeEach, expect, it, vi } from 'vitest'
 const MASTER = 'https://cdn.example/master.m3u8'
 const VARIANT = 'https://cdn.example/720/index.m3u8'
 
+/** A media playlist as long as an episode: shorter, it would be passed over as an advert (`castroot.ts`). */
+const episode = (segments = 450, extra = ''): string =>
+  `#EXTM3U\n#EXT-X-TARGETDURATION:6\n${extra}${Array.from({ length: segments }, (_, i) => `#EXTINF:6.0,\nseg${i}.ts`).join('\n')}\n#EXT-X-ENDLIST\n`
+
 const bodies: Record<string, string> = {
-  [MASTER]: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=1280x720\n720/index.m3u8\n',
-  [VARIANT]: '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nseg0.ts\n#EXT-X-ENDLIST\n',
+  [MASTER]: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=1280x720,CODECS="avc1.640028,mp4a.40.2"\n720/index.m3u8\n',
+  [VARIANT]: episode(),
 }
 
 const fetched: string[] = []
@@ -149,8 +153,7 @@ it('reports nothing to file for a download, which is not a source', async () => 
 
 it('tells a stream by its first 16 KB, and reads a playlist the peek cut short again, whole', async () => {
   const short = bodies[VARIANT]!
-  const segments = Array.from({ length: 3000 }, (_, i) => `#EXTINF:6.0,\nseg${i}.ts`).join('\n')
-  bodies[VARIANT] = `#EXTM3U\n#EXT-X-TARGETDURATION:6\n${segments}\n#EXT-X-ENDLIST\n`
+  bodies[VARIANT] = episode(3000)
   try {
     const result = await createCastBridge().beam({ title: 'Film', subtitle: '', providerName: 'A', startSeconds: 0 })
 
@@ -165,4 +168,39 @@ it('tells a stream by its first 16 KB, and reads a playlist the peek cut short a
   } finally {
     bodies[VARIANT] = short
   }
+})
+
+it('files the television that answered and what it was handed, read beside the load', async () => {
+  native.loadMedia.mockResolvedValueOnce({ answer: 'refused', served: 3, upstreamFailures: 0, model: 'Chromecast' } as never)
+
+  const result = await createCastBridge().beam(film)
+
+  expect(result.learned).toMatchObject({
+    outcome: 'refused',
+    receiver: 'Chromecast',
+    // The first segment could not be read here, so the master's word stands.
+    signature: { video: { codec: 'h264', profile: 'high', width: 1280, height: 720 }, audio: ['aac'] },
+  })
+})
+
+it('tells the receiver when the segments are fragmented MP4', async () => {
+  const plain = bodies[VARIANT]!
+  bodies[VARIANT] = episode(450, '#EXT-X-MAP:URI="init.mp4"\n')
+  try {
+    await createCastBridge().beam(film)
+    expect(native.loadMedia.mock.calls.at(-1)).toEqual([expect.objectContaining({ fmp4: true })])
+  } finally {
+    bodies[VARIANT] = plain
+  }
+  await createCastBridge().beam(film)
+  expect(native.loadMedia.mock.calls.at(-1)).toEqual([expect.objectContaining({ fmp4: false })])
+})
+
+it("passes over an advert's playlist and says what the source served instead", async () => {
+  native.candidates.mockResolvedValueOnce({ candidates: [{ url: 'https://cdn.example/ad.m3u8', headers: {}, atMs: 3 }] })
+  bodies['https://cdn.example/ad.m3u8'] = episode(5)
+
+  const result = await createCastBridge().beam({ ...film, runtimeMinutes: 45 })
+
+  expect(result).toEqual({ ok: false, error: 'VidFlix serves a 1 min video here where the title runs 45 min, not the title. Try another source.' })
 })

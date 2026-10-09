@@ -17,6 +17,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.android.gms.cast.CastDevice;
 import com.google.android.gms.cast.CastMediaControlIntent;
 import com.google.android.gms.cast.CastStatusCodes;
+import com.google.android.gms.cast.HlsSegmentFormat;
+import com.google.android.gms.cast.HlsVideoSegmentFormat;
 import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaLoadRequestData;
 import com.google.android.gms.cast.MediaMetadata;
@@ -329,9 +331,19 @@ public class CastPlugin extends Plugin {
         }
     }
 
-    /** `fetchText`'s request, on `fetchPool`. A `PluginCall` may be resolved from any thread. */
+    /**
+     * `fetchText`'s request, on `fetchPool`. A `PluginCall` may be resolved from any thread.
+     *
+     * Besides the body: `totalBytes`, the whole body's size where the server
+     * said (`Content-Range`'s total, or a 200's `Content-Length`), which the
+     * cast's choice of stream holds a whole file to (`castroot.ts`); and
+     * `elapsedMs`, the time to the last byte read, measured here before the
+     * body is encoded and crosses the bridge, which the cast check divides by
+     * a segment's length (`castcheck.ts`).
+     */
     private static void fetchTextNow(PluginCall call, String url, JSObject headers, int limit, boolean binary) {
         HttpURLConnection connection = null;
+        long startedAt = android.os.SystemClock.elapsedRealtime();
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();
             connection.setConnectTimeout(15_000);
@@ -348,17 +360,30 @@ public class CastPlugin extends Plugin {
             int status = connection.getResponseCode();
             InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
             String body = binary ? readBase64(stream, limit) : readText(stream, limit);
+            long elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAt;
 
             JSObject result = new JSObject();
             result.put("status", status);
             result.put("contentType", connection.getContentType() != null ? connection.getContentType() : "");
             result.put("body", body);
+            result.put("elapsedMs", elapsedMs);
+            long total = totalBytes(status, connection.getHeaderField("Content-Range"), connection.getContentLengthLong());
+            if (total >= 0) result.put("totalBytes", total);
             call.resolve(result);
         } catch (Exception error) {
             call.reject("fetch failed: " + error.getMessage());
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    /** A body's whole size: `Content-Range`'s total, else a 200's length; -1 when the server did not say. */
+    static long totalBytes(int status, String contentRange, long contentLength) {
+        if (contentRange != null) {
+            java.util.regex.Matcher total = java.util.regex.Pattern.compile("/(\\d+)\\s*$").matcher(contentRange);
+            if (total.find()) return Long.parseLong(total.group(1));
+        }
+        return status == 200 ? contentLength : -1;
     }
 
     /**
@@ -673,6 +698,7 @@ public class CastPlugin extends Plugin {
         String contentType = call.getString("contentType", "application/x-mpegurl");
         double startSeconds = call.getDouble("startSeconds", 0.0);
         int answerWindowMs = call.getInt("answerWindowMs", DEFAULT_ANSWER_WINDOW_MS);
+        boolean fmp4 = call.getBoolean("fmp4", false);
 
         getActivity().runOnUiThread(() -> {
             CastSession session = currentSession();
@@ -690,11 +716,17 @@ public class CastPlugin extends Plugin {
             metadata.putString(MediaMetadata.KEY_TITLE, title);
             metadata.putString(MediaMetadata.KEY_SUBTITLE, subtitle);
 
-            MediaInfo info = new MediaInfo.Builder(contentUrl)
+            MediaInfo.Builder media = new MediaInfo.Builder(contentUrl)
                 .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
                 .setContentType(contentType)
-                .setMetadata(metadata)
-                .build();
+                .setMetadata(metadata);
+            // HLS of fragmented-MP4 segments: the receiver's MPL otherwise takes
+            // every segment for MPEG-TS. `CastMedia.fmp4` in castsender.ts.
+            if (fmp4) {
+                media.setHlsSegmentFormat(HlsSegmentFormat.FMP4);
+                media.setHlsVideoSegmentFormat(HlsVideoSegmentFormat.FMP4);
+            }
+            MediaInfo info = media.build();
 
             PendingResult<RemoteMediaClient.MediaChannelResult> loading = client.load(
                 new MediaLoadRequestData.Builder()
@@ -822,6 +854,12 @@ public class CastPlugin extends Plugin {
             result.put("answer", answer);
             result.put("served", PROXY.servedCount());
             result.put("upstreamFailures", PROXY.upstreamFailureCount());
+            // Which kind of television answered: its answer is filed under its
+            // model (`castResults`), so a refusal applies to that model alone.
+            CastSession session = currentSession();
+            CastDevice device = session != null ? session.getCastDevice() : null;
+            String model = device != null ? device.getModelName() : null;
+            if (model != null && !model.isEmpty()) result.put("model", model);
             call.resolve(result);
         }
 

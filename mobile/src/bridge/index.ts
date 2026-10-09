@@ -126,7 +126,7 @@ import {
   ResumeSeek,
   WrittenPositions,
 } from '@main/resume'
-import { capture, createCastBridge, type Candidate } from './cast'
+import { capture, createCastBridge, type Candidate, type NowPlaying } from './cast'
 import { createSegmentStore, type SaveNames, type SegmentStore, type WindowWhere } from '@main/segmentstore'
 import { phoneCacheFiles } from './segmentfiles'
 import { createPhoneDownloads, downloadedProvider, readDownloadPlaylist } from './downloads'
@@ -1157,7 +1157,7 @@ export async function createBridge(): Promise<WtaApi> {
    * television from the last saved position would rewind them by however long
    * they have been watching.
    */
-  const nowPlaying = (): { title: string; subtitle: string; providerName: string; startSeconds: number } | null => {
+  const nowPlaying = (): NowPlaying | null => {
     if (!currentPlayerState || !session) return null
     const episode =
       currentPlayerState.season !== null && currentPlayerState.episode !== null
@@ -1168,6 +1168,8 @@ export async function createBridge(): Promise<WtaApi> {
       subtitle: [episode, currentPlayerState.providerName ?? ''].filter(Boolean).join(' · '),
       providerName: currentPlayerState.providerName ?? 'This source',
       startSeconds: progress?.reading?.seconds ?? 0,
+      // The stream chosen must run about as long as the title (`castroot.ts`).
+      runtimeMinutes: session.req.runtimeMinutes ?? null,
     }
   }
 

@@ -93,6 +93,13 @@ public final class CastProxyServer {
     private static final int BUFFERABLE_BYTES = 24 * 1024 * 1024;
 
     /**
+     * How much of a whole segment is read before answering, to see whether it
+     * is a transport stream disguised as an image (`disguisedStreamOffset`):
+     * the search window, plus three packets to confirm the last place in it.
+     */
+    private static final int DISGUISE_PEEK_BYTES = 4096 + 3 * 188;
+
+    /**
      * Request headers that must never be replayed upstream.
      *
      * `Range` is the one that matters. It was captured from whatever byte the
@@ -470,6 +477,25 @@ public final class CastProxyServer {
             }
 
             /*
+             * A segment disguised as a picture: a PNG's opening in front of the
+             * transport stream, which the source's own player skips and a
+             * receiver's does not. Read its opening, skip to where the stream
+             * starts, and call it what it is. Only for a whole answer (a 200 to
+             * no range): a range counts its bytes from the disguise. The rule is
+             * `disguisedStreamOffset` in castproxy.ts, the desktop's.
+             */
+            if (body != null && status == 200 && range == null) {
+                byte[] head = readUpTo(body, DISGUISE_PEEK_BYTES);
+                int offset = disguisedStreamOffset(head, head.length);
+                if (offset > 0) {
+                    contentType = "video/mp2t";
+                    if (length >= 0) length -= offset;
+                }
+                body = new java.io.SequenceInputStream(
+                    new java.io.ByteArrayInputStream(head, offset, head.length - offset), body);
+            }
+
+            /*
              * Give the receiver a length even when the provider does not.
              *
              * A chunked upstream leaves getContentLengthLong() at -1, and the
@@ -506,6 +532,37 @@ public final class CastProxyServer {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    /** Up to `count` bytes from the start of a body; fewer only when it ends first. */
+    private static byte[] readUpTo(InputStream body, int count) throws IOException {
+        byte[] head = new byte[count];
+        int filled = 0;
+        while (filled < count) {
+            int read = body.read(head, filled, count - filled);
+            if (read == -1) break;
+            filled += read;
+        }
+        return filled == count ? head : java.util.Arrays.copyOf(head, filled);
+    }
+
+    /**
+     * Where a transport stream starts behind an image disguise, or 0 when there
+     * is none: behind a PNG or JPEG signature only, the first of three sync
+     * bytes 188 apart within the first 4 KB. The same rule as the desktop's
+     * `disguisedStreamOffset` (castproxy.ts) and the downloads'
+     * `transportStreamOffset`, so one segment is read alike everywhere.
+     */
+    static int disguisedStreamOffset(byte[] head, int length) {
+        if (length < 4) return 0;
+        boolean png = (head[0] & 0xff) == 0x89 && head[1] == 0x50 && head[2] == 0x4e && head[3] == 0x47;
+        boolean jpeg = (head[0] & 0xff) == 0xff && (head[1] & 0xff) == 0xd8 && (head[2] & 0xff) == 0xff;
+        if (!png && !jpeg) return 0;
+        int limit = Math.min(length - 377, 4096);
+        for (int i = 1; i < limit; i++) {
+            if (head[i] == 0x47 && head[i + 188] == 0x47 && head[i + 376] == 0x47) return i;
+        }
+        return 0;
     }
 
     /** What `readAtMost` read, and whether that was the whole body. */
