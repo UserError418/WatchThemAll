@@ -34,6 +34,14 @@
 import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle, isPlaylist, isWholeVideoFile } from '@main/hlsrewrite'
+import {
+  blockedCastMessage,
+  CAST_ANSWER_WINDOW_MS,
+  castOutcomeOf,
+  type CastLearned,
+  type ProxyCounts,
+  type ReceiverAnswer,
+} from '@shared/castanswer'
 import { isCastableFileType } from '@shared/castability'
 import { downloadCastBundle } from '@shared/downloads/castbundle'
 import { unguessableId } from '@main/hlsrewrite'
@@ -74,13 +82,20 @@ interface CastNative {
   devices(): Promise<{ devices: CastDevice[] }>
   connect(options: { deviceId: string }): Promise<void>
   disconnect(): Promise<void>
+  /**
+   * Hand the receiver a stream and follow it for its answer, for up to
+   * `answerWindowMs` (`LoadAnswer` in `CastPlugin.java`, the rule of
+   * `shared/castanswer.ts`), with what the proxy saw meanwhile. Rejects when
+   * the load never reached the receiver.
+   */
   loadMedia(options: {
     url: string
     title: string
     subtitle: string
     contentType: string
     startSeconds: number
-  }): Promise<void>
+    answerWindowMs: number
+  }): Promise<LoadAnswer>
   control(options: { action: string; seconds?: number }): Promise<void>
   /**
    * The receiver's volume and mute.
@@ -97,6 +112,11 @@ interface CastNative {
     event: 'castSession',
     cb: (payload: { state: string; deviceName: string; error?: number }) => void,
   ): Promise<{ remove(): void }>
+}
+
+/** What `loadMedia` found out: the receiver's answer, and what the proxy saw while it had the stream. */
+interface LoadAnswer extends ProxyCounts {
+  answer: ReceiverAnswer
 }
 
 const Cast = registerPlugin<CastNative>('Cast')
@@ -304,19 +324,22 @@ async function identifyStream(
 }
 
 /**
- * What a beam did, and how the stream it found arrived.
+ * What a beam did, and what the television said.
  *
- * Unlike the desktop's, this carries no verdict from the television: the
- * native `loadMedia` resolves once the request is sent and never waits for
- * the receiver's answer, so a refusal is not visible here. `delivery` is —
- * it comes from fetching what the player really fetched.
+ * Since 2.0.18 the native `loadMedia` follows the receiver for its answer, as
+ * the desktop does, so this carries the same: `learned` once the receiver has
+ * played or refused the stream, and nothing to file otherwise. Until then it
+ * resolved as soon as the request was sent and every beam was filed by the
+ * delivery it had seen, played or not.
  */
 export interface PhoneBeamResult {
   ok: boolean
   error?: string
   providerName?: string
-  /** Absent when no stream was identified. */
-  delivery?: 'progressive' | 'segmented'
+  /** A stream was identified and the attempt failed past that point: asking again would only repeat it. */
+  final?: boolean
+  /** What the television said, with how the stream arrived; absent unless it answered. See `castOutcomeOf`. */
+  learned?: CastLearned
 }
 
 /** What the cast needs to know about what is on screen. */
@@ -386,13 +409,19 @@ async function beamDownload(now: NowPlaying, download: { id: string; playlist: s
       files: Object.fromEntries(Object.entries(bundle.files).map(([id, name]) => [id, `${download.id}/${name}`])),
     })
     proxyLoaded = true
-    await Cast.loadMedia({
+    const loaded = await Cast.loadMedia({
       url: `${base}${bundle.rootId}.m3u8`,
       title: now.title,
       subtitle: now.subtitle,
       contentType: 'application/x-mpegurl',
       startSeconds: now.startSeconds,
+      answerWindowMs: CAST_ANSWER_WINDOW_MS,
     })
+    if (loaded.answer === 'refused') {
+      // Said, and nothing more: a download is no source to file anything against.
+      await stopProxyQuietly()
+      return { ok: false, error: refusalMessage(loaded, 'The TV will not play this download.'), final: true }
+    }
     return { ok: true, providerName: now.providerName }
   } catch (error) {
     if (proxyLoaded) await Cast.stopProxy().catch(() => {})
@@ -435,7 +464,7 @@ export function createCastBridge(): CastBridge {
     async beam(now: NowPlaying): Promise<PhoneBeamResult> {
       if (now.download) return beamDownload(now, now.download)
       /** How the identified stream arrived, once there is one. */
-      let delivery: PhoneBeamResult['delivery']
+      let delivery: CastLearned['delivery'] | undefined
       /** This attempt has replaced what the proxy serves; see the catch. */
       let proxyLoaded = false
       try {
@@ -473,7 +502,7 @@ export function createCastBridge(): CastBridge {
         })
         proxyLoaded = true
 
-        await Cast.loadMedia({
+        const loaded = await Cast.loadMedia({
           // The `.m3u8` suffix is for the receiver's benefit: it sniffs the
           // extension before it looks at the content type.
           url: stream.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
@@ -481,9 +510,22 @@ export function createCastBridge(): CastBridge {
           subtitle: now.subtitle,
           contentType: stream.kind === 'hls' ? 'application/x-mpegurl' : 'video/mp4',
           startSeconds: now.startSeconds,
+          answerWindowMs: CAST_ANSWER_WINDOW_MS,
         })
 
-        return { ok: true, providerName: now.providerName, delivery }
+        // Still loading at the end of the window: it goes ahead, as it always
+        // did, and nothing is filed.
+        if (loaded.answer === 'unsettled') return { ok: true, providerName: now.providerName }
+        if (loaded.answer === 'played') return { ok: true, providerName: now.providerName, learned: { delivery, outcome: 'played' } }
+
+        // Refused. What the proxy saw says whose doing it was.
+        await stopProxyQuietly()
+        const outcome = castOutcomeOf('refused', loaded)
+        const error =
+          outcome === 'blocked'
+            ? blockedCastMessage(now.providerName)
+            : refusalMessage(loaded, 'The TV will not play this stream. Try another source.')
+        return { ok: false, error, final: true, ...(outcome === null ? {} : { learned: { delivery, outcome } }) }
       } catch (error) {
         // The proxy must not outlive an attempt that failed after loading it:
         // it would sit on the network serving a stream nothing is watching.
@@ -491,14 +533,8 @@ export function createCastBridge(): CastBridge {
         // touched it, and the proxy may still be serving the film the
         // television is playing from an earlier beam: "Change source" to a
         // source that would not give up its stream stopped the working one.
-        if (proxyLoaded) {
-          try {
-            await Cast.stopProxy()
-          } catch {
-            // Already down, which is the state we wanted.
-          }
-        }
-        return { ok: false, error: messageOf(error), delivery }
+        if (proxyLoaded) await stopProxyQuietly()
+        return { ok: false, error: messageOf(error), final: delivery !== undefined }
       }
     },
 
@@ -566,4 +602,25 @@ export function createCastBridge(): CastBridge {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Stop serving after a failed attempt; a proxy already down is the state wanted. */
+async function stopProxyQuietly(): Promise<void> {
+  try {
+    await Cast.stopProxy()
+  } catch {
+    // Already down.
+  }
+}
+
+/**
+ * The sentence for a refused load, by whether the receiver ever reached the
+ * phone. One that never fetched anything could not get to it, which is the
+ * network's doing (client isolation, another network), not the stream's.
+ */
+function refusalMessage(seen: ProxyCounts, refused: string): string {
+  if (seen.served === 0) {
+    return 'The TV never fetched the stream from this phone. Check that both are on the same Wi-Fi and that client isolation is off.'
+  }
+  return refused
 }

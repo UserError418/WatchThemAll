@@ -27,7 +27,7 @@
 
 import type { Session } from 'electron'
 import type { CastDevice, CastStatus } from '@shared/ipc'
-import type { CastOutcome } from '@shared/types'
+import { blockedCastMessage, castOutcomeOf, type CastLearned } from '@shared/castanswer'
 import { isCastableFileType } from '@shared/castability'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -52,6 +52,10 @@ const SNIFF_LIMIT_BYTES = 2 * 1024 * 1024
 
 const FETCH_TIMEOUT_MS = 15_000
 
+/** For a receiver that refused a stream it never fetched: see `castOutcomeOf`. */
+const UNREACHED_MESSAGE =
+  'The TV never fetched the stream from this computer. Check that both are on the same Wi-Fi and that client isolation is off.'
+
 /** What the receiver should be told it is playing. */
 export interface NowPlaying {
   title: string
@@ -70,19 +74,6 @@ export interface NowPlaying {
   downloadDir?: string | null
 }
 
-/**
- * What a beam found out about the source, whether or not it succeeded.
- *
- * A cast is a better measurement than a test: it identified the stream by
- * fetching what the provider's player really fetched, and a television then
- * answered for it. `outcome` is set only where the answer is unambiguous —
- * see `beam`.
- */
-export interface CastLearned {
-  delivery: 'progressive' | 'segmented'
-  outcome: CastOutcome | null
-}
-
 export interface BeamResult {
   ok: boolean
   error?: string
@@ -92,7 +83,16 @@ export interface BeamResult {
    * waiting for its own play button.
    */
   waiting?: boolean
-  /** Absent when no stream was identified: then there is nothing to learn. */
+  /**
+   * A stream was identified and the attempt failed past that point, so
+   * asking again would only repeat it (`final` in the IPC contract).
+   */
+  final?: boolean
+  /**
+   * What the television said, with how the stream arrived: filed against the
+   * source (`castResults`). Absent unless the receiver played or refused the
+   * stream — see `castOutcomeOf`.
+   */
   learned?: CastLearned
 }
 
@@ -327,7 +327,7 @@ export function createCastService(): CastService {
           headers: stream.headers,
         })
 
-        const settled = await session.load({
+        const answer = await session.load({
           // The `.m3u8` suffix is for the receiver, which sniffs the extension
           // before it reads the content type.
           url: stream.kind === 'hls' ? `${base}${bundle.rootId}.m3u8` : `${base}${bundle.rootId}`,
@@ -337,24 +337,36 @@ export function createCastService(): CastService {
           startSeconds: now.startSeconds,
         })
 
-        // Only a load the receiver actually started counts as a cast that
-        // played; one still loading when the wait ran out proves nothing.
-        return { ok: true, learned: { delivery, outcome: settled === 'started' ? 'played' : null } }
+        // A load still loading or buffering when the wait ran out goes ahead,
+        // as it always has, and proves nothing either way: nothing is filed.
+        if (answer === 'unsettled') return { ok: true }
+        return { ok: true, learned: { delivery, outcome: 'played' } }
       } catch (error) {
-        /*
-         * A refusal counts against the source only if the television had
-         * already fetched from us. The receiver answers LOAD_FAILED the same
-         * way when it cannot reach this computer at all, and filing a Wi-Fi
-         * problem as "this source cannot cast" would hide a source that can.
-         * Read before `stop`, which resets the count.
-         */
-        const refused = error instanceof ReceiverRefusedError && proxy.served() > 0
+        // Only a refusal is an answer; anything else failed before there was
+        // one. Read before `stop`: what the proxy saw decides what it says.
+        const counts = { served: proxy.served(), upstreamFailures: proxy.upstreamFailures() }
+        const refused = error instanceof ReceiverRefusedError
+        const outcome = refused ? castOutcomeOf('refused', counts) : null
         // The proxy must not outlive a failed attempt: it would sit on the
         // network serving a stream nothing is watching.
         proxy.stop()
-        const message = error instanceof Error ? error.message : String(error)
+        // A receiver that refused without fetching anything never got here:
+        // say that, rather than blame a stream it never saw.
+        const message =
+          refused && counts.served === 0
+            ? UNREACHED_MESSAGE
+            : error instanceof Error
+              ? error.message
+              : String(error)
         if (delivery === null) return { ok: false, error: message }
-        return { ok: false, error: message, learned: { delivery, outcome: refused ? 'refused' : null } }
+        if (outcome === null) return { ok: false, error: message, final: true }
+        return {
+          ok: false,
+          // The receiver's own sentence blames the stream; a block is the source's doing.
+          error: outcome === 'blocked' ? blockedCastMessage(now.providerName) : message,
+          final: true,
+          learned: { delivery, outcome },
+        }
       }
     },
 

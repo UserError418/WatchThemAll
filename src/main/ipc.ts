@@ -42,7 +42,7 @@ import type { PlayCandidate } from './providers'
 import type { PlayerBounds } from './playerview'
 import { outcomesForTitle, titleKey } from './outcomes'
 import {
-  castResult,
+  castResults,
   everyRow,
   previewResult,
   scanEpisode,
@@ -491,13 +491,13 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
     // Only on success. A failed beam leaves the user watching here, and taking
     // the sound away from that would turn one disappointment into two.
     if (result.ok) deps.setOnTv(true)
-    // Succeeded or not, a beam that identified a stream measured the source:
-    // filed, so the cast list knows it next time. See `recordCast`.
-    if (result.learned && now.titleKey && now.providerId) {
+    // What the television said, filed so the cast list knows it next time.
+    // Only an answer is filed, and never for a download: see `castResults`.
+    if (now.titleKey && now.providerId) {
       const where = { device: deps.results.device(), titleKey: now.titleKey, episode: now.episode, providerId: now.providerId }
-      deps.results.record([castResult(where, result.learned, Date.now())])
+      deps.results.record(castResults(where, result.learned, Date.now()))
     }
-    return { ok: result.ok, error: result.error, final: !result.ok && result.learned !== undefined }
+    return { ok: result.ok, error: result.error, final: result.final === true }
   }
   ipcMain.handle(CH.castBeam, beam)
 

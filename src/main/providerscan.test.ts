@@ -13,7 +13,7 @@ import type { ProviderScan } from '@shared/ipc'
 import {
   RESULT_TTL_MS,
   RETEST_AFTER_MS,
-  castResult,
+  castResults,
   isRetestDue,
   kindTested,
   lastPlayedHere,
@@ -455,28 +455,37 @@ describe('ownRows', () => {
   })
 })
 
-describe('castResult', () => {
+describe('castResults', () => {
   const now = 1_800_000_000_000
   const where = { device: { deviceId: 'pc-1', deviceKind: 'desktop' as const }, titleKey: 'tv:tt1', episode: { season: 2, episode: 5 }, providerId: 'a' }
 
-  it('files a cast as a success seen while playing, with how the video came and what the TV said', () => {
-    expect(castResult(where, { delivery: 'progressive', outcome: 'played' }, now)).toEqual({
-      titleKey: 'tv:tt1',
-      season: 2,
-      episode: 5,
-      providerId: 'a',
-      deviceId: 'pc-1',
-      deviceKind: 'desktop',
-      at: now,
-      origin: 'play',
-      verdict: 'stream',
-      delivery: 'progressive',
-      cast: 'played',
-    })
+  it('files a cast the television answered, with how the video came and what the TV said', () => {
+    expect(castResults(where, { delivery: 'progressive', outcome: 'played' }, now)).toEqual([
+      {
+        titleKey: 'tv:tt1',
+        season: 2,
+        episode: 5,
+        providerId: 'a',
+        deviceId: 'pc-1',
+        deviceKind: 'desktop',
+        at: now,
+        origin: 'play',
+        verdict: 'stream',
+        delivery: 'progressive',
+        cast: 'played',
+      },
+    ])
+    expect(castResults(where, { delivery: 'segmented', outcome: 'blocked' }, now)[0]).toMatchObject({ cast: 'blocked' })
   })
 
-  it('records no answer where the television did not give a clear one', () => {
-    expect(castResult(where, { delivery: 'segmented', outcome: null }, now)).not.toHaveProperty('cast')
+  it('files nothing for a beam that failed or never settled: it learned nothing', () => {
+    // Until 2.0.18 such a beam filed its delivery as a success: "casts to this TV", and a green.
+    expect(castResults(where, undefined, now)).toEqual([])
+  })
+
+  it('files nothing for a cast of a download, which is not a source', () => {
+    const download = { ...where, providerId: 'downloaded' }
+    expect(castResults(download, { delivery: 'segmented', outcome: 'played' }, now)).toEqual([])
   })
 })
 

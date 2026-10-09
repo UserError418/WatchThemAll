@@ -16,6 +16,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.android.gms.cast.CastDevice;
 import com.google.android.gms.cast.CastMediaControlIntent;
+import com.google.android.gms.cast.CastStatusCodes;
 import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaLoadRequestData;
 import com.google.android.gms.cast.MediaMetadata;
@@ -25,6 +26,7 @@ import com.google.android.gms.cast.framework.CastContext;
 import com.google.android.gms.cast.framework.CastSession;
 import com.google.android.gms.cast.framework.SessionManagerListener;
 import com.google.android.gms.cast.framework.media.RemoteMediaClient;
+import com.google.android.gms.common.api.PendingResult;
 
 import org.json.JSONObject;
 
@@ -117,6 +119,9 @@ public class CastPlugin extends Plugin {
      */
     private PluginCall pendingConnect;
 
+    /** The load still waiting for the receiver's answer, if any; see `LoadAnswer`. */
+    private LoadAnswer pendingAnswer;
+
     private CastContext castContext;
     private MediaRouter mediaRouter;
     private MediaRouteSelector selector;
@@ -166,6 +171,7 @@ public class CastPlugin extends Plugin {
             pendingConnect.reject("the app was closed");
             pendingConnect = null;
         }
+        if (pendingAnswer != null) pendingAnswer.abandon("the app was closed");
         fetchPool.shutdown();
     }
 
@@ -635,10 +641,19 @@ public class CastPlugin extends Plugin {
     /* ── Playback ───────────────────────────────────────────────────────── */
 
     /**
-     * Put a stream on the connected receiver.
+     * Put a stream on the connected receiver, and resolve with its answer.
      *
      * `contentUrl` is a proxy URL, never a provider URL: see `CastProxyServer`
      * for why handing over the original would fail on most of the catalogue.
+     *
+     * Until 2.0.18 this resolved the moment the request was sent, and the
+     * result of `load` was thrown away, so the phone never learned whether a
+     * television played anything: every cast it filed was filed as one that
+     * casts, refused or not. Now it follows the receiver for up to
+     * `answerWindowMs` (`LoadAnswer`) and resolves with `answer` (`played`,
+     * `refused` or `unsettled`) and the proxy's counts. It rejects when no
+     * answer can come: the load never reached the receiver, it was replaced
+     * by another, or the session ended first.
      */
     @PluginMethod
     public void loadMedia(PluginCall call) {
@@ -651,6 +666,7 @@ public class CastPlugin extends Plugin {
         String subtitle = call.getString("subtitle", "");
         String contentType = call.getString("contentType", "application/x-mpegurl");
         double startSeconds = call.getDouble("startSeconds", 0.0);
+        int answerWindowMs = call.getInt("answerWindowMs", DEFAULT_ANSWER_WINDOW_MS);
 
         getActivity().runOnUiThread(() -> {
             CastSession session = currentSession();
@@ -674,15 +690,149 @@ public class CastPlugin extends Plugin {
                 .setMetadata(metadata)
                 .build();
 
-            client.load(
+            PendingResult<RemoteMediaClient.MediaChannelResult> loading = client.load(
                 new MediaLoadRequestData.Builder()
                     .setMediaInfo(info)
                     .setAutoplay(true)
                     .setCurrentTime((long) (startSeconds * 1000))
                     .build()
             );
-            call.resolve();
+            // A newer load replaces the one still waiting: its answer is now unknowable.
+            if (pendingAnswer != null) pendingAnswer.abandon("replaced by another cast");
+            pendingAnswer = new LoadAnswer(call, client, contentUrl);
+            pendingAnswer.follow(loading, answerWindowMs);
         });
+    }
+
+    /** `CAST_ANSWER_WINDOW_MS` in `src/shared/castanswer.ts`, which the caller passes; this is only the fallback. */
+    private static final int DEFAULT_ANSWER_WINDOW_MS = 20_000;
+
+    /** `CAST_STATUS_POLL_MS`: how often the receiver is asked, since only an answer to that carries its position. */
+    private static final long ANSWER_POLL_MS = 2_000L;
+
+    /** `POSITION_MOVED_S`, in milliseconds: how far the position must move to count as playing. */
+    private static final long POSITION_MOVED_MS = 1_000L;
+
+    /**
+     * One load, followed until the receiver answers for it.
+     *
+     * The rule is `ReceiverWatch` in `src/shared/castanswer.ts`, the
+     * desktop's, kept the same here by hand because this is the one place the
+     * phone can see the receiver:
+     *
+     *  - **played**: PLAYING, or the position moved `POSITION_MOVED_MS` from
+     *    the first one seen while BUFFERING or PAUSED. BUFFERING alone is not
+     *    playing.
+     *  - **refused**: the load's own result failed with FAILED or
+     *    MEDIA_ERROR, or the receiver went IDLE with reason ERROR.
+     *  - **unsettled**: neither by the end of the window.
+     *
+     * Statuses are read only once the receiver has acknowledged this load,
+     * and only for this load's content id: before that, the status is the
+     * previous media's, and a previous refusal would read as this one's.
+     * Any other failure of the load (the session gone, the request replaced)
+     * is no answer, and rejects the call.
+     *
+     * Everything here runs on the main thread: the Cast SDK's callbacks and
+     * the handler both deliver there, so no state is shared across threads.
+     */
+    private final class LoadAnswer extends RemoteMediaClient.Callback {
+        private final PluginCall call;
+        private final RemoteMediaClient client;
+        private final String contentUrl;
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private boolean acknowledged = false;
+        private long firstPositionMs = -1;
+        private boolean done = false;
+
+        LoadAnswer(PluginCall call, RemoteMediaClient client, String contentUrl) {
+            this.call = call;
+            this.client = client;
+            this.contentUrl = contentUrl;
+        }
+
+        void follow(PendingResult<RemoteMediaClient.MediaChannelResult> loading, int windowMs) {
+            client.registerCallback(this);
+            loading.setResultCallback(result -> {
+                if (done) return;
+                int code = result.getStatus().getStatusCode();
+                if (result.getStatus().isSuccess()) {
+                    acknowledged = true;
+                    check();
+                } else if (code == CastStatusCodes.FAILED || code == CastStatusCodes.MEDIA_ERROR) {
+                    finish("refused");
+                } else {
+                    abandon("the TV did not take the stream (" + CastStatusCodes.getStatusCodeString(code) + ")");
+                }
+            });
+            handler.postDelayed(this::poll, ANSWER_POLL_MS);
+            handler.postDelayed(() -> finish("unsettled"), windowMs);
+        }
+
+        @Override
+        public void onStatusUpdated() {
+            check();
+        }
+
+        /** Ask for a status: a position arrives only in an answer to one. */
+        private void poll() {
+            if (done) return;
+            try {
+                if (acknowledged) client.requestStatus();
+            } catch (RuntimeException error) {
+                // A client whose session is going. Never past here: an
+                // exception on the main thread takes the app down.
+                Log.w(TAG, "status request failed: " + error);
+            }
+            handler.postDelayed(this::poll, ANSWER_POLL_MS);
+        }
+
+        private void check() {
+            if (done || !acknowledged) return;
+            MediaStatus status = client.getMediaStatus();
+            if (status == null) return;
+            MediaInfo media = status.getMediaInfo();
+            if (media != null && !contentUrl.equals(media.getContentId())) return;
+
+            int state = status.getPlayerState();
+            if (state == MediaStatus.PLAYER_STATE_PLAYING) {
+                finish("played");
+            } else if (state == MediaStatus.PLAYER_STATE_IDLE && status.getIdleReason() == MediaStatus.IDLE_REASON_ERROR) {
+                finish("refused");
+            } else if (state == MediaStatus.PLAYER_STATE_BUFFERING || state == MediaStatus.PLAYER_STATE_PAUSED) {
+                long position = status.getStreamPosition();
+                if (firstPositionMs < 0) {
+                    firstPositionMs = position;
+                } else if (position - firstPositionMs >= POSITION_MOVED_MS) {
+                    finish("played");
+                }
+            }
+        }
+
+        /** Resolve with the answer and what the proxy saw meanwhile. */
+        private void finish(String answer) {
+            if (!stop()) return;
+            JSObject result = new JSObject();
+            result.put("answer", answer);
+            result.put("served", PROXY.servedCount());
+            result.put("upstreamFailures", PROXY.upstreamFailureCount());
+            call.resolve(result);
+        }
+
+        /** No answer will come: reject, and let go of the receiver. */
+        void abandon(String reason) {
+            if (stop()) call.reject(reason);
+        }
+
+        /** Stop following; false if it already had. */
+        private boolean stop() {
+            if (done) return false;
+            done = true;
+            handler.removeCallbacksAndMessages(null);
+            client.unregisterCallback(this);
+            if (pendingAnswer == this) pendingAnswer = null;
+            return true;
+        }
     }
 
     @PluginMethod
@@ -887,6 +1037,9 @@ public class CastPlugin extends Plugin {
 
         @Override
         public void onSessionEnded(CastSession session, int error) {
+            // A load still waiting would otherwise resolve as a cast that went
+            // ahead, after the renderer had already taken the picture back.
+            if (pendingAnswer != null) pendingAnswer.abandon("the TV disconnected");
             PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
@@ -896,6 +1049,7 @@ public class CastPlugin extends Plugin {
         @Override
         public void onSessionStartFailed(CastSession session, int error) {
             settleConnect(false, "the TV refused the connection (code " + error + ")");
+            if (pendingAnswer != null) pendingAnswer.abandon("the TV disconnected");
             PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();
@@ -915,6 +1069,7 @@ public class CastPlugin extends Plugin {
             // reached when the system tries on its own behalf. Treated exactly
             // like a failed start: tear the proxy down rather than leave a
             // server running for a session that does not exist.
+            if (pendingAnswer != null) pendingAnswer.abandon("the TV disconnected");
             PROXY.stop();
             CastKeepAliveService.stop(getContext());
             stopProgress();

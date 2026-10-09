@@ -56,6 +56,7 @@
  * (`legacyResults`). Nothing is migrated or deleted: they age out.
  */
 
+import { isDownloadedSource } from './downloads/types'
 import { RESULT_TTL_MS, testedAtOf } from './scanrow'
 import type { TitleResults } from './scanshare'
 import type {
@@ -152,7 +153,7 @@ const VERDICTS: readonly unknown[] = ['stream', 'unsure', 'dead'] satisfies Prob
 const ORIGINS: readonly unknown[] = ['test', 'play', 'preview'] satisfies ResultOrigin[]
 const KINDS: readonly unknown[] = ['desktop', 'phone'] satisfies DeviceKind[]
 const DELIVERIES: readonly unknown[] = ['progressive', 'segmented', 'other', 'unknown'] satisfies StreamDelivery[]
-const CASTS: readonly unknown[] = ['played', 'refused'] satisfies CastOutcome[]
+const CASTS: readonly unknown[] = ['played', 'refused', 'blocked'] satisfies CastOutcome[]
 
 /**
  * Whether a record is one this app could have written.
@@ -160,6 +161,15 @@ const CASTS: readonly unknown[] = ['played', 'refused'] satisfies CastOutcome[]
  * The synced file is in the user's own Drive, where anything can be edited,
  * and a malformed record taken in would be stored and pushed back out from
  * here; so anything else is dropped rather than merged.
+ *
+ * A result for a download is one this app must never write. The phone filed
+ * one until 2.0.18 (a cast of a download); turning it away here drops it on
+ * the next load and the next sync, on every device.
+ *
+ * A build that does not know a value (`blocked`, `dash`, from 2.0.18) drops
+ * the whole record, and the next sync from a build that does puts it back.
+ * A new optional field is kept by every build, which is the cheaper way to
+ * add something.
  */
 export function isSourceResult(value: unknown): value is SourceResult {
   if (typeof value !== 'object' || value === null) return false
@@ -172,6 +182,7 @@ export function isSourceResult(value: unknown): value is SourceResult {
     episodeNumber(r.season) &&
     episodeNumber(r.episode) &&
     typeof r.providerId === 'string' &&
+    !isDownloadedSource(r.providerId) &&
     count(r.at) &&
     typeof r.deviceId === 'string' &&
     KINDS.includes(r.deviceKind) &&

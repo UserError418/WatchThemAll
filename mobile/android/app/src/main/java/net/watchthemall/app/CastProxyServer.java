@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Serves a provider's stream to a Chromecast on the local network.
@@ -143,6 +144,23 @@ public final class CastProxyServer {
     private final Map<String, java.io.File> files = new ConcurrentHashMap<>();
 
     /**
+     * What the receiver asked for since `load`, and how much of it the
+     * source's servers refused or never answered. The same two counts as the
+     * desktop's `castproxy.ts`, for the same rule (`castOutcomeOf` in
+     * `shared/castanswer.ts`): a refusal counts against a source only if the
+     * receiver reached this phone, and is the source's block, not the
+     * television's, when the source refused the proxy.
+     */
+    private final AtomicInteger served = new AtomicInteger();
+    private final AtomicInteger upstreamFailures = new AtomicInteger();
+    /**
+     * Which `load` the counts belong to: a fetch for the previous stream can
+     * still be in flight when the next one is loaded, and its failure must
+     * not make the new stream look blocked.
+     */
+    private final AtomicInteger generation = new AtomicInteger();
+
+    /**
      * Start listening on `address`, returning the bound port. Idempotent for
      * the same address; a new one means the phone changed networks, where the
      * old address reaches nobody, so the server moves to it.
@@ -203,8 +221,21 @@ public final class CastProxyServer {
         files.putAll(newFiles);
     }
 
+    /** Requests the receiver made for anything registered, since `load`. */
+    public int servedCount() {
+        return served.get();
+    }
+
+    /** Of those, the ones the source answered with an error status, or not at all. */
+    public int upstreamFailureCount() {
+        return upstreamFailures.get();
+    }
+
     /** Replace everything this server is willing to serve. */
     public void load(Map<String, String> newPlaylists, Map<String, String> newTargets, Map<String, String> headers) {
+        generation.incrementAndGet();
+        served.set(0);
+        upstreamFailures.set(0);
         files.clear();
         playlists.clear();
         playlists.putAll(newPlaylists);
@@ -336,6 +367,7 @@ public final class CastProxyServer {
             Map<String, String> requestHeaders = request.headers;
             String method = request.method;
             String id = idFromPath(request.path);
+            if (playlists.containsKey(id) || targets.containsKey(id) || files.containsKey(id)) served.incrementAndGet();
 
             String playlist = playlists.get(id);
             if (playlist != null) {
@@ -386,6 +418,11 @@ public final class CastProxyServer {
     }
 
     private void proxy(String upstream, String range, String method, OutputStream out) throws IOException {
+        int askedFor = generation.get();
+        // Once the receiver is being answered, a failure may be its own: it
+        // closes connections when it seeks or stops. Only one before that is
+        // the source's for certain.
+        boolean answering = false;
         HttpURLConnection connection = null;
         try {
             URLConnection opened = new URL(upstream).openConnection();
@@ -422,6 +459,7 @@ public final class CastProxyServer {
             connection.setRequestProperty("Accept-Encoding", "identity");
 
             int status = connection.getResponseCode();
+            if ((status < 200 || status >= 300) && askedFor == generation.get()) upstreamFailures.incrementAndGet();
             long length = connection.getContentLengthLong();
             String contentRange = connection.getHeaderField("Content-Range");
             String contentType = mediaContentType(connection.getContentType(), upstream);
@@ -451,6 +489,7 @@ public final class CastProxyServer {
                 if (buffered.complete) length = buffered.bytes.size();
             }
 
+            answering = true;
             writeHead(out, status, status == 206 ? "Partial Content" : "OK", contentType, length, contentRange);
 
             if (buffered != null) buffered.bytes.writeTo(out);
@@ -462,6 +501,7 @@ public final class CastProxyServer {
             out.flush();
         } catch (IOException | RuntimeException error) {
             Log.w(TAG, "upstream failed: " + error);
+            if (!answering && askedFor == generation.get()) upstreamFailures.incrementAndGet();
             writeStatus(out, 502, "upstream failed");
         } finally {
             if (connection != null) connection.disconnect();

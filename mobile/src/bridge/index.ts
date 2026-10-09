@@ -84,7 +84,7 @@ import {
 import type { Outcome } from '@main/outcomes'
 import { progressIsAbout } from '@shared/scanprogress'
 import {
-  castResult,
+  castResults,
   everyRow,
   PLAY_MIN_FILM_SECONDS,
   PLAY_TIMING_MAX_MS,
@@ -1028,19 +1028,18 @@ export async function createBridge(): Promise<WtaApi> {
       phoneFullscreen.setActive(false)
       standUpright()
     }
-    // A beam that identified a stream measured the source, succeeded or not —
-    // filed like the desktop's. No verdict from the TV: see `PhoneBeamResult`.
+    // What the television said, filed like the desktop's. Only an answer is
+    // filed, and never for a download: see `castResults`.
     const providerId = currentPlayerState?.providerId
-    if (result.delivery && session && providerId) {
-      const learned = { delivery: result.delivery, outcome: null }
+    if (session && providerId) {
       const where = { device: testResults.device(), titleKey: titleKey(session.req), episode: episodeOf(session.req), providerId }
-      testResults.record([castResult(where, learned, Date.now())])
+      testResults.record(castResults(where, result.learned, Date.now()))
     }
     return {
       ok: result.ok,
       error: result.error,
       providerName: result.providerName,
-      final: !result.ok && result.delivery !== undefined,
+      final: result.final === true,
     }
   }
 

@@ -753,10 +753,31 @@ export type StreamDelivery =
  * What happened when a provider's stream was put on a television.
  *
  * Stronger evidence than `StreamDelivery`, which predicts; this is the
- * receiver's own answer. `refused` covers the case the prediction cannot see,
- * such as a whole MP4 whose codec the receiver does not decode.
+ * receiver's own answer. Filed only once that answer is known
+ * (`shared/castanswer.ts`): a beam that failed before the television said
+ * anything, or was still loading when the wait ran out, files nothing.
+ *
+ * Keyed by source and title for now. A later receiver profile (which model
+ * of television answered) would be one more optional field on the result
+ * that carries it, which builds that do not know it keep and pass on.
  */
-export type CastOutcome = 'played' | 'refused'
+export type CastOutcome =
+  /** The receiver reached PLAYING, or its position moved: the stream plays on this television. */
+  | 'played'
+  /**
+   * The receiver failed the load, having fetched from the proxy, while the
+   * source answered every request: the stream itself is the problem, such
+   * as a whole MP4 whose codec it does not decode, or a picture wider than
+   * it can show (Videasy's 2160x1080, measured 2026-09-26).
+   */
+  | 'refused'
+  /**
+   * The receiver failed the load while the source's own servers refused, or
+   * failed, a request the proxy made for it: a segment, a key or a file. That
+   * is the source blocking the cast, not the television refusing a format,
+   * and it changes from day to day, so it is never read as a refusal.
+   */
+  | 'blocked'
 
 /**
  * Which kind of device measured something.

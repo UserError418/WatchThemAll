@@ -110,6 +110,11 @@ describe('isSourceResult', () => {
     expect(isSourceResult({ ...good, reason: 'slow' })).toBe(false)
     expect(isSourceResult(null)).toBe(false)
   })
+
+  it('turns away a result for a download, which is not a source', () => {
+    // The phone filed one until 2.0.18, casting a download.
+    expect(isSourceResult(result({ providerId: 'downloaded', origin: 'play', delivery: 'segmented' }))).toBe(false)
+  })
 })
 
 describe('mergeResults', () => {

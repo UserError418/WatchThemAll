@@ -201,6 +201,18 @@ export interface CastProxy {
    * source. See `beam` in `castservice.ts`.
    */
   served(): number
+  /**
+   * Of those, how many the source's servers answered with an error status,
+   * or did not answer: a segment, a key or a file the receiver asked for and
+   * this machine could not get. What tells a source blocking the cast from a
+   * television refusing the format (`castOutcomeOf`). Since `start`.
+   */
+  upstreamFailures(): number
+}
+
+/** Whether an upstream answer is one the receiver can use: a 2xx, ranges included. */
+export function isUpstreamSuccess(status: number): boolean {
+  return status >= 200 && status < 300
 }
 
 export function createCastProxy(): CastProxy {
@@ -210,6 +222,13 @@ export function createCastProxy(): CastProxy {
   let files = new Map<string, string>()
   let headers: Record<string, string> = {}
   let servedCount = 0
+  let failedUpstream = 0
+  /**
+   * Which `start` the counts belong to. A fetch for the previous bundle can
+   * still be in flight when the next beam starts, and its failure must not
+   * make the new stream look blocked.
+   */
+  let generation = 0
 
   const handle = (request: IncomingMessage, response: ServerResponse): void => {
     const id = idFromPath(request.url ?? '/')
@@ -250,8 +269,13 @@ export function createCastProxy(): CastProxy {
     // Refuse compression so the length we report is the length we send.
     forward['Accept-Encoding'] = 'identity'
 
+    const askedFor = generation
+    const failed = (): void => {
+      if (askedFor === generation) failedUpstream += 1
+    }
     void fetch(upstream, { headers: forward, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) })
       .then(async (upstreamResponse) => {
+        if (!isUpstreamSuccess(upstreamResponse.status)) failed()
         const body = Buffer.from(await upstreamResponse.arrayBuffer())
         const contentRange = upstreamResponse.headers.get('content-range')
 
@@ -273,6 +297,8 @@ export function createCastProxy(): CastProxy {
           response.destroy()
           return
         }
+        // Unreachable, timed out, or cut off: the source did not serve it.
+        failed()
         response.writeHead(502, { 'Access-Control-Allow-Origin': '*' })
         response.end(error instanceof Error ? error.message : String(error))
       })
@@ -285,6 +311,8 @@ export function createCastProxy(): CastProxy {
       files = new Map(Object.entries(bundle.files ?? {}))
       headers = bundle.headers
       servedCount = 0
+      failedUpstream = 0
+      generation += 1
 
       const address = lanAddress()
       if (address === null) {
@@ -322,6 +350,10 @@ export function createCastProxy(): CastProxy {
 
     served(): number {
       return servedCount
+    },
+
+    upstreamFailures(): number {
+      return failedUpstream
     },
   }
 }

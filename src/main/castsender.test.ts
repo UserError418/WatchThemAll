@@ -49,8 +49,13 @@ class FakeReceiver {
   /**
    * Set to answer a LOAD as a real receiver does: LOADING at once, and the
    * verdict a moment later — `'fail'` for a LOAD_FAILED, `'play'` for PLAYING.
+   * `'buffer'` goes to BUFFERING and stays there; `'buffer-then-error'` goes
+   * on to IDLE with reason ERROR; `'creep'` stays BUFFERING while the
+   * position its status answers report moves on.
    */
-  loadThen: 'fail' | 'play' | null = null
+  loadThen: 'fail' | 'play' | 'buffer' | 'buffer-then-error' | 'creep' | null = null
+  /** The position a `'creep'` receiver reports next. */
+  private creptTo = 1200
   /** Set to never answer LAUNCH, to exercise the timeout path. */
   ignoreLaunch = false
   /** Media commands dropped for lacking a requestId, as a real receiver drops them. */
@@ -152,15 +157,14 @@ class FakeReceiver {
           type: 'MEDIA_STATUS',
           status: [{ mediaSessionId: 7, playerState: 'LOADING', currentTime: 0 }],
         })
+        const broadcast = (entry: Record<string, unknown>): void =>
+          this.reply(socket, NS_MEDIA, { requestId: 0, type: 'MEDIA_STATUS', status: [{ mediaSessionId: 7, ...entry }] })
         setTimeout(() => {
-          this.reply(
-            socket,
-            NS_MEDIA,
-            then === 'fail'
-              ? { requestId, type: 'LOAD_FAILED' }
-              : { requestId: 0, type: 'MEDIA_STATUS', status: [{ mediaSessionId: 7, playerState: 'PLAYING', currentTime: 0.4, media: { duration: 3563.7 } }] },
-          )
+          if (then === 'fail') this.reply(socket, NS_MEDIA, { requestId, type: 'LOAD_FAILED' })
+          else if (then === 'play') broadcast({ playerState: 'PLAYING', currentTime: 0.4, media: { duration: 3563.7 } })
+          else broadcast({ playerState: 'BUFFERING', currentTime: 1200 })
         }, 50)
+        if (then === 'buffer-then-error') setTimeout(() => broadcast({ playerState: 'IDLE', idleReason: 'ERROR' }), 100)
         return
       }
       this.reply(socket, NS_MEDIA, {
@@ -174,6 +178,16 @@ class FakeReceiver {
             media: { duration: 8348.5 },
           },
         ],
+      })
+      return
+    }
+
+    if (message.namespace === NS_MEDIA && payload.type === 'GET_STATUS' && this.loadThen === 'creep') {
+      this.creptTo += 0.8
+      this.reply(socket, NS_MEDIA, {
+        requestId,
+        type: 'MEDIA_STATUS',
+        status: [{ mediaSessionId: 7, playerState: 'BUFFERING', currentTime: this.creptTo }],
       })
       return
     }
@@ -478,14 +492,51 @@ describe('CastSession', () => {
     await expect(session.load(MEDIA)).rejects.toThrow(/will not play this stream/i)
   })
 
-  it('reports a load that got past LOADING as started', async () => {
+  it('reports a load that reached PLAYING as played', async () => {
     receiver = new FakeReceiver()
     receiver.loadThen = 'play'
     const port = await receiver.listen()
     session = new CastSession('127.0.0.1', port, 'Wohnzimmer')
     await session.connect()
 
-    await expect(session.load(MEDIA)).resolves.toBe('started')
+    await expect(session.load(MEDIA)).resolves.toBe('played')
+  })
+
+  /*
+   * BUFFERING comes before the first frame. Until 2.0.18 it ended the wait as
+   * "started", and a stream that failed a moment later was filed as one that
+   * casts.
+   */
+  it('does not take BUFFERING as played: a load that never gets further is unsettled', async () => {
+    receiver = new FakeReceiver()
+    receiver.loadThen = 'buffer'
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer', undefined, 400)
+    await session.connect()
+
+    await expect(session.load(MEDIA)).resolves.toBe('unsettled')
+  })
+
+  it('reports a refusal that comes after BUFFERING', async () => {
+    receiver = new FakeReceiver()
+    receiver.loadThen = 'buffer-then-error'
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer', undefined, 2_000)
+    await session.connect()
+
+    await expect(session.load(MEDIA)).rejects.toThrow(/will not play this stream/i)
+  })
+
+  it('takes a position that moves as played, asking for it while it waits', async () => {
+    receiver = new FakeReceiver()
+    receiver.loadThen = 'creep'
+    const port = await receiver.listen()
+    session = new CastSession('127.0.0.1', port, 'Wohnzimmer', undefined, 2_000)
+    await session.connect()
+
+    await expect(session.load(MEDIA)).resolves.toBe('played')
+    // Moved by asking: a receiver reports its position only when asked.
+    expect(receiver.received.filter((m) => m.payload.type === 'GET_STATUS').length).toBeGreaterThanOrEqual(2)
   })
 
   it('reports an unreachable television rather than hanging', async () => {

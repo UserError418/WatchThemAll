@@ -37,6 +37,7 @@
  */
 
 import { connect as tlsConnect, type TLSSocket } from 'node:tls'
+import { CAST_ANSWER_WINDOW_MS, CAST_STATUS_POLL_MS, ReceiverWatch } from '@shared/castanswer'
 import {
   DEFAULT_MEDIA_RECEIVER,
   NS_CONNECTION,
@@ -115,27 +116,15 @@ interface MediaStatusEntry {
 }
 
 /**
- * How long a LOAD may stay LOADING before the cast stops waiting for a verdict.
- *
- * Long enough for a playlist, its first segments and a decoder to start over a
- * home network; measured starts on the dongle were 1–4 s. What happens after
- * it is not a refusal — nothing is recorded against the source.
+ * What one media-channel message says about a load, read by the rule in
+ * `shared/castanswer.ts`: LOAD_FAILED and LOAD_CANCELLED refuse it outright,
+ * and a MEDIA_STATUS is one more reading for `watch`.
  */
-const SETTLE_TIMEOUT_MS = 15_000
-
-/** A receiver's answer that means the LOAD failed. */
-function isRefusal(payload: ReceiverPayload): boolean {
-  if (payload.type === 'LOAD_FAILED' || payload.type === 'LOAD_CANCELLED') return true
-  if (payload.type !== 'MEDIA_STATUS') return false
-  const entry = (payload.status as Array<{ playerState?: string; idleReason?: string }> | undefined)?.[0]
-  return entry?.playerState === 'IDLE' && entry.idleReason === 'ERROR'
-}
-
-/** A MEDIA_STATUS saying the receiver is past loading: it has the stream. */
-function startedState(payload: ReceiverPayload): boolean {
-  if (payload.type !== 'MEDIA_STATUS') return false
-  const state = (payload.status as Array<{ playerState?: string }> | undefined)?.[0]?.playerState
-  return state === 'BUFFERING' || state === 'PLAYING' || state === 'PAUSED'
+function answerIn(payload: ReceiverPayload, watch: ReceiverWatch): 'played' | 'refused' | null {
+  if (payload.type === 'LOAD_FAILED' || payload.type === 'LOAD_CANCELLED') return 'refused'
+  if (payload.type !== 'MEDIA_STATUS') return null
+  const entry = (payload.status as MediaStatusEntry[] | undefined)?.[0]
+  return entry ? watch.read(entry) : null
 }
 
 /**
@@ -183,6 +172,8 @@ export class CastSession {
     readonly deviceName: string,
     /** Overridable so a test can wait out three heartbeats in milliseconds, not fifteen seconds. */
     private readonly heartbeatMs = HEARTBEAT_MS,
+    /** Likewise for the wait on a load's answer (`CAST_ANSWER_WINDOW_MS`). */
+    private readonly answerWindowMs = CAST_ANSWER_WINDOW_MS,
   ) {}
 
   /** Called when the receiver goes away for any reason. */
@@ -274,7 +265,12 @@ export class CastSession {
 
   /* ── Playback ─────────────────────────────────────────────────────────── */
 
-  async load(media: CastMedia): Promise<'started' | 'unsettled'> {
+  /**
+   * Hand the receiver a stream, and wait for its answer: `played`, or
+   * `unsettled` when it was still loading or buffering at the end of the
+   * window. A refusal throws `ReceiverRefusedError`.
+   */
+  async load(media: CastMedia): Promise<'played' | 'unsettled'> {
     if (!this.socket) throw new Error('not connected to a TV')
 
     /*
@@ -316,7 +312,9 @@ export class CastSession {
       'the TV did not accept the stream',
     )
 
-    if (isRefusal(answer)) {
+    const watch = new ReceiverWatch()
+    const first = answerIn(answer, watch)
+    if (first === 'refused') {
       /*
        * Two causes, and the wrong guess sends the user to the router for an
        * hour.
@@ -346,11 +344,15 @@ export class CastSession {
      * LOAD_FAILED a second later, when the dongle found it could not decode
      * it. Taken as success, that put the remote's "playing" over an idle
      * television and filed the source as one that casts. So wait for the
-     * receiver to settle one way or the other.
+     * receiver to settle one way or the other — and not at BUFFERING, which
+     * comes before the first frame and was counted as "played" here until
+     * 2.0.18: a stream that went IDLE with an error after it was filed as one
+     * that casts.
      */
-    if (startedState(answer)) return 'started'
-    const settled = await this.settle(SETTLE_TIMEOUT_MS)
+    if (first === 'played') return 'played'
+    const settled = await this.settle(watch, this.answerWindowMs)
     if (settled === 'refused') throw this.refusal(media)
+    if (settled === 'gone') throw new Error(`${this.deviceName} disconnected`)
     return settled
   }
 
@@ -365,24 +367,38 @@ export class CastSession {
   }
 
   /**
-   * Wait for the media channel to say whether the load started.
+   * Wait for the media channel to say whether the load played.
    *
-   * Listens to every media message rather than asking: the receiver
-   * broadcasts its state changes, and a LOAD_FAILED arrives unsolicited once
-   * the LOAD's own answer has been used up.
+   * Listens to every media message: the receiver broadcasts its state
+   * changes, and a LOAD_FAILED arrives unsolicited once the LOAD's own answer
+   * has been used up. It also asks for the status every
+   * `CAST_STATUS_POLL_MS`, because a position is reported only when asked,
+   * and its answer comes through the same listener. A connection that drops
+   * meanwhile ends the wait at once (`gone`) rather than at the deadline.
    */
-  private settle(timeoutMs: number): Promise<'started' | 'refused' | 'unsettled'> {
+  private settle(watch: ReceiverWatch, timeoutMs: number): Promise<'played' | 'refused' | 'unsettled' | 'gone'> {
     return new Promise((resolve) => {
-      const done = (outcome: 'started' | 'refused' | 'unsettled'): void => {
+      const done = (outcome: 'played' | 'refused' | 'unsettled' | 'gone'): void => {
         clearTimeout(timer)
+        clearInterval(poll)
         this.mediaListeners.delete(listen)
         resolve(outcome)
       }
       const listen = (payload: ReceiverPayload): void => {
-        if (isRefusal(payload)) done('refused')
-        else if (startedState(payload)) done('started')
+        const answer = answerIn(payload, watch)
+        if (answer !== null) done(answer)
       }
       const timer = setTimeout(() => done('unsettled'), timeoutMs)
+      // A window shorter than a few polls (a test's) is still asked several times.
+      const every = Math.min(CAST_STATUS_POLL_MS, timeoutMs / 4)
+      const poll = setInterval(() => {
+        if (!this.socket || !this.transportId) return done('gone')
+        try {
+          this.send(NS_MEDIA, this.transportId, { type: 'GET_STATUS', requestId: this.requestId++ })
+        } catch {
+          done('gone')
+        }
+      }, every)
       this.mediaListeners.add(listen)
     })
   }

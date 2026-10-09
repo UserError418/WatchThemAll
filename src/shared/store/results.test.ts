@@ -49,6 +49,17 @@ describe('ResultStore', () => {
     expect(JSON.parse(file.text as string)).toEqual({ results: 1, items: [result(NOW - 1_000)] })
   })
 
+  it('never keeps a result for a download, whoever files it, and drops one already on file', async () => {
+    const download = result(NOW - 2_000, 'downloaded')
+    const file = memoryFile(JSON.stringify({ results: 1, items: [download, result(NOW - 3_000)] }))
+    const store = new ResultStore(file, () => NOW)
+    await store.load()
+    expect(store.all()).toEqual([result(NOW - 3_000)])
+
+    store.record([result(NOW - 1_000, 'downloaded'), result(NOW - 1_000)])
+    expect(store.all().map((r) => r.providerId)).toEqual(['a', 'a'])
+  })
+
   it('reads its file back, dropping anything malformed', async () => {
     const good = result(NOW - 1_000)
     const file = memoryFile(JSON.stringify({ results: 1, items: [good, { ...good, verdict: 'great' }] }))

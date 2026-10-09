@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest'
-import { byteRange, idFromPath, mediaContentType, pickLanAddress, replayableHeaders } from './castproxy'
+import { createServer, type Server } from 'node:http'
+import { describe, it, expect, afterEach } from 'vitest'
+import {
+  byteRange,
+  createCastProxy,
+  idFromPath,
+  isUpstreamSuccess,
+  lanAddress,
+  mediaContentType,
+  pickLanAddress,
+  replayableHeaders,
+  type CastProxy,
+} from './castproxy'
 
 describe('idFromPath', () => {
   it('strips the .m3u8 the receiver sniffs for', () => {
@@ -124,5 +135,66 @@ describe('byteRange', () => {
     expect(byteRange(undefined, 1000)).toBeNull()
     expect(byteRange('bytes=2000-', 1000)).toBeNull()
     expect(byteRange('items=0-1', 1000)).toBeNull()
+  })
+})
+
+describe('what the proxy saw', () => {
+  /** A source: `/ok` answers with a segment, `/refused` with 403, as a source without its headers does. */
+  let source: Server | null = null
+  let proxy: CastProxy | null = null
+
+  afterEach(() => {
+    proxy?.stop()
+    proxy = null
+    source?.close()
+    source = null
+  })
+
+  const startSource = (): Promise<string> =>
+    new Promise((resolve) => {
+      source = createServer((request, response) => {
+        response.writeHead(request.url === '/ok' ? 200 : 403, { 'Content-Type': 'video/mp2t' })
+        response.end('segment')
+      })
+      source.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(source!.address() as { port: number }).port}`))
+    })
+
+  it('takes a 2xx, ranges included, as the source serving', () => {
+    expect(isUpstreamSuccess(200)).toBe(true)
+    expect(isUpstreamSuccess(206)).toBe(true)
+    expect(isUpstreamSuccess(403)).toBe(false)
+    expect(isUpstreamSuccess(302)).toBe(false)
+  })
+
+  /*
+   * The two counts a cast's answer is filed by (`castOutcomeOf`). A segment
+   * the source refused is the source blocking the cast; without the count it
+   * was filed as the television refusing the format.
+   */
+  it.skipIf(lanAddress() === null)('counts what the receiver asked for, and what the source refused or never answered', async () => {
+    const origin = await startSource()
+    proxy = createCastProxy()
+    const base = await proxy.start({
+      playlists: { p0: '#EXTM3U\n' },
+      // Nothing listens on port 1: the source never answers at all.
+      targets: { s0: `${origin}/ok`, s1: `${origin}/refused`, s2: 'http://127.0.0.1:1/segment.ts' },
+      headers: {},
+    })
+    // The receiver's view of this machine is its LAN address; loopback reaches the same port.
+    const local = base.replace(/\/\/[^:/]+:/, '//127.0.0.1:')
+
+    expect((await fetch(`${local}p0.m3u8`)).status).toBe(200)
+    expect((await fetch(`${local}s0`)).status).toBe(200)
+    expect((await fetch(`${local}s1`)).status).toBe(403)
+    expect((await fetch(`${local}s2`)).status).toBe(502)
+    // Not registered: nothing the receiver was given, so not counted.
+    expect((await fetch(`${local}s9`)).status).toBe(404)
+
+    expect(proxy.served()).toBe(4)
+    expect(proxy.upstreamFailures()).toBe(2)
+
+    // The next stream starts counting from nothing.
+    await proxy.start({ playlists: {}, targets: {}, headers: {} })
+    expect(proxy.upstreamFailures()).toBe(0)
   })
 })

@@ -14,6 +14,7 @@
  * rule stays.
  */
 
+import { isDownloadedSource } from '../downloads/types'
 import {
   isSourceResult,
   mergeResults,
@@ -91,10 +92,17 @@ export class ResultStore {
     return this.items
   }
 
-  /** Keep new results measured here. */
+  /**
+   * Keep new results measured here.
+   *
+   * Never one for a download, whoever files it: the one place every writer
+   * on both platforms passes through, so a new writer cannot forget it the
+   * way the phone's cast did until 2.0.18 (see `isSourceResult`).
+   */
   record(results: readonly SourceResult[]): void {
-    if (results.length === 0) return
-    this.replace(mergeResults(this.items, results, this.now()), 'local')
+    const kept = results.filter((result) => !isDownloadedSource(result.providerId))
+    if (kept.length === 0) return
+    this.replace(mergeResults(this.items, kept, this.now()), 'local')
   }
 
   /** Take the history merged with another device's, as the sync worked it out. */

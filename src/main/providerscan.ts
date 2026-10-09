@@ -52,15 +52,9 @@
  * `mobile/src/boundary.test.ts` loads each of them with no `process`.
  */
 
-import type {
-  CastOutcome,
-  DeviceKind,
-  Provider,
-  ScanReason,
-  SourceSortKey,
-  StoreShape,
-  StreamDelivery,
-} from '@shared/types'
+import type { DeviceKind, Provider, ScanReason, SourceSortKey, StoreShape } from '@shared/types'
+import type { CastLearned } from '@shared/castanswer'
+import { isDownloadedSource } from '@shared/downloads/types'
 import { verdictForReason } from '@shared/scanreason'
 import type { ProbeVerdict, ProviderScan, ResumeSource, TitleOutcome } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
@@ -304,25 +298,33 @@ export function previewResult(where: MeasuredAt, streamedMs: number, at: number)
 }
 
 /**
- * What a real cast found out about one source: it streamed (the stream was
- * fetched and classified), how the video arrived, and where the television
- * answered unambiguously, what it said.
+ * What a beam files about its source, on either platform: one result when
+ * the television answered, and nothing otherwise.
  *
- * A play, not a test: it measured no start time and no quality, and the
- * speed and quality are taken from the results that did.
+ * `learned` exists only once the receiver has played or refused the stream
+ * (`shared/castanswer.ts`). A beam that failed before that, or was still
+ * loading when the wait ran out, passes none and files nothing: until 2.0.18
+ * it filed its delivery as a success, which read as "casts to this TV" and as
+ * a green for the source, and all 13 casts on the owner's record were that.
+ *
+ * Nothing for a download either, which is not a source; the phone filed one
+ * under `downloaded` until 2.0.18.
+ *
+ * A play, not a test: it measured no start time and no quality. Its verdict
+ * is `stream` whatever the television said, as casts were always filed; only
+ * one that played counts as the source streaming (`isPlaybackEvidence`).
  */
-export function castResult(
-  where: MeasuredAt,
-  learned: { delivery: StreamDelivery; outcome: CastOutcome | null },
-  at: number,
-): SourceResult {
-  return measurement(where, {
-    at,
-    origin: 'play',
-    verdict: 'stream',
-    delivery: learned.delivery,
-    ...(learned.outcome === null ? {} : { cast: learned.outcome }),
-  })
+export function castResults(where: MeasuredAt, learned: CastLearned | undefined, at: number): SourceResult[] {
+  if (learned === undefined || isDownloadedSource(where.providerId)) return []
+  return [
+    measurement(where, {
+      at,
+      origin: 'play',
+      verdict: 'stream',
+      delivery: learned.delivery,
+      cast: learned.outcome,
+    }),
+  ]
 }
 
 /**

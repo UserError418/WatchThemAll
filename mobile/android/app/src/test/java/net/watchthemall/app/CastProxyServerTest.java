@@ -210,6 +210,37 @@ public class CastProxyServerTest {
         assertNull(uncaught.get());
     }
 
+    /**
+     * The two counts a cast's answer is filed by (`castOutcomeOf`): what the
+     * receiver asked for, and what the source refused. A refused segment is
+     * the source blocking the cast; without the count it was filed as the
+     * television refusing the format.
+     */
+    @Test
+    public void whatTheSourceRefusesIsCountedApartFromWhatWasServed() throws Exception {
+        Map<String, String> targets = new HashMap<>();
+        targets.put("s0", upstream.chunked(1000));
+        targets.put("s1", upstream.refusing(403));
+        // Nothing listens on port 1: the source never answers at all.
+        targets.put("s2", "http://127.0.0.1:1/segment.ts");
+        int port = startServing(targets);
+
+        assertEquals(200, get(port, "/s0").status);
+        assertEquals(403, get(port, "/s1").status);
+        assertEquals(502, get(port, "/s2").status);
+        // Not registered: not something the receiver was given, so not counted.
+        assertEquals(404, get(port, "/s9").status);
+
+        assertEquals(3, proxy.servedCount());
+        assertEquals(2, proxy.upstreamFailureCount());
+
+        // The next stream starts counting from nothing.
+        proxy.load(new HashMap<>(), new HashMap<>(targets), new HashMap<>());
+        assertEquals(0, proxy.servedCount());
+        assertEquals(0, proxy.upstreamFailureCount());
+        assertNull(uncaught.get());
+    }
+
     private int startServing(Map<String, String> targets) throws IOException {
         int port = proxy.start(InetAddress.getLoopbackAddress());
         proxy.load(new HashMap<>(), new HashMap<>(targets), new HashMap<>());
@@ -266,7 +297,8 @@ public class CastProxyServerTest {
 
     /**
      * A provider's server: answers `/bytes/N` with N bytes of a known pattern,
-     * chunked, so the response carries no length, as some providers' do.
+     * chunked, so the response carries no length, as some providers' do; and
+     * `/status/N` with that error status.
      */
     static final class FakeUpstream implements AutoCloseable {
         private final ServerSocket server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
@@ -284,6 +316,11 @@ public class CastProxyServerTest {
 
         String chunked(int size) {
             return "http://127.0.0.1:" + server.getLocalPort() + "/bytes/" + size;
+        }
+
+        /** A URL this server refuses with `status`, as a source refuses a request without its headers. */
+        String refusing(int status) {
+            return "http://127.0.0.1:" + server.getLocalPort() + "/status/" + status;
         }
 
         private void acceptLoop() {
@@ -311,6 +348,12 @@ public class CastProxyServerTest {
                 String path = head.toString().split(" ")[1];
                 int size = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
                 OutputStream out = open.getOutputStream();
+                if (path.startsWith("/status/")) {
+                    out.write(("HTTP/1.1 " + size + " Refused\r\nContent-Length: 7\r\nConnection: close\r\n\r\nrefused")
+                        .getBytes(StandardCharsets.ISO_8859_1));
+                    out.flush();
+                    return;
+                }
                 out.write(("HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nTransfer-Encoding: chunked\r\n"
                     + "Connection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
                 byte[] chunk = new byte[64 * 1024];
