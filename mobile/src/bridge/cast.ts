@@ -381,7 +381,7 @@ function phoneCastPath(bundle: CastBundle, headers: Record<string, string>): Cas
  * The cast check of a source the phone's test saw stream (`castcheck.ts`),
  * on the requests the test captured, newest first.
  */
-export function checkCastOnPhone(requests: readonly Candidate[], runtimeMinutes: number | null): Promise<CastCheck> {
+export function checkCastOnPhone(requests: readonly Candidate[], runtimeMinutes: number | null): Promise<CastCheck | null> {
   return checkCast({
     candidates: requests.map((r) => ({ url: r.url, headers: replayable(r.headers) })),
     runtimeMinutes,

@@ -54,7 +54,7 @@ import { readTransportStreamCodecs } from '@shared/transportstream'
 import { streamSignature, type StreamSignature } from '@shared/streamsignature'
 import { isCastableFileType } from '@shared/castability'
 import { isMasterPlaylist, isPlaylist, isWholeVideoFile } from './hlsrewrite'
-import { MIN_WHOLE_FILE_BYTES } from './mediarequest'
+import { MEDIA_PATTERN, MIN_WHOLE_FILE_BYTES } from './mediarequest'
 
 /** A request the source's page made, with the headers to replay for it. */
 export interface RootCandidate {
@@ -139,7 +139,12 @@ export type CastRoot =
 
 /** Why a candidate was passed over: what the cast and the cast check say when nothing is left. */
 export type PassedOver =
-  | { why: 'status'; status: number }
+  /**
+   * A refusal. `media` says whether the refused request was known to be the
+   * stream's — named as media, or listed by a master the source served — as
+   * against an advert's or a tracker's, which says nothing about the source.
+   */
+  | { why: 'status'; status: number; media: boolean }
   | { why: 'length'; seconds: number }
   | { why: 'small'; bytes: number }
   | { why: 'rendition' }
@@ -148,6 +153,12 @@ export type PassedOver =
 export interface RootChoice {
   root: CastRoot | null
   passedOver: PassedOver[]
+  /**
+   * Whether every candidate was asked about before the deadline, and
+   * answered. When not, the stream may be among the rest, and nothing being
+   * chosen is no evidence that there was none.
+   */
+  complete: boolean
   /** Every playlist body read, by URL, for the bundle to reuse rather than fetch again. */
   bodies: Map<string, string>
 }
@@ -203,6 +214,7 @@ export async function chooseCastRoot(
     return { candidate, answer }
   })
 
+  const complete = sniffed.length === asked.length && sniffed.every((entry) => entry.answer !== null)
   const files: Sniffed[] = []
   const masters: Sniffed[] = []
   const media: Sniffed[] = []
@@ -210,7 +222,7 @@ export async function chooseCastRoot(
     const answer = entry.answer
     if (answer === null) continue
     if (!isOk(answer.status)) {
-      passedOver.push({ why: 'status', status: answer.status })
+      passedOver.push({ why: 'status', status: answer.status, media: MEDIA_PATTERN.test(entry.candidate.url) })
       continue
     }
     if (isPlaylist(answer.body)) {
@@ -225,13 +237,13 @@ export async function chooseCastRoot(
 
   for (const entry of files) {
     const root = await wholeFile(entry, io, runtimeMinutes, passedOver)
-    if (root) return { root, passedOver, bodies }
+    if (root) return { root, passedOver, bodies, complete }
   }
 
   const renditions = renditionUrls(masters)
   for (const entry of masters) {
     const root = await masterRoot(entry, io, runtimeMinutes, bodies, passedOver)
-    if (root) return { root, passedOver, bodies }
+    if (root) return { root, passedOver, bodies, complete }
   }
 
   for (const entry of media) {
@@ -250,9 +262,10 @@ export async function chooseCastRoot(
       root: { kind: 'hls', url, headers: entry.candidate.headers, variant: null, mediaUrl: url, media: playlist, seconds: playlist.seconds, length },
       passedOver,
       bodies,
+      complete,
     }
   }
-  return { root: null, passedOver, bodies }
+  return { root: null, passedOver, bodies, complete }
 }
 
 /** A whole file as the root, if it passes; see rule 1. */
@@ -298,7 +311,8 @@ async function masterRoot(
     const answer = known !== undefined ? { status: 200, body: known } : await io.text(variant.url, headers, PLAYLIST_BYTES).catch(() => null)
     if (answer === null) continue
     if (!isOk(answer.status)) {
-      passedOver.push({ why: 'status', status: answer.status })
+      // A variant the source's own master lists: its refusal is the stream's.
+      passedOver.push({ why: 'status', status: answer.status, media: true })
       continue
     }
     if (!isPlaylist(answer.body)) continue

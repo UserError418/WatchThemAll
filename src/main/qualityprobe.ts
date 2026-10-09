@@ -54,6 +54,7 @@ import type { WebContents, WebFrameMain } from 'electron'
 import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
 import { probeStream, streamReason, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
+import { CaptureBuffer, isWorthKeeping } from '@shared/capturebuffer'
 import { isFalseWholeFile, WHOLE_FILE_URL } from './mediarequest'
 import { lengthVerdict } from '@shared/runtimecheck'
 import {
@@ -204,11 +205,17 @@ export interface QualityProbeResult {
    */
   requests: CapturedRequest[]
   /**
-   * The whole-file media requests, with the page's headers: with `requests`,
-   * what the cast check chooses a stream from (`castcheck.ts`). Memory only,
-   * like `requests`.
+   * What a cast from this page would choose its stream from: the requests the
+   * player's cast capture keeps (`CaptureBuffer`), in its order, with the
+   * headers the page sent. The cast check (`castcheck.ts`) runs on these, so a
+   * test asks about exactly what a cast would. Memory only, like `requests`.
+   *
+   * Not the playlists above: those are what this probe recognised, and a
+   * source whose stream it did not (an extensionless master, a whole file it
+   * took for an advert) was then checked on whatever else was left — an ad
+   * server's refusal, filed as the source's.
    */
-  wholeFileRequests: CapturedRequest[]
+  castCandidates: CapturedRequest[]
   /** Whole-file media URLs the page fetched, truncated. */
   wholeFiles: string[]
   /** The `<video>` judged to be the title — the longest one with a picture. */
@@ -464,6 +471,7 @@ export async function probeQuality(
   },
 ): Promise<QualityProbeResult> {
   const candidates = new Map<string, { kind: Candidate; headers: Record<string, string> }>()
+  const castCapture = new CaptureBuffer<CapturedRequest>()
   const runtime = subject.runtimeMinutes ?? null
   let playlists: PlaylistReading[] | null = null
   let videos: VideoReading[] = []
@@ -476,6 +484,9 @@ export async function probeQuality(
     frameUrl: options.frameUrl,
     lingerMs: options.mode === 'measure' ? MEASURE_LINGER_MS : 0,
     onResponse: (response) => {
+      if (response.method === 'GET' && isWorthKeeping(response.url)) {
+        castCapture.add({ url: response.url, headers: response.headers })
+      }
       const kind = candidateOf(response)
       if (!kind || candidates.has(response.url)) return
       candidates.set(response.url, { kind, headers: replayableHeaders(response.headers) })
@@ -549,7 +560,7 @@ export async function probeQuality(
     mediaSamples: result.mediaSamples,
     playlists: read,
     requests: playlistRequests(candidates, read),
-    wholeFileRequests: [...candidates.entries()].filter(([, c]) => c.kind === 'whole-file').map(([url, c]) => ({ url, headers: c.headers })),
+    castCandidates: castCapture.candidates(),
     wholeFiles,
     video,
     sniffed,

@@ -98,7 +98,7 @@ describe('chooseCastRoot', () => {
     })
     const choice = await chooseCastRoot([at('subs/en.m3u8'), at('audio/en.m3u8'), at('720/index.m3u8'), at('master.m3u8')], io, null)
     expect(choice.root).toMatchObject({ kind: 'hls', url: CDN + '720/index.m3u8', variant: null })
-    expect(choice.passedOver).toEqual(expect.arrayContaining([{ why: 'status', status: 403 }, { why: 'rendition' }]))
+    expect(choice.passedOver).toEqual(expect.arrayContaining([{ why: 'status', status: 403, media: true }, { why: 'rendition' }]))
   })
 
   it("passes over an advert's playlist for the film's, though the advert's is newer", async () => {
@@ -209,9 +209,25 @@ describe('chooseCastRoot with a deadline', () => {
     const choice = await chooseCastRoot([...late, at('film.m3u8')], slow, null, { deadline: 1_000, now: () => clock })
     // The film's playlist was in the second batch, never asked about.
     expect(choice.root).toBeNull()
+    expect(choice.complete).toBe(false)
     expect(io.asked).toEqual(late.map((c) => c.url))
     // Without one, as for a cast, every candidate is asked about.
     expect((await chooseCastRoot([...late, at('film.m3u8')], io, null)).root).toMatchObject({ url: CDN + 'film.m3u8' })
+  })
+
+  it("tells a refusal of the stream's from an advert's: only one named as media counts", async () => {
+    // Measured 2026-10-09: MoviesAPI's page beside a tracker answering 400.
+    const io = network({
+      [CDN + 'cuid/']: { status: 400, body: '' },
+      [CDN + 'film.m3u8']: { status: 403, body: 'forbidden' },
+    })
+    const choice = await chooseCastRoot([at('cuid/'), at('film.m3u8')], io, null)
+    expect(choice.root).toBeNull()
+    expect(choice.complete).toBe(true)
+    expect(choice.passedOver).toEqual([
+      { why: 'status', status: 400, media: false },
+      { why: 'status', status: 403, media: true },
+    ])
   })
 })
 
@@ -221,7 +237,7 @@ describe('rootRefusal', () => {
   })
 
   it('has nothing to say about statuses alone: the caller words those', () => {
-    expect(rootRefusal([{ why: 'status', status: 403 }], 'VidZee', null)).toBeNull()
+    expect(rootRefusal([{ why: 'status', status: 403, media: true }], 'VidZee', null)).toBeNull()
   })
 })
 

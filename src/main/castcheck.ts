@@ -45,7 +45,7 @@ import { readInitSegmentCodecs } from '@shared/initsegment'
 import { segmentExtension } from '@shared/segmentwindow'
 import { streamSignature } from '@shared/streamsignature'
 import { disguisedStreamOffset, readTransportStreamCodecs } from '@shared/transportstream'
-import { chooseCastRoot, PLAYLIST_BYTES, type CastRoot, type PassedOver, type RootCandidate, type RootFetch } from './castroot'
+import { chooseCastRoot, PLAYLIST_BYTES, type CastRoot, type PassedOver, type RootCandidate, type RootChoice, type RootFetch } from './castroot'
 import { buildCastBundle, isMasterPlaylist, type CastBundle } from './hlsrewrite'
 
 /** The longest a check should take, from its start: see the header. */
@@ -120,13 +120,13 @@ export interface CastCheckInput {
   budgetMs?: number
 }
 
-/** Run the cast path without a television; see the header. */
-export async function checkCast(input: CastCheckInput): Promise<CastCheck> {
+/** Run the cast path without a television, or null when it learned nothing to file; see the header. */
+export async function checkCast(input: CastCheckInput): Promise<CastCheck | null> {
   const now = input.now ?? Date.now
   const started = now()
   const choice = await chooseCastRoot(input.candidates, input.io, input.runtimeMinutes, { deadline: started + ROOT_CHOICE_MS, now })
   const root = choice.root
-  if (root === null) return unrooted(choice.passedOver)
+  if (root === null) return unrooted(choice)
 
   const found: CastCheck = { reach: 'ok', identity: root.length === 'plausible' ? 'film' : 'unknown' }
   if (root.seconds !== null) found.seconds = root.seconds
@@ -156,12 +156,26 @@ export async function checkCast(input: CastCheckInput): Promise<CastCheck> {
   }
 }
 
-/** What a check says when no stream could be chosen at all. */
-function unrooted(passedOver: readonly PassedOver[]): CastCheck {
+/**
+ * What a check says when no stream could be chosen at all, or null when it
+ * cannot say.
+ *
+ * A refusal is the source's only when the refused request was its stream's
+ * (`PassedOver`). Until 2.0.19 any refusal was: a page's captured requests are
+ * mostly adverts and trackers, and when the stream itself was not among those
+ * the check was handed, one of their 400s and 405s was filed as "the source
+ * blocks casting" on three sources that cast (MoviesAPI, 111Movies,
+ * ScreenScape; measured 2026-10-09). "Nothing to cast" likewise needs every
+ * candidate heard: one refused, unanswered or not reached in time may have
+ * been the stream.
+ */
+function unrooted(choice: RootChoice): CastCheck | null {
+  const { passedOver } = choice
   const wrongLength = passedOver.find((p): p is Extract<PassedOver, { why: 'length' }> => p.why === 'length')
   if (wrongLength) return { reach: 'not-media', identity: 'wrong-length', seconds: wrongLength.seconds }
-  const refused = passedOver.find((p): p is Extract<PassedOver, { why: 'status' }> => p.why === 'status')
+  const refused = passedOver.find((p): p is Extract<PassedOver, { why: 'status' }> => p.why === 'status' && p.media)
   if (refused) return { reach: 'blocked', identity: 'unknown', status: refused.status }
+  if (!choice.complete || passedOver.some((p) => p.why === 'status')) return null
   return { reach: 'not-media', identity: 'unknown' }
 }
 

@@ -32,45 +32,8 @@
  */
 
 import type { Session } from 'electron'
+import { CaptureBuffer, isWorthKeeping } from '@shared/capturebuffer'
 import { observeSendHeaders } from './webrequesthub'
-
-/**
- * How many candidates to keep.
- *
- * A player resolves its stream through two or three chained API calls with a
- * dozen advertising requests around them. Forty holds the whole chain of every
- * provider measured so far and stays small enough to test each one.
- */
-const CAPACITY = 40
-
-/**
- * How many of the first requests after a `clear` are kept for the whole load.
- *
- * A player resolves its stream once, at the start of a load: the manifest is
- * among its first requests. After that an adaptive player fetches segments for
- * as long as the film plays, and some sources name them with no extension the
- * filter below could drop (MoviesAPI's `workers.dev/file2/…`, VidRock,
- * 111Movies' `/api?d=…`). Measured 2026-10-09: twenty seconds into a MoviesAPI
- * play the forty newest requests were all segments, the manifest had gone, and
- * the cast found nothing to send although the source casts. So the first
- * requests are held apart from the rolling forty, and offered first.
- */
-const HEAD_CAPACITY = 20
-
-/**
- * Extensions that are never the thing to cast.
- *
- * `.ts`, `.m4s` and `.aac` are here for a different reason than the rest: they
- * *are* media, but they are segments, and a feature-length stream produces
- * upwards of a thousand. One of those floods would push the manifest out of the
- * buffer within seconds of playback starting — which is exactly when somebody
- * reaches for the cast button.
- */
-const IGNORED_EXTENSIONS = [
-  '.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
-  '.woff', '.woff2', '.ttf', '.html', '.htm', '.vtt', '.srt',
-  '.ts', '.m4s', '.aac', '.mp3',
-]
 
 export interface Candidate {
   url: string
@@ -88,49 +51,6 @@ export interface CastCapture {
 }
 
 /**
- * The candidates of one load: its first `HEAD_CAPACITY` for good, and the
- * newest `CAPACITY` rolling. Pure, so the rule is tested without a session.
- */
-export class CaptureBuffer {
-  private head: Candidate[] = []
-  private recent: Candidate[] = []
-
-  add(candidate: Candidate): void {
-    if (this.head.length < HEAD_CAPACITY) this.head.push(candidate)
-    this.recent.push(candidate)
-    if (this.recent.length > CAPACITY) this.recent = this.recent.slice(-CAPACITY)
-  }
-
-  /**
-   * The load's first requests, newest of them first, then the rest of the
-   * rolling newest, newest first. The first ones lead because they hold the
-   * manifest, and the cast's choice asks about only so many
-   * (`MAX_CANDIDATES` in `castroot.ts`); each candidate once.
-   */
-  candidates(): Candidate[] {
-    const head = new Set(this.head)
-    return [...[...this.head].reverse(), ...[...this.recent].reverse().filter((c) => !head.has(c))]
-  }
-
-  clear(): void {
-    this.head = []
-    this.recent = []
-  }
-}
-
-function isWorthKeeping(url: string): boolean {
-  let path: string
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    path = parsed.pathname.toLowerCase()
-  } catch {
-    return false
-  }
-  return !IGNORED_EXTENSIONS.some((extension) => path.endsWith(extension))
-}
-
-/**
  * Flatten Electron's header shape.
  *
  * `onSendHeaders` reports a value that may be a string or an array of them —
@@ -145,7 +65,7 @@ function flatten(headers: Record<string, string | string[]>): Record<string, str
 }
 
 export function createCastCapture(): CastCapture {
-  const buffer = new CaptureBuffer()
+  const buffer = new CaptureBuffer<Candidate>()
   const watched = new WeakSet<Session>()
 
   return {

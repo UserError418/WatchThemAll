@@ -34,6 +34,8 @@ const script = new Map<
     audio?: string[]
     /** The playlists the page fetched, for the ladder search after the verdict. */
     requests?: CapturedRequest[]
+    /** What a cast's capture would hold, for the cast check. */
+    castCandidates?: CapturedRequest[]
   }>
 >()
 /** The budget each probe was given, in call order, per provider. */
@@ -71,7 +73,7 @@ vi.mock('./qualityprobe', () => ({
       mediaSamples: [],
       playlists: [],
       requests: answer.requests ?? [],
-      wholeFileRequests: [],
+      castCandidates: answer.castCandidates ?? [],
       wholeFiles: [],
       video: null,
       sniffed: [],
@@ -579,9 +581,12 @@ describe('the cast check during a test', () => {
   })
 
   const PLAYLIST = { url: 'https://cdn.test/film.m3u8', headers: { Referer: 'https://fast.test/' } }
+  /** An extensionless master the probe did not take for a playlist, as MoviesAPI serves one. */
+  const OPAQUE = { url: 'https://cdn.test/hls/master', headers: { Referer: 'https://fast.test/' } }
+  const CAPTURED = [OPAQUE, PLAYLIST]
 
   it('checks a source that streamed, after its verdict is out, and files the check with the run', async () => {
-    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST], castCandidates: CAPTURED }])
     script.set('dead', [{ verdict: 'unreachable', ms: null }, { verdict: 'unreachable', ms: null }])
     let release: () => void = () => {}
     const asked: Array<{ urls: string[]; runtime: number | null }> = []
@@ -603,15 +608,16 @@ describe('the cast check during a test', () => {
     release()
     const result = await running
 
-    expect(asked).toEqual([{ urls: [PLAYLIST.url], runtime: 139 }])
+    // Asked about what a cast would capture, not only the playlists the probe recognised.
+    expect(asked).toEqual([{ urls: [OPAQUE.url, PLAYLIST.url], runtime: 139 }])
     expect(result.castChecks).toEqual({ fast: { reach: 'ok', identity: 'film' } })
     // The check never moves a verdict.
     expect(result.verdicts).toEqual({ fast: 'stream', dead: 'dead' })
   })
 
   it('files nothing for a check that failed or had nothing to say', async () => {
-    script.set('a', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST] }])
-    script.set('b', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST] }])
+    script.set('a', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST], castCandidates: CAPTURED }])
+    script.set('b', [{ verdict: 'stream', ms: 1_000, requests: [PLAYLIST], castCandidates: CAPTURED }])
     let calls = 0
     const scan = scanOf([provider('a'), provider('b')], {
       castCheck: async () => {
@@ -626,7 +632,7 @@ describe('the cast check during a test', () => {
   })
 
   it('does not wait for the checks of a run that was cancelled', async () => {
-    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST], castCandidates: CAPTURED }])
     const scan = scanOf([provider('fast')], { castCheck: () => new Promise(() => {}) })
     const running = scan.run()
     await vi.waitFor(() => expect(scan.progress.some((p) => p.verdicts.fast === 'stream')).toBe(true))
@@ -635,7 +641,7 @@ describe('the cast check during a test', () => {
   })
 
   it("checks the background tester's one source too", async () => {
-    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST] }])
+    script.set('fast', [{ verdict: 'stream', ms: 2_000, requests: [PLAYLIST], castCandidates: CAPTURED }])
     const scan = scanOf([provider('fast')], { castCheck: async () => ({ reach: 'blocked', identity: 'unknown', status: 403 }) })
     expect((await scan.probeOne(provider('fast')))?.castChecks).toEqual({ fast: { reach: 'blocked', identity: 'unknown', status: 403 } })
   })

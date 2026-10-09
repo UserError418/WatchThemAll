@@ -173,6 +173,7 @@ export interface ProbeOptions {
 /** One completed response, as `onResponse` sees it. */
 export interface ProbeResponse {
   url: string
+  method: string
   statusCode: number
   resourceType: string
   mime: string
@@ -436,6 +437,7 @@ async function runProbe(
 
     onResponse?.({
       url: details.url,
+      method: details.method,
       statusCode: details.statusCode,
       resourceType: details.resourceType,
       mime,

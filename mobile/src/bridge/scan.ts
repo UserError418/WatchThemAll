@@ -69,7 +69,7 @@ import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Renditio
 import { readStreamHeader, streamHeaderOf } from '@shared/streamheader'
 import { lengthVerdict } from '@shared/runtimecheck'
 import { closeAllProbes, openProbe, type ProbeDocumentError, type ProbeRequest } from './probeview'
-import { isScanCandidate, judgeMissedStream, ladderCandidates } from './scanjudge'
+import { castCandidatesOf, isScanCandidate, judgeMissedStream, ladderCandidates } from './scanjudge'
 import { parseQualityLine } from './probescript'
 import { fetchText } from './segmentfiles'
 import { engineAudio, engineLengths, engineOffer, type FrameReading } from '@shared/enginereader'
@@ -238,6 +238,8 @@ interface Measured {
   delivery: StreamDelivery | null
   /** A stream's playlist requests, with the page's headers, newest first: for the preview cache. */
   requests?: Candidate[]
+  /** What a cast from the page would choose from, in `MediaCapture`'s order: for the cast check. */
+  castCandidates?: Candidate[]
 }
 
 /**
@@ -372,10 +374,10 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
      */
     const startCastCheck = (provider: Provider, measured: Measured): void => {
       const check = options.castCheck
-      if (!check || measured.verdict !== 'stream' || !measured.requests?.length) return
+      if (!check || measured.verdict !== 'stream' || !measured.castCandidates?.length) return
       let gaveUp: ReturnType<typeof setTimeout> | undefined
       const limit = new Promise<null>((resolve) => (gaveUp = setTimeout(() => resolve(null), CAST_CHECK_LIMIT_MS)))
-      const task: Promise<void> = Promise.race([check(measured.requests, request.runtimeMinutes ?? null).catch(() => null), limit])
+      const task: Promise<void> = Promise.race([check(measured.castCandidates, request.runtimeMinutes ?? null).catch(() => null), limit])
         .then((found) => {
           if (found !== null && !cancelled()) castChecks[provider.id] = found
         })
@@ -752,6 +754,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean,
           reason: null,
           delivery: proven.delivery,
           requests: [...candidates()].reverse(),
+          castCandidates: castCandidatesOf(requests),
         }
       }
 

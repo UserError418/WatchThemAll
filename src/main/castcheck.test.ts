@@ -14,6 +14,7 @@ import { TS_H264_HIGH_2160X1080, WHOLE_MP4_HEAD } from '@shared/streamsignature.
 import { checkCast, paceOf } from './castcheck'
 import { checkRootFetch, desktopCastPath } from './castfetch'
 import { MIN_WHOLE_FILE_BYTES } from './mediarequest'
+import type { CastCheck } from '@shared/types'
 
 /** A media playlist of `count` segments of `seconds` each. */
 function media(count: number, seconds = 6, extra = ''): string {
@@ -62,13 +63,20 @@ const bytes = (body: Buffer, type = 'video/mp2t'): Handler => (_q, r) => {
   r.end(body)
 }
 
-const check = (origin: string, paths: string[], runtimeMinutes: number | null = null, headers: Record<string, string> = {}) =>
+const checkOrNothing = (origin: string, paths: string[], runtimeMinutes: number | null = null, headers: Record<string, string> = {}) =>
   checkCast({
     candidates: paths.map((path) => ({ url: origin + path, headers })),
     runtimeMinutes,
     io: checkRootFetch,
     open: desktopCastPath,
   })
+
+/** A check that must have something to file. */
+async function check(...args: Parameters<typeof checkOrNothing>): Promise<CastCheck> {
+  const result = await checkOrNothing(...args)
+  if (result === null) throw new Error('the check filed nothing')
+  return result
+}
 
 describe('checkCast, through the desktop proxy', () => {
   it("reaches a master's first variant and its first segment, and reads Videasy's 2160x1080 from it", async () => {
@@ -169,6 +177,20 @@ describe('checkCast, through the desktop proxy', () => {
   it('says blocked with the status when nothing could be chosen because the source refused', async () => {
     const origin = await serve({ '/film.m3u8': (_q, r) => void (r.writeHead(410), r.end()) })
     expect(await check(origin, ['/film.m3u8'])).toEqual({ reach: 'blocked', identity: 'unknown', status: 410 })
+  })
+
+  it("files nothing when the only refusal was an advert's: the stream was not among what it was given", async () => {
+    // Measured 2026-10-09 on MoviesAPI: a tracker's 400 filed as the source blocking casts.
+    const origin = await serve({
+      '/cuid/': (_q, r) => void (r.writeHead(400), r.end()),
+      '/api/config': text('{"ok":true}', 'application/json'),
+    })
+    expect(await checkOrNothing(origin, ['/cuid/', '/api/config'])).toBeNull()
+  })
+
+  it('says not-media when every request answered and none of them is media', async () => {
+    const origin = await serve({ '/api/config': text('{"ok":true}', 'application/json') })
+    expect(await check(origin, ['/api/config'])).toEqual({ reach: 'not-media', identity: 'unknown' })
   })
 })
 

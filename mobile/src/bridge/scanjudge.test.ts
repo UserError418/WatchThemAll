@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isScanCandidate, judgeMissedStream, ladderCandidates, missedStreamReason, STILL_LOADING_WINDOW_MS } from './scanjudge'
+import { castCandidatesOf, isScanCandidate, judgeMissedStream, ladderCandidates, missedStreamReason, STILL_LOADING_WINDOW_MS } from './scanjudge'
 
 const END = 1_000_000
 
@@ -130,5 +130,29 @@ describe('ladderCandidates', () => {
       'https://cdn.example/master.m3u8',
       'https://api.example/source?id=1',
     ])
+  })
+})
+
+describe('castCandidatesOf', () => {
+  const get = (path: string, mainFrame = false) => ({ url: `https://cdn.test/${path}`, method: 'GET', mainFrame })
+
+  it("keeps a feature's master within reach of the cast's choice, past its extensionless segments", () => {
+    // Measured 2026-10-09 on MoviesAPI: a master, then hundreds of
+    // `workers.dev/file2/…` segments, which no extension filter can drop.
+    const log = [get('api/resolve'), get('hls/master'), ...Array.from({ length: 300 }, (_, n) => get(`file2/${n}`))]
+    const urls = castCandidatesOf(log).map((r) => r.url)
+    expect(urls.indexOf('https://cdn.test/hls/master')).toBeGreaterThanOrEqual(0)
+    expect(urls.indexOf('https://cdn.test/hls/master')).toBeLessThan(24)
+  })
+
+  it('keeps what MediaCapture keeps: no shell, no POST, no named segments or page files', () => {
+    const log = [
+      get('index.html', true),
+      { url: 'https://cdn.test/api/source', method: 'POST', mainFrame: false },
+      get('seg-1.ts'),
+      get('player.js'),
+      get('film.m3u8'),
+    ]
+    expect(castCandidatesOf(log).map((r) => r.url)).toEqual(['https://cdn.test/film.m3u8'])
   })
 })

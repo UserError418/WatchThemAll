@@ -18,6 +18,7 @@ import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
 import { createCastService } from './castservice'
 import { checkCast } from './castcheck'
+import { replayableHeaders } from './castproxy'
 import { checkRootFetch, desktopCastPath } from './castfetch'
 import { UpNextController, type UpNextPlace } from './upnext'
 import { nextAiredEpisode, type NextEpisode } from '@shared/episodesteps'
@@ -378,9 +379,15 @@ const scan = createScanService({
     rendererBaseUrl ? playerShellUrl(rendererBaseUrl, providerUrl, { bare: true }) : providerUrl,
   onStream: noteScanStream,
   // The cast path without a television, after each streaming verdict: the
-  // desktop's own proxy on loopback (`castcheck.ts`).
+  // desktop's own proxy on loopback (`castcheck.ts`), with the headers a cast
+  // would replay (`castservice.ts` filters them the same way).
   castCheck: (requests, runtimeMinutes) =>
-    checkCast({ candidates: requests, runtimeMinutes, io: checkRootFetch, open: desktopCastPath }),
+    checkCast({
+      candidates: requests.map((r) => ({ url: r.url, headers: replayableHeaders(r.headers) })),
+      runtimeMinutes,
+      io: checkRootFetch,
+      open: desktopCastPath,
+    }),
   onProgress: (progress) => {
     send(EV.providerScan, progress)
     // The player chrome is a separate document with its own preload, so the

@@ -20,6 +20,7 @@ import { verdictForReason } from '@shared/scanreason'
 import type { CapturedRequest } from '@shared/streamfetch'
 import { isMediaRequest, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import type { ProbeDocumentError, ProbeRequest } from './probeview'
+import { CaptureBuffer, isWorthKeeping } from '@shared/capturebuffer'
 
 /**
  * A request finished this recently before the deadline means the page was
@@ -58,6 +59,20 @@ export function isScanCandidate(request: Pick<ProbeRequest, 'url' | 'method' | '
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
   return !NEVER_MEDIA.test(url.pathname)
+}
+
+/**
+ * What `MediaCapture` would hold for a cast from this page, in its order: the
+ * page's requests (oldest first) through the same filter and the same buffer.
+ * Every request newest first, as before 2.0.19, put a feature's segment flood
+ * ahead of its master, past the two dozen the cast's choice asks about.
+ */
+export function castCandidatesOf<R extends Pick<ProbeRequest, 'url' | 'method' | 'mainFrame'>>(requests: readonly R[]): R[] {
+  const buffer = new CaptureBuffer<R>()
+  for (const request of requests) {
+    if (isScanCandidate(request) && isWorthKeeping(request.url)) buffer.add(request)
+  }
+  return buffer.candidates()
 }
 
 /**

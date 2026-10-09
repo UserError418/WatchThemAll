@@ -115,7 +115,7 @@ interface Measured {
   delivery: StreamDelivery | null
   /** The playlists its page asked for, with its headers, for a stream: where its ladder is looked for after the verdict. */
   requests: CapturedRequest[]
-  /** What the page fetched that a cast could choose from, newest first: for the cast check. */
+  /** What the page fetched that a cast could choose from, in the cast capture's order: for the cast check. */
   castCandidates: CapturedRequest[]
 }
 
@@ -327,7 +327,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       delivery: streamed ? (result.delivery ?? 'unknown') : null,
       requests: streamed ? result.requests : [],
       // Newest first, as a cast's capture lists them.
-      castCandidates: streamed ? [...result.requests, ...result.wholeFileRequests].reverse() : [],
+      castCandidates: streamed ? result.castCandidates : [],
     }
   }
 
