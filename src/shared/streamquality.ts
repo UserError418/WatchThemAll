@@ -18,8 +18,8 @@
  * Films are rarely 16:9. Fight Club streams at 1920×800, which is a 1080p
  * release letterboxed to 2.40:1 — reading the height alone would call it
  * "800p", a number no provider's quality menu uses and one that ranks it below
- * a 16:9 720p stream it is sharper than. So a rendition's class is taken from
- * whichever of its dimensions claims more, the width read as if it were 16:9.
+ * a 16:9 720p stream it is sharper than. So a rendition is named for the
+ * standard frame it was encoded to fill; see `qualityClass`.
  */
 
 /** One rendition a manifest offers. Width is null when the manifest gave only a height. */
@@ -47,29 +47,48 @@ export interface Ladder {
 export const QUALITY_CLASSES: readonly number[] = [2160, 1440, 1080, 720, 480, 360, 240]
 const CLASSES = QUALITY_CLASSES as readonly (2160 | 1440 | 1080 | 720 | 480 | 360 | 240)[]
 
-/**
- * The lower edge of each class.
- *
- * Generous on purpose, because encodes are cropped: a "1080p" film is 1920×800
- * or 1920×1036 as often as 1920×1080, and a "720p" one 1280×536. The edges sit
- * roughly two thirds of the way down to the class below, which is where no
- * real encode of either class lands.
- */
-const CLASS_FLOOR: Record<(typeof CLASSES)[number], number> = {
-  2160: 1800,
-  1440: 1300,
-  1080: 900,
-  720: 600,
-  480: 420,
-  360: 300,
-  240: 0,
+/** The 16:9 frame each class is encoded to fit. */
+const FRAME: Record<(typeof CLASSES)[number], { width: number; height: number }> = {
+  2160: { width: 3840, height: 2160 },
+  1440: { width: 2560, height: 1440 },
+  1080: { width: 1920, height: 1080 },
+  720: { width: 1280, height: 720 },
+  480: { width: 854, height: 480 },
+  360: { width: 640, height: 360 },
+  240: { width: 426, height: 240 },
 }
 
-/** The quality class of a rendition — 1080 for 1920×800, 720 for 1280×528. */
+/**
+ * How much of a frame's width or height an encode may have cropped away and
+ * still count as filling it: edges trimmed of black, or a size rounded for
+ * the codec. Silo on Videasy is 1913 wide; 5% of 1920 is 96 pixels.
+ */
+const CROP_ALLOWANCE = 0.05
+
+/**
+ * The quality class of a rendition: the best frame it fills, across or down.
+ *
+ * An encoder fits the picture into its class's frame, so one of the two
+ * dimensions reaches the frame's edge and the other is whatever the film's
+ * shape leaves. A wide film fills the width: Fight Club at 1920×800 is 1080p,
+ * Silo on Videasy at 1913×800 too, and 1280×528 is 720p. A narrow film, or
+ * one scaled by its height, fills the height: Videasy's own menu calls its
+ * 1148×480 stream "480p", and so does this.
+ *
+ * The rule before 2026-10 read the width as if the picture were 16:9 and took
+ * whichever dimension claimed more, with generous class edges. It called that
+ * 1148×480 720p (1148 wide is 646 lines at 16:9), against the source's own
+ * menu, and 1600×900 1080p. A picture that fills no frame of a class does not
+ * get that class: 960×540 fills the 480 frame and neither edge of the 720
+ * one, so it is 480p. Rounding down is the direction a label may err in;
+ * claiming a class the picture does not reach is what sends the viewer to
+ * the wrong source.
+ */
 export function qualityClass(rendition: Rendition): number {
-  const fromWidth = rendition.width === null ? 0 : Math.round((rendition.width * 9) / 16)
-  const size = Math.max(rendition.height, fromWidth)
-  return CLASSES.find((c) => size >= CLASS_FLOOR[c]) ?? 240
+  const reach = 1 - CROP_ALLOWANCE
+  const fills = (frame: { width: number; height: number }): boolean =>
+    rendition.height >= frame.height * reach || (rendition.width !== null && rendition.width >= frame.width * reach)
+  return CLASSES.find((c) => fills(FRAME[c])) ?? 240
 }
 
 /** The best class a ladder offers, or null when it names none. */

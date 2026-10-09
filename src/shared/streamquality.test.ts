@@ -49,6 +49,28 @@ describe('qualityClass', () => {
     expect(qualityClass({ width: null, height: 1080 })).toBe(1080)
     expect(qualityClass({ width: null, height: 720 })).toBe(720)
   })
+
+  it.each([
+    // Videasy's own menu calls this stream 480p. Read as if 16:9, its width
+    // (646 lines) made it 720p, and the label disagreed with the source.
+    [1148, 480, 480],
+    // Silo on Videasy, a few pixels short of the 1080 frame's width.
+    [1913, 800, 1080],
+    // 4:3 at full height.
+    [1440, 1080, 1080],
+    [640, 480, 480],
+  ])('names %ix%i %ip, for the frame it fills across or down', (width, height, expected) => {
+    expect(qualityClass({ width, height })).toBe(expected)
+  })
+
+  it.each([
+    // Between classes: the class it reaches, never the one above.
+    [960, 540, 480],
+    [1600, 900, 720],
+    [1024, 576, 480],
+  ])('rounds %ix%i, which fills no frame of the class above, down to %ip', (width, height, expected) => {
+    expect(qualityClass({ width, height })).toBe(expected)
+  })
 })
 
 describe('readLadder', () => {

@@ -670,8 +670,10 @@
 
   /**
    * The button's label: a choice the viewer made, in the menu's own terms,
-   * or else what is on screen. Videasy calls a 1148×480 stream "480p", which
-   * the picture's size would name 720p; the menu and the button must agree.
+   * or else what is on screen. A stream named in a source's own list keeps
+   * that name, so the menu and the button agree even where a picture's size
+   * would round differently. (Videasy's 1148×480 "480p" was the case that
+   * found this; `qualityClass` now names that size 480p as well.)
    */
   const shownQuality = $derived(chosenQuality ?? playingQuality)
 
