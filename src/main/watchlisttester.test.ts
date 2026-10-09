@@ -212,6 +212,28 @@ describe('the tester loop', () => {
     tester.stop()
   })
 
+  it("holds the source to TMDB's runtime for what it tests", async () => {
+    const asked: Array<{ season: number; episode: number } | null> = []
+    const { tester, probeOne } = harness({
+      lookUp: async () => ({
+        released: true,
+        imdbId: 'tt1',
+        lastAired: null,
+        runtimeOf: async (episode) => {
+          asked.push(episode)
+          return 139
+        },
+      }),
+    })
+    tester.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const subject = probeOne.mock.calls[0]?.[1] as { season?: number; episode?: number; runtimeMinutes?: number }
+    expect(subject.runtimeMinutes).toBe(139)
+    // Asked for the very episode it tested.
+    expect(asked).toEqual([{ season: subject.season, episode: subject.episode }])
+    tester.stop()
+  })
+
   it('waits while the user is watching, and says why', async () => {
     const { tester, probeOne, statuses } = harness({ pausedFor: () => 'playback' })
     tester.start()

@@ -55,6 +55,7 @@ import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { castabilities } from '@shared/castability'
 import { airedEpisode, notOutYet } from '@shared/aired'
 import type { ScanService } from './scanservice'
+import { testRuntime } from './testruntime'
 import { DEFAULT_SELECTED, DEFAULT_TARGETS, findBestMatch, parseMalExport, STATUS_LABELS } from './malimport'
 import type { MalEntry } from './malimport'
 import { applyMalImport, type ImportDecisions } from './malapply'
@@ -323,6 +324,11 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
       episode: { season: number; episode: number } | null,
     ): Promise<ProviderScan> => {
       const key = titleKey(media)
+      // Never probe a TV title without an episode — see `scanEpisode`.
+      const wanted = scanEpisode(media.type, episode)
+      // Its season's listing is asked for beside the facts, not after them:
+      // `testRuntime` below joins this request, or finds its answer kept.
+      if (wanted) void tmdb.season(media.tmdbId, wanted.season).catch(() => null)
       /*
        * Only what has come out can be tested — see `aired.ts`. The detail view
        * has usually just fetched these facts, so the lookup is a cache hit. A
@@ -334,26 +340,28 @@ export function registerIpc(deps: IpcDeps): IpcHandles {
         // Nothing stored: an empty result is not a measurement to keep.
         return { titleKey: key, at: Date.now(), verdicts: {} }
       }
-      // Never probe a TV title without an episode — see `scanEpisode`.
-      const wanted = scanEpisode(media.type, episode)
       const target = wanted && facts ? airedEpisode(wanted, facts.lastEpisode) : wanted
-      const scan = await deps.scan.run(key, {
-        imdbId: media.imdbId ?? '',
-        tmdbId: media.tmdbId,
-        type: media.type,
-        season: target?.season,
-        episode: target?.episode,
-        label: key,
-        // A scan asks whether a stream exists, not whether it is the right
-        // programme, so it has no runtime and invents none. The one reader is
-        // the quality reading's `lengthVerdict`, which without it still
-        // refuses an ad's size, just not a wrong programme's.
-        runtimeMinutes: null,
-      })
+      const filed = (row: ProviderScan): void => deps.results.record(resultsFromScan(row, deps.results.device(), target))
+      const scan = await deps.scan.run(
+        key,
+        {
+          imdbId: media.imdbId ?? '',
+          tmdbId: media.tmdbId,
+          type: media.type,
+          season: target?.season,
+          episode: target?.episode,
+          label: key,
+          // What tells a clip or another programme from the title, and the
+          // film's ladder from an advert's: see `testruntime.ts`.
+          runtimeMinutes: await testRuntime(tmdb, media.tmdbId, facts?.runtime, target),
+        },
+        // A source's offer found after the run, filed under its test's moment.
+        { refile: filed },
+      )
 
       // Filed under the episode it tested, which is not always the one asked
       // for: see `scanEpisode` and `airedEpisode`.
-      deps.results.record(resultsFromScan(scan, deps.results.device(), target))
+      filed(scan)
       deps.scanFiled(media, target)
       return scan
     },

@@ -28,6 +28,7 @@
  */
 
 import { lengthVerdict } from './runtimecheck'
+import { readMediaPlaylist } from './streamquality'
 import type { ScanReason } from './types'
 
 export type FilmLength =
@@ -52,6 +53,19 @@ export function judgeFilmLength(lengths: readonly number[], expectedMinutes: num
   if (known.length === 0) return { kind: 'unknown' }
   if (known.some((seconds) => lengthVerdict(seconds, expectedMinutes) !== 'implausible')) return { kind: 'film' }
   return { kind: 'other', seconds: Math.max(...known) }
+}
+
+/**
+ * A media playlist's length, as the check may use it: its segments added up,
+ * only when it was read to its `#EXT-X-ENDLIST`. A playlist cut short (read
+ * up to a byte cap, as a test reads them) or a live one adds up to a fraction
+ * of the stream, and a film's three-hour playlist read halfway would read as
+ * something else. Null when it is not a whole playlist.
+ */
+export function playlistLength(body: string): number | null {
+  if (!/^#EXT-X-ENDLIST/m.test(body)) return null
+  const seconds = readMediaPlaylist(body).seconds
+  return seconds > 0 ? seconds : null
 }
 
 /** "3 min", never "0 min": a video was measured, and a zero reads like a missing value. */

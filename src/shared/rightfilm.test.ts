@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { judgeFilmLength, minutesText, somethingElse, wrongVideoReason } from './rightfilm'
+import { mediaPlaylist } from './downloads/downloads.fixture'
+import { judgeFilmLength, minutesText, playlistLength, somethingElse, wrongVideoReason } from './rightfilm'
 
 describe('judgeFilmLength', () => {
   /** Measured 2026-10-04: VidRock's clips for the 139-minute Fight Club. */
@@ -49,5 +50,18 @@ describe('the words', () => {
       expectedMinutes: 139,
       title: 'film',
     })
+  })
+})
+
+describe('playlistLength', () => {
+  it('is the whole length of a playlist read to its end', () => {
+    expect(playlistLength(mediaPlaylist('https://cdn/film', 834, 10))).toBe(8_340)
+  })
+
+  it('is nothing for a playlist cut short or live: it adds up to a fraction of the stream', () => {
+    const film = mediaPlaylist('https://cdn/film', 834, 10)
+    expect(playlistLength(film.slice(0, film.length / 2))).toBeNull()
+    expect(playlistLength(film.replace('#EXT-X-ENDLIST', ''))).toBeNull()
+    expect(playlistLength('#EXTM3U\n#EXT-X-ENDLIST\n')).toBeNull()
   })
 })

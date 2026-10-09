@@ -37,10 +37,20 @@
  * not: Videasy's player keeps its `<video>` out of reach, but its segments
  * answer like any other file. It describes the one rendition being played,
  * so it is a floor too, like the picture.
+ *
+ * ## The source's own engine
+ *
+ * Since 2026-10 the probe also reads the streaming engine in every frame
+ * (`enginereader.ts`), the reading plays have made since 2.0.18: a ladder an
+ * engine holds is the source's offer even when its playlists cannot be asked
+ * for again. It runs beside the playlists' re-requests, capped at
+ * `ENGINE_READ_MS`, and goes to the judge's `player` slot. The same reading
+ * gives the lengths of the videos on the page, which with the playlists'
+ * lengths decide whether the source plays the film at all (`rightfilm.ts`).
  */
 
 import type { CapturedRequest } from './segmentsave'
-import type { WebContents } from 'electron'
+import type { WebContents, WebFrameMain } from 'electron'
 import type { Provider, ScanReason, StreamDelivery } from '@shared/types'
 import { probeStream, streamReason, type ProbeResponse, type ProbeSubject, type StreamVerdict } from './streamprobe'
 import { replayableHeaders } from './streamextract'
@@ -55,6 +65,9 @@ import {
   type Rendition,
 } from '@shared/streamquality'
 import { HEADER_BYTES, readStreamHeader, streamHeaderOf, type StreamHeader } from '@shared/streamheader'
+import { READ_FRAME_SCRIPT, engineAudio, engineLengths, engineOffer, parseFrameReading, type FrameReading } from '@shared/enginereader'
+import { judgeFilmLength, playlistLength, type FilmLength } from '@shared/rightfilm'
+import { languageList, masterAudio } from '@shared/audiotracks'
 
 /**
  * How long the measurement keeps watching after the first media request.
@@ -123,6 +136,15 @@ const HEADER_TIMEOUT_MS = 5_000
 /** Per frame, when asking for its `<video>` elements. The script returns at once. */
 const FRAME_ANSWER_MS = 2_000
 
+/**
+ * How long the engine reading may take, across every frame at once. It runs
+ * beside the playlists' re-requests, which take longer whenever there are
+ * any, so in a test it costs nothing on its own; on a page with no playlist
+ * to read it adds at most this before the verdict. A frame that throws or
+ * has not answered by then is skipped.
+ */
+const ENGINE_READ_MS = 1_500
+
 /** One playlist, asked for again, and what came back. */
 export interface PlaylistReading {
   url: string
@@ -132,6 +154,14 @@ export interface PlaylistReading {
   renditions: Rendition[]
   /** Media playlists: the length the segments add up to, in seconds. */
   seconds?: number
+  /**
+   * Media playlists read to their end: the stream's whole length
+   * (`playlistLength`). `seconds` is whatever was read, and a film's
+   * playlist can run past `MAX_BODY_BYTES`.
+   */
+  length?: number
+  /** Masters: the languages of its audio renditions (`masterAudio`). */
+  audio?: string[]
   /** Media playlists: where the stream states its picture size, and what it said once asked. */
   header?: HeaderReading
 }
@@ -179,6 +209,12 @@ export interface QualityProbeResult {
   video: VideoReading | null
   /** Measure mode only: what each frame's player said about quality, raw. */
   sniffed: FrameSniff[]
+  /** What the source's streaming engine holds, frame by frame (`enginereader.ts`). */
+  engines: FrameReading[]
+  /** Whether what played is the film, by every length the probe was sure of (`rightfilm.ts`). */
+  film: FilmLength
+  /** The languages its sound is offered in: its masters' audio renditions and its engine's tracks. */
+  audio: string[]
   judgement: QualityJudgement
 }
 
@@ -312,6 +348,33 @@ async function sniffFrames(contents: WebContents): Promise<FrameSniff[]> {
   return found
 }
 
+/**
+ * The engine reading in every frame at once (`READ_FRAME_SCRIPT`), within
+ * `ENGINE_READ_MS` for all of them together.
+ */
+async function readEngines(contents: WebContents): Promise<FrameReading[]> {
+  let frames: WebFrameMain[]
+  try {
+    frames = contents.mainFrame.framesInSubtree
+  } catch {
+    return []
+  }
+  // A frame gone mid-read throws, synchronously or not; either is a frame skipped.
+  const ask = async (frame: WebFrameMain): Promise<unknown> => {
+    try {
+      return await frame.executeJavaScript(READ_FRAME_SCRIPT)
+    } catch {
+      return null
+    }
+  }
+  const late = new Promise<null>((resolve) => setTimeout(() => resolve(null), ENGINE_READ_MS))
+  const answers = await Promise.all(frames.map((frame) => Promise.race([ask(frame), late])))
+  return answers.flatMap((answer) => {
+    const reading = parseFrameReading(answer)
+    return reading === null ? [] : [reading]
+  })
+}
+
 /** Every `<video>` in every frame that answers in time. */
 async function readVideos(contents: WebContents): Promise<VideoReading[]> {
   const readings: VideoReading[] = []
@@ -395,9 +458,11 @@ export async function probeQuality(
   },
 ): Promise<QualityProbeResult> {
   const candidates = new Map<string, { kind: Candidate; headers: Record<string, string> }>()
+  const runtime = subject.runtimeMinutes ?? null
   let playlists: PlaylistReading[] | null = null
   let videos: VideoReading[] = []
   let sniffed: FrameSniff[] = []
+  let engines: FrameReading[] = []
 
   const result = await probeStream(provider, subject, {
     timeoutMs: options.timeoutMs,
@@ -414,7 +479,9 @@ export async function probeQuality(
      * their freshest — and then decide what else is worth asking.
      */
     inspect: async (contents) => {
-      playlists = await readPlaylists(candidates)
+      // The engine beside the playlists, not after them: the two together
+      // take as long as the slower, which is nearly always the network.
+      ;[playlists, engines] = await Promise.all([readPlaylists(candidates), readEngines(contents)])
       if (options.mode === 'measure') {
         // Everything, so each reading can be checked against the others.
         await readHeaders(playlists, candidates)
@@ -426,7 +493,8 @@ export async function probeQuality(
       // the answer, and failing that the picture — waited for only where
       // something streamed: a dead source has no picture, and waiting on one
       // would add the full wait to every dead source in the scan.
-      if (playlists.some((p) => p.renditions.length > 0)) return
+      // So does the engine's own list, and a header or a picture would only be a floor under it.
+      if (playlists.some((p) => p.renditions.length > 0) || engineOffer(engines, runtime) !== null) return
       await readHeaders(playlists, candidates)
       if (declaredSizes(playlists, subject).length > 0) return
       const streamed = playlists.length > 0 || [...candidates.values()].some((c) => c.kind === 'whole-file')
@@ -447,9 +515,22 @@ export async function probeQuality(
     streamed: result.verdict === 'stream',
     playlists: read.map((p) => ({ status: p.status, ladder: { kind: p.kind, renditions: p.renditions } })),
     wholeFiles: wholeFiles.length,
-    video: video ? { rendition: { width: video.width, height: video.height }, runtime: lengthVerdict(video.duration, subject.runtimeMinutes ?? null) } : null,
+    video: video ? { rendition: { width: video.width, height: video.height }, runtime: lengthVerdict(video.duration, runtime) } : null,
+    player: engineOffer(engines, runtime),
     declared: declaredSizes(read, subject),
   })
+  const answered = read.filter((p) => p.status === 200)
+  // Every length the probe is sure of: whole media playlists, and every
+  // video the page loaded, the engine's and the picture's.
+  const film = judgeFilmLength(
+    [
+      ...answered.flatMap((p) => (p.length === undefined ? [] : [p.length])),
+      ...engineLengths(engines),
+      ...videos.map((v) => v.duration),
+    ],
+    runtime,
+  )
+  const audio = languageList([...answered.flatMap((p) => p.audio ?? []), ...engineAudio(engines, runtime)])
 
   return {
     providerId: provider.id,
@@ -465,6 +546,9 @@ export async function probeQuality(
     wholeFiles,
     video,
     sniffed,
+    engines,
+    film,
+    audio,
     judgement,
   }
 }
@@ -509,9 +593,12 @@ async function readPlaylists(
     const ladder = readLadder(body)
     if (candidate.kind === 'maybe-playlist' && ladder.kind === 'unknown' && answer.status === 200) continue
     const reading: PlaylistReading = { url, status: answer.status, kind: ladder.kind, renditions: ladder.renditions }
+    if (ladder.kind === 'hls-master') reading.audio = masterAudio(body)
     if (ladder.kind === 'hls-media') {
       const media = readMediaPlaylist(body)
       reading.seconds = media.seconds
+      const whole = playlistLength(body)
+      if (whole !== null) reading.length = whole
       const header = streamHeaderOf(media, url)
       if (header) reading.header = { ...header, status: null, size: null }
     }

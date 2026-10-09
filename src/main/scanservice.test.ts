@@ -13,6 +13,10 @@ import type { Provider, QualityKind, ScanReason, StreamDelivery } from '@shared/
 import type { ProviderScan, ProviderScanProgress } from '@shared/ipc'
 import type { ProbeSubject, StreamVerdict } from './streamprobe'
 import type { QualityProbeResult } from './qualityprobe'
+import type { CapturedRequest } from './segmentsave'
+import type { FilmLength } from '@shared/rightfilm'
+import type { StreamFetch } from '@shared/streamfetch'
+import { mediaPlaylist } from '@shared/downloads/downloads.fixture'
 
 /** Each provider's answers, in the order its probes will be asked for them. */
 const script = new Map<
@@ -25,6 +29,11 @@ const script = new Map<
     reason?: ScanReason
     delivery?: StreamDelivery | null
     hold?: Promise<void>
+    /** Whether what played is the film (`rightfilm.ts`); unknown by default. */
+    film?: FilmLength
+    audio?: string[]
+    /** The playlists the page fetched, for the ladder search after the verdict. */
+    requests?: CapturedRequest[]
   }>
 >()
 /** The budget each probe was given, in call order, per provider. */
@@ -61,10 +70,13 @@ vi.mock('./qualityprobe', () => ({
       delivery: answer.delivery ?? null,
       mediaSamples: [],
       playlists: [],
-      requests: [],
+      requests: answer.requests ?? [],
       wholeFiles: [],
       video: null,
       sniffed: [],
+      engines: [],
+      film: answer.film ?? { kind: 'unknown' },
+      audio: answer.audio ?? [],
       judgement: {
         outcome: best === null ? 'unreadable' : 'ladder',
         best,
@@ -90,20 +102,27 @@ const provider = (id: string): Provider => ({
 const subject: ProbeSubject = { imdbId: 'tt1', tmdbId: 1, type: 'movie', label: 'Test' }
 
 /** A scan service over `providers`, and every progress update it sends. */
-function scanOf(providers: Provider[]): {
+function scanOf(
+  providers: Provider[],
+  extra: { fetch?: StreamFetch; subject?: ProbeSubject; refile?: (row: ProviderScan) => void; onStream?: () => void } = {},
+): {
   run: () => Promise<ProviderScan>
   probeOne: (provider: Provider) => Promise<ProviderScan | null>
   progress: ProviderScanProgress[]
 } {
   const progress: ProviderScanProgress[] = []
+  const tested = extra.subject ?? subject
   const service = createScanService({
     providers: () => providers,
     frameUrl: (url) => url,
     onProgress: (update) => progress.push(update),
+    // Nothing reaches the network from a test: an address no route names is unreachable.
+    fetch: extra.fetch ?? { fetchText: async () => null },
+    ...(extra.onStream ? { onStream: extra.onStream } : {}),
   })
   return {
-    run: () => service.run('movie:tt1', subject),
-    probeOne: (one) => service.probeOne('movie:tt1', subject, one),
+    run: () => service.run('movie:tt1', tested, extra.refile ? { refile: extra.refile } : {}),
+    probeOne: (one) => service.probeOne('movie:tt1', tested, one),
     progress,
   }
 }
@@ -290,6 +309,133 @@ describe('testing one provider for the background tester', () => {
     await run()
     release()
     expect(await pending).toBeNull()
+  })
+})
+
+describe('a source that plays something else', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  /** Measured 2026-10-04: VidRock served Fight Club as a clip and its test said green. */
+  it('is amber with its reason, without a time, a quality or a second test', async () => {
+    const fightClub = { ...subject, runtimeMinutes: 139 }
+    script.set('vidrock', [{ verdict: 'stream', ms: 900, quality: 720, qualityKind: 'floor', film: { kind: 'other', seconds: 272 } }])
+    let kept = 0
+    const scan = await scanOf([provider('vidrock')], { subject: fightClub, onStream: () => (kept += 1) }).run()
+    expect(scan.verdicts).toEqual({ vidrock: 'unsure' })
+    expect(scan.reasons).toEqual({ vidrock: { kind: 'wrong-video', seconds: 272, expectedMinutes: 139, title: 'film' } })
+    expect(scan.timings).toEqual({})
+    expect(scan.qualities).toEqual({})
+    expect(budgets.get('vidrock')).toEqual([20_000])
+    // The preview would have shown the clip.
+    expect(kept).toBe(0)
+  })
+
+  it('changes nothing when no length was known', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 900, film: { kind: 'unknown' } }])
+    script.set('b', [{ verdict: 'stream', ms: 900, film: { kind: 'film' } }])
+    const scan = await scanOf([provider('a'), provider('b')]).run()
+    expect(scan.verdicts).toEqual({ a: 'stream', b: 'stream' })
+    expect(scan.reasons).toEqual({})
+  })
+})
+
+describe('the ladder, after the verdict', () => {
+  beforeEach(() => {
+    script.clear()
+    budgets.clear()
+  })
+
+  const H = { Referer: 'https://a.test/' }
+  const master = [
+    '#EXTM3U',
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",LANGUAGE="ja",NAME="Japanese",URI="ja.m3u8"',
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",LANGUAGE="en",NAME="English",URI="en.m3u8"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=1280x720,AUDIO="a"',
+    '720.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080,AUDIO="a"',
+    '1080.m3u8',
+  ].join('\n')
+  /** The page's capture, answering as the CDN would; `gate` holds the master's answer back. */
+  const network = (gate?: Promise<void>): StreamFetch & { asked: string[] } => {
+    const asked: string[] = []
+    return {
+      asked,
+      async fetchText(url) {
+        asked.push(url)
+        if (url === 'https://cdn.test/master.m3u8') {
+          await gate
+          return { status: 200, body: master }
+        }
+        if (url === 'https://cdn.test/720.m3u8') return { status: 200, body: mediaPlaylist('https://cdn.test/s', 720, 10) }
+        return null
+      },
+    }
+  }
+  const requests = [{ url: 'https://cdn.test/master.m3u8', headers: H }]
+  const until = (check: () => boolean): Promise<void> =>
+    new Promise((resolve) => {
+      const look = (): void => (check() ? resolve() : void setTimeout(look, 1))
+      look()
+    })
+
+  it("names the source's offer and its audio in the run's own row while the run is open", async () => {
+    let release: () => void = () => {}
+    const slow = new Promise<void>((resolve) => (release = resolve))
+    script.set('a', [{ verdict: 'stream', ms: 1_000, quality: 720, qualityKind: 'floor', requests }])
+    // Keeps the run open until the ladder has been read.
+    script.set('b', [{ verdict: 'stream', ms: 5_000, hold: slow }])
+    const net = network()
+    const { run, progress } = scanOf([provider('a'), provider('b')], { fetch: net })
+    const pending = run()
+    await until(() => progress.some((p) => p.qualityKinds.a === 'offered'))
+    release()
+    const scan = await pending
+    expect(scan.qualities).toMatchObject({ a: 1080 })
+    expect(scan.qualityKinds).toMatchObject({ a: 'offered' })
+    expect(scan.audio).toEqual({ a: ['ja', 'en'] })
+  })
+
+  it('is filed again under the test\'s own moment when it is found after the run', async () => {
+    let open: () => void = () => {}
+    const gate = new Promise<void>((resolve) => (open = resolve))
+    script.set('a', [{ verdict: 'stream', ms: 1_000, quality: 720, qualityKind: 'floor', requests }])
+    const refiled: ProviderScan[] = []
+    const scan = await scanOf([provider('a')], { fetch: network(gate), refile: (row) => refiled.push(row) }).run()
+    // The run did not wait for it.
+    expect(scan.qualityKinds).toEqual({ a: 'floor' })
+    open()
+    await until(() => refiled.length > 0)
+    expect(refiled).toEqual([
+      {
+        titleKey: 'movie:tt1',
+        at: scan.testedAt?.a,
+        verdicts: { a: 'stream' },
+        testedAt: { a: scan.testedAt?.a },
+        timings: { a: 1_000 },
+        qualities: { a: 1080 },
+        qualityKinds: { a: 'offered' },
+        audio: { a: ['ja', 'en'] },
+        delivery: { a: 'unknown' },
+      },
+    ])
+  })
+
+  it('is not looked for when the test already read an offer', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 1_000, quality: 1080, qualityKind: 'offered', requests }])
+    const net = network()
+    await scanOf([provider('a')], { fetch: net }).run()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(net.asked).toEqual([])
+  })
+
+  it('goes into the background tester\'s one row', async () => {
+    script.set('a', [{ verdict: 'stream', ms: 1_000, requests }])
+    const row = await scanOf([provider('a')], { fetch: network() }).probeOne(provider('a'))
+    expect(row?.qualities).toEqual({ a: 1080 })
+    expect(row?.qualityKinds).toEqual({ a: 'offered' })
   })
 })
 

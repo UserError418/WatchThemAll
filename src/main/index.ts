@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
-import type { PlayRequest, PreviewPlan, ResultsChanged, TitleRef } from '@shared/ipc'
+import type { PlayRequest, PreviewPlan, ProviderScan, ResultsChanged, TitleRef } from '@shared/ipc'
 import type { CapturedRequest } from './segmentsave'
 import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
@@ -65,6 +65,7 @@ import {
 import { ResultStore } from '@shared/store/results'
 import { episodeOf, resultsFromScan } from '@shared/sourceresults'
 import { createScanService } from './scanservice'
+import { testRuntime } from './testruntime'
 import { progressIsAbout } from '@shared/scanprogress'
 import { createWatchlistTester, episodeToTest } from './watchlisttester'
 import { AUTO_TEST_TICK_MS, AutoTester } from './autotest'
@@ -410,6 +411,7 @@ const watchlistTester = createWatchlistTester({
         released: Number.isFinite(date) && date <= Date.now(),
         imdbId: found.imdbId,
         lastAired: found.lastEpisode,
+        runtimeOf: (episode) => testRuntime(tmdb, entry.tmdbId, found.runtime, episode),
       }
     } catch {
       return null
@@ -464,6 +466,7 @@ const autoTester = new AutoTester({
         : episodeToTest(entry, facts.lastEpisode)
     const target = wanted && airedEpisode(wanted, facts.lastEpisode)
     const key = titleKey(entry)
+    const filed = (row: ProviderScan): void => testResults.record(resultsFromScan(row, testResults.device(), target))
     const result = await scan.run(
       key,
       {
@@ -473,15 +476,16 @@ const autoTester = new AutoTester({
         season: target?.season,
         episode: target?.episode,
         label: key,
-        runtimeMinutes: null,
+        runtimeMinutes: await testRuntime(tmdb, entry.tmdbId, facts.runtime, target),
       },
       // Beside the viewer's film: two at a time, and none started while it
       // buffers. Otherwise the ordinary pool, held while anything plays.
+      // A source's offer found after the run is filed under its test's moment.
       mode === 'watching'
-        ? { concurrency: 2, hold: () => filmBuffering }
-        : { hold: () => player !== null },
+        ? { concurrency: 2, hold: () => filmBuffering, refile: filed }
+        : { hold: () => player !== null, refile: filed },
     )
-    testResults.record(resultsFromScan(result, testResults.device(), target))
+    filed(result)
     cacheAfterTest(entry, target)
   },
 })

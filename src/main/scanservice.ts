@@ -63,13 +63,28 @@
  * at two. A re-check no longer has the line to itself, so it is not the
  * clean-room test it was; what it keeps is the second, longer look, at half
  * the contention the first pass used to run at.
+ *
+ * ## After a verdict
+ *
+ * A stream whose test read no offer (only a floor, "720p+", or nothing) gets
+ * one more look once its verdict is in: the film's master among the
+ * playlists its page fetched (`findLadder`, the search downloads use), with
+ * its offer and its audio. It runs beside the pool, never in it, so no test
+ * waits for it: while the run is open its answer joins the run's own row,
+ * and after that the caller files the source's row again under the test's
+ * own moment (`RunOptions.refile`), which replaces the result rather than
+ * adding one (`knowsMore` in `sourceresults.ts`).
  */
 
 import type { CapturedRequest } from './segmentsave'
 import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
 import type { ProbeVerdict, ProviderScan, ProviderScanProgress, ScanReason } from '@shared/ipc'
+import type { StreamFetch } from '@shared/streamfetch'
 import type { ProbeSubject } from './streamprobe'
 import { probeQuality } from './qualityprobe'
+import { fetchText } from './segmentfiles'
+import { findLadder, ladderOffer } from '@shared/filmladder'
+import { wrongVideoReason } from '@shared/rightfilm'
 import { providerRank } from '@shared/scanrank'
 import { verdictForReason } from '@shared/scanreason'
 
@@ -98,6 +113,8 @@ interface Measured {
   reason: ScanReason | null
   /** How the video arrived, for a source that streamed; null otherwise. See `StreamDelivery`. */
   delivery: StreamDelivery | null
+  /** The playlists its page asked for, with its headers, for a stream: where its ladder is looked for after the verdict. */
+  requests: CapturedRequest[]
 }
 
 /** One test the pool runs: a provider's first, or the second a red gets. */
@@ -126,6 +143,8 @@ export interface ScanServiceOptions {
    * cache to save a window from once the scan is filed (`index.ts`).
    */
   onStream?: (titleKey: string, providerId: string, requests: CapturedRequest[]) => void
+  /** How playlists are asked for again after a verdict, with the page's headers. Node's fetch by default. */
+  fetch?: StreamFetch
 }
 
 /**
@@ -138,6 +157,12 @@ export interface RunOptions {
   concurrency?: number
   /** True while no new test may start; checked every second. */
   hold?: () => boolean
+  /**
+   * A source's row again, once the run is over, under its test's own moment:
+   * what its page fetched named more than its test read (see "After a
+   * verdict" above). Filed by the caller, exactly as it files the run.
+   */
+  refile?: (row: ProviderScan) => void
 }
 
 /** How often a held run looks again. */
@@ -168,6 +193,43 @@ export interface ScanService {
    * from a cancelled or superseded scan, or the background tester's.
    */
   busy(): boolean
+}
+
+/** A one-provider row, as the background tester files it and a run files a source again. */
+function rowFor(titleKey: string, providerId: string, at: number, measured: Measured): ProviderScan {
+  const scan: ProviderScan = {
+    titleKey,
+    at,
+    verdicts: { [providerId]: measured.verdict },
+    testedAt: { [providerId]: at },
+  }
+  if (measured.ms !== null) scan.timings = { [providerId]: measured.ms }
+  if (measured.quality !== null) {
+    scan.qualities = { [providerId]: measured.quality }
+    scan.qualityKinds = { [providerId]: measured.qualityKind ?? 'floor' }
+  }
+  if (measured.audio !== null && measured.audio.length > 0) scan.audio = { [providerId]: measured.audio }
+  if (measured.reason !== null) scan.reasons = { [providerId]: measured.reason }
+  if (measured.delivery !== null) scan.delivery = { [providerId]: measured.delivery }
+  return scan
+}
+
+/**
+ * A measurement with what the film's ladder adds to it, or null when it adds
+ * nothing. The offer is taken over a floor at or below it, never over an
+ * offer, as a play takes its source's list (`withQualityReading`); the audio
+ * only where none was known.
+ */
+function withLadder(measured: Measured, offer: { quality: number | null; audio: string[] }): Measured | null {
+  const quality = offer.quality
+  const takesQuality = quality !== null && measured.qualityKind !== 'offered' && quality >= (measured.quality ?? 0)
+  const takesAudio = offer.audio.length > 0 && (measured.audio ?? []).length === 0
+  if (!takesQuality && !takesAudio) return null
+  return {
+    ...measured,
+    ...(takesQuality ? { quality, qualityKind: 'offered' as const } : {}),
+    ...(takesAudio ? { audio: offer.audio } : {}),
+  }
 }
 
 export function createScanService(options: ScanServiceOptions): ScanService {
@@ -246,18 +308,40 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       loading -= 1
     }
     const streamed = result.verdict === 'stream'
+    if (streamed && result.film.kind === 'other') {
+      // Video arrived, and none of it is the film: a clip, an advert or
+      // another programme in its place. Amber, with the reason in words;
+      // see `scanreason.ts` for why not red. Nothing of it is kept for the
+      // preview, which would show the clip.
+      const reason = wrongVideoReason(result.film, subject.runtimeMinutes ?? null, subject.type === 'tv' ? 'episode' : 'film')
+      return { verdict: verdictForReason(reason), ms: null, quality: null, qualityKind: null, audio: null, reason, delivery: null, requests: [] }
+    }
     if (streamed && result.requests.length > 0) options.onStream?.(titleKey, provider.id, result.requests)
     return {
       verdict: streamed || !result.reason ? 'stream' : verdictForReason(result.reason),
       ms: streamed ? result.timeToMediaMs : null,
       quality: streamed ? result.judgement.best : null,
       qualityKind: streamed ? result.judgement.kind : null,
-      audio: null,
+      audio: streamed ? result.audio : null,
       reason: streamed ? null : result.reason,
       // A stream whose traffic showed nothing identifiable is still an answer
       // (`unknown`), so the tester does not keep coming back to ask.
       delivery: streamed ? (result.delivery ?? 'unknown') : null,
+      requests: streamed ? result.requests : [],
     }
+  }
+
+  const io: StreamFetch = options.fetch ?? { fetchText }
+
+  /**
+   * The film's ladder in what a stream's page fetched, for a stream whose
+   * test read no offer: the measurement with what it adds, or null. See
+   * "After a verdict" in the header. A failure here changes nothing.
+   */
+  const ladderAfterVerdict = async (measured: Measured, runtimeMinutes: number | null): Promise<Measured | null> => {
+    if (measured.verdict !== 'stream' || measured.qualityKind === 'offered' || measured.requests.length === 0) return null
+    const found = await findLadder(measured.requests, io, runtimeMinutes).catch(() => null)
+    return found?.ladder ? withLadder(measured, ladderOffer(found.ladder)) : null
   }
 
   return {
@@ -269,21 +353,10 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       // A scan by hand started, or was cancelled, while this one ran.
       if (token !== before || running) return null
       const at = Date.now()
-      const scan: ProviderScan = {
-        titleKey,
-        at,
-        verdicts: { [provider.id]: measured.verdict },
-        testedAt: { [provider.id]: at },
-      }
-      if (measured.ms !== null) scan.timings = { [provider.id]: measured.ms }
-      if (measured.quality !== null) {
-        scan.qualities = { [provider.id]: measured.quality }
-        scan.qualityKinds = { [provider.id]: measured.qualityKind ?? 'floor' }
-      }
-      if (measured.reason !== null) scan.reasons = { [provider.id]: measured.reason }
-      if (measured.delivery !== null) scan.delivery = { [provider.id]: measured.delivery }
-      if (measured.audio !== null && measured.audio.length > 0) scan.audio = { [provider.id]: measured.audio }
-      return scan
+      // Its ladder before it is filed, rather than filed twice: the
+      // background tester files one row, and nobody is watching it arrive.
+      const better = await ladderAfterVerdict(measured, subject.runtimeMinutes ?? null)
+      return rowFor(titleKey, provider.id, at, better ?? measured)
     },
 
     cancel() {
@@ -318,6 +391,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
       /** What is under test right now, by provider, in the order it started. */
       const inFlight = new Map<string, Job>()
+      /** Set as the run's row is made: a ladder found after that is filed again (`RunOptions.refile`). */
+      let ended = false
 
       const publish = (finished: boolean): void => {
         options.onProgress({
@@ -367,6 +442,32 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       }
 
       /**
+       * A stream's ladder, looked for once its verdict is in and never
+       * waited on: into this run's row while the run is open, filed again
+       * under the test's moment once it is not.
+       */
+      const afterVerdict = (provider: Provider, measured: Measured): void => {
+        const at = testedAt[provider.id]
+        if (at === undefined) return
+        void ladderAfterVerdict(measured, subject.runtimeMinutes ?? null).then((better) => {
+          if (better === null) return
+          if (ended) {
+            runOptions.refile?.(rowFor(titleKey, provider.id, at, better))
+            return
+          }
+          // Settled again since (it cannot be, for a stream, but a row must
+          // never mix two measurements).
+          if (testedAt[provider.id] !== at) return
+          if (better.quality !== null) {
+            qualities[provider.id] = better.quality
+            qualityKinds[provider.id] = better.qualityKind ?? 'floor'
+          }
+          if (better.audio !== null && better.audio.length > 0) audio[provider.id] = better.audio
+          publish(false)
+        })
+      }
+
+      /**
        * One test, and what its result means for the queue.
        *
        * A first test settles the provider's verdict at once, so its dot fills
@@ -385,6 +486,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
 
         if (!job.recheck) {
           settle(job.provider, measured)
+          afterVerdict(job.provider, measured)
           // Not a source that cannot express this title: a missing template is
           // not something a busy line caused, and a second test cannot change it.
           if (measured.verdict === 'dead' && measured.reason?.kind !== 'unsupported') {
@@ -392,6 +494,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           }
         } else if (providerRank(undefined, measured.verdict) <= providerRank(undefined, verdicts[job.provider.id])) {
           settle(job.provider, measured)
+          afterVerdict(job.provider, measured)
         }
         publish(false)
       }
@@ -431,6 +534,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
+      ended = true
       const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
       if (token === mine) running = false
       publish(true)

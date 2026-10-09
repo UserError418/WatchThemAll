@@ -149,6 +149,11 @@ export interface TitleFacts {
   imdbId: string | null
   /** A series' latest aired episode, which a test must not go past. Null for a film. */
   lastAired: EpisodeStub | null
+  /**
+   * TMDB's runtime for the episode tested (null for a film), which the test
+   * holds what plays to (`testruntime.ts`). Absent: the test has none.
+   */
+  runtimeOf?: (episode: { season: number; episode: number } | null) => Promise<number | null>
 }
 
 export interface WatchlistTesterOptions {
@@ -289,9 +294,8 @@ export function createWatchlistTester(options: WatchlistTesterOptions): Watchlis
           season: episode?.season,
           episode: episode?.episode,
           label: plan.titleKey,
-          // As for a scan by hand: whether a stream exists, not whether it is
-          // the right programme. See the note in `ipc.ts`.
-          runtimeMinutes: null,
+          // As for a scan by hand: what tells the title from a clip.
+          runtimeMinutes: (await facts.runtimeOf?.(episode ?? null)) ?? null,
         },
         plan.provider,
       )
