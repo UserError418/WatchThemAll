@@ -824,6 +824,24 @@ export type ScanReason =
   | { kind: 'unsupported' }
 
 /**
+ * What a quality reading is worth: what the label may claim.
+ *
+ * - `offered` — a list of what the source offers was read: an HLS master's or
+ *   a DASH manifest's renditions, the player's own list of qualities or
+ *   streams, or one whole file with nothing else on offer. Its best is the
+ *   source's best, and the label reads plainly: "1080p".
+ * - `floor` — one rendition was seen: the one a player happened to start on,
+ *   read from its stream header or its decoded picture. An adaptive player
+ *   starts low and climbs, so the best is at least this, and the label says
+ *   so: "720p+".
+ *
+ * Named for the claim rather than the reading, because the aggregation and
+ * the label act on the claim: a floor never displaces an offer
+ * (`sourceresults.ts`).
+ */
+export type QualityKind = 'offered' | 'floor'
+
+/**
  * What the tests know about every provider for one title.
  *
  * It started as one scan measured at one moment and replaced whole. The
@@ -865,6 +883,11 @@ export interface ProviderScan {
    * `streamquality.ts`. Absent for a provider means unknown, not low.
    */
   qualities?: Record<string, number>
+  /**
+   * What each of `qualities` is worth: the best on offer, or only a floor
+   * under it (`QualityKind`). A quality without one is a floor.
+   */
+  qualityKinds?: Record<string, QualityKind>
   /**
    * How each streaming provider's video arrived. Only providers whose verdict
    * is `stream` have one.

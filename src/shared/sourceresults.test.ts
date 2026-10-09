@@ -121,6 +121,16 @@ describe('isSourceResult', () => {
     // The phone filed one until 2.0.18, casting a download.
     expect(isSourceResult(result({ providerId: 'downloaded', origin: 'play', delivery: 'segmented' }))).toBe(false)
   })
+
+  it('takes a quality with its kind, without one, and with a kind from a newer build', () => {
+    const good = result({ quality: 1080 })
+    expect(isSourceResult({ ...good, qualityKind: 'offered' })).toBe(true)
+    expect(isSourceResult(good)).toBe(true)
+    // Dropping the whole result over a word this build does not know would
+    // lose a newer device's measurement; it is read as a floor instead.
+    expect(isSourceResult({ ...good, qualityKind: 'exact' })).toBe(true)
+    expect(isSourceResult({ ...good, qualityKind: 1 })).toBe(false)
+  })
 })
 
 describe('mergeResults', () => {
@@ -130,6 +140,23 @@ describe('mergeResults', () => {
     const merged = mergeResults(mine, theirs, now)
     expect(merged).toEqual([mine[0], theirs[0], mine[1]])
     expect(mergeResults(theirs, mine, now)).toEqual(merged)
+  })
+
+  it('keeps the copy of a re-filed play that knows more, in either order: an offer over a floor of the same class', () => {
+    const play = { origin: 'play' as const, ms: 2_000, quality: 1080 }
+    const picture = result({ ...play, qualityKind: 'floor' })
+    const ladder = result({ ...play, qualityKind: 'offered' })
+    expect(mergeResults([picture], [ladder], now)).toEqual([ladder])
+    expect(mergeResults([ladder], [picture], now)).toEqual([ladder])
+  })
+
+  it('keeps a record carrying a kind whole, as a build from before kinds would store it', () => {
+    // What an older build does with a newer record: validates the fields it
+    // knows and keeps the object as it came. Merged back, nothing is lost.
+    const newer = result({ quality: 1080, qualityKind: 'offered' })
+    const roundTrip = JSON.parse(JSON.stringify(newer)) as unknown
+    expect(isSourceResult(roundTrip)).toBe(true)
+    expect(mergeResults([], [roundTrip as SourceResult], now)).toEqual([newer])
   })
 })
 
@@ -142,6 +169,7 @@ describe('resultsFromScan', () => {
       testedAt: { a: now - MINUTE, b: now },
       timings: { a: 2_000 },
       qualities: { a: 1080 },
+      qualityKinds: { a: 'offered' },
       reasons: { b: { kind: 'error', status: 404 } },
       delivery: { a: 'segmented' },
     }
@@ -158,6 +186,7 @@ describe('resultsFromScan', () => {
         verdict: 'stream',
         ms: 2_000,
         quality: 1080,
+        qualityKind: 'offered',
         delivery: 'segmented',
       },
       {
@@ -237,27 +266,126 @@ describe('titleResults', () => {
     expect(read([result({ ...refused, ago: 5 * HOUR }), tested]).scan?.verdicts).toEqual({ a: 'stream' })
   })
 
-  it('takes the median time of the latest successes, and the best quality among them', () => {
+  it('takes the median time of the latest successes', () => {
     const history = [
-      result({ ms: 9_000, quality: 1080, ago: 7 * HOUR }),
+      result({ ms: 9_000, ago: 7 * HOUR }),
       result({ ms: 1_000, ago: 6 * HOUR }),
-      result({ ms: 2_000, quality: 720, ago: 5 * HOUR }),
+      result({ ms: 2_000, ago: 5 * HOUR }),
       result({ ms: 30_000, ago: 4 * HOUR }),
       result({ ms: 3_000, origin: 'play', ago: 3 * HOUR }),
-      result({ origin: 'play', quality: 480, ago: 2 * HOUR }),
+      result({ origin: 'play', ago: 2 * HOUR }),
       result({ ms: 2_500, origin: 'preview', ago: HOUR }),
     ]
-    const scan = read(history).scan
     // The latest five: 2 500, (none), 3 000, 30 000, 2 000 → median of four.
-    expect(scan?.timings).toEqual({ a: 2_750 })
-    // The 1080 is the sixth newest: outside the sample.
-    expect(scan?.qualities).toEqual({ a: 720 })
+    expect(read(history).scan?.timings).toEqual({ a: 2_750 })
+  })
+
+  describe('quality', () => {
+    const offered = { qualityKind: 'offered' as const }
+    const floor = { qualityKind: 'floor' as const }
+
+    it("is not evicted by the successes that carry none: previews, plays, casts", () => {
+      // The test read the ladder; six quality-less successes came after it.
+      // Taken from the latest five successes, the quality used to vanish.
+      const history = [
+        result({ quality: 1080, ...offered, ago: 8 * HOUR }),
+        ...[6, 5, 4, 3, 2, 1].map((hours) => result({ origin: hours % 2 ? 'preview' : 'play', ago: hours * HOUR })),
+      ]
+      const scan = read(history).scan
+      expect(scan?.qualities).toEqual({ a: 1080 })
+      expect(scan?.qualityKinds).toEqual({ a: 'offered' })
+    })
+
+    it('is the newest offer, and a floor never displaces it, even a higher one', () => {
+      const history = [
+        result({ quality: 1080, ...offered, ago: 5 * HOUR }),
+        result({ quality: 720, ...offered, ago: 3 * HOUR }),
+        // A play's first minute decoded more than the ladder listed: a
+        // different server, or the ladder read on a bad minute. One rendition
+        // at one moment does not overrule the list.
+        result({ origin: 'play', quality: 1080, ...floor, ago: HOUR }),
+      ]
+      const scan = read(history).scan
+      expect(scan?.qualities).toEqual({ a: 720 })
+      expect(scan?.qualityKinds).toEqual({ a: 'offered' })
+    })
+
+    it('is, with no offer, the best floor of the latest readings, as a floor', () => {
+      const history = [
+        result({ quality: 1080, ...floor, ago: 9 * HOUR }),
+        ...[5, 4, 3, 2, 1].map((hours) => result({ origin: 'play', quality: hours === 3 ? 720 : 480, ...floor, ago: hours * HOUR })),
+      ]
+      const scan = read(history).scan
+      // The 1080 is the sixth newest reading: outside the sample.
+      expect(scan?.qualities).toEqual({ a: 720 })
+      expect(scan?.qualityKinds).toEqual({ a: 'floor' })
+    })
+
+    it('reads a result from before kinds were kept as a floor', () => {
+      const old = result({ quality: 1080, ago: 2 * HOUR })
+      expect(read([old]).scan?.qualityKinds).toEqual({ a: 'floor' })
+      // So an offer read since, even a lower one, is the label.
+      const scan = read([old, result({ quality: 720, ...offered, ago: HOUR })]).scan
+      expect(scan?.qualities).toEqual({ a: 720 })
+      expect(scan?.qualityKinds).toEqual({ a: 'offered' })
+    })
+
+    it("reads a kind this build does not know as a floor", () => {
+      const newer = result({ quality: 1080, qualityKind: 'exact' as never })
+      expect(read([newer]).scan?.qualityKinds).toEqual({ a: 'floor' })
+    })
+
+    it("falls back to the season's readings, not the verdict's scope: a play of the episode decides its verdict", () => {
+      // The season's test read the ladder on episode 1. Auto-next played
+      // episode 2, and that quality-less play is the episode's whole scope
+      // for the verdict. The quality still comes from the season.
+      const history = [
+        result({ episode: 1, quality: 1080, ...offered, ago: 3 * HOUR }),
+        result({ episode: 2, origin: 'play', ago: HOUR }),
+      ]
+      const scan = read(history, { season: 1, episode: 2 }).scan
+      expect(scan?.verdicts).toEqual({ a: 'stream' })
+      expect(scan?.qualities).toEqual({ a: 1080 })
+      expect(scan?.qualityKinds).toEqual({ a: 'offered' })
+    })
+
+    it("prefers the episode's own readings to its season's", () => {
+      const history = [
+        result({ episode: 1, quality: 1080, ...offered, ago: 3 * HOUR }),
+        result({ episode: 2, origin: 'play', quality: 720, ...floor, ago: HOUR }),
+      ]
+      expect(read(history, { season: 1, episode: 2 }).scan?.qualities).toEqual({ a: 720 })
+    })
+
+    it('never falls back to another season, nor to results of the whole title', () => {
+      const history = [
+        result({ season: 2, episode: 1, quality: 1080, ...offered, ago: 3 * HOUR }),
+        result({ season: null, episode: null, quality: 1080, ago: 2 * HOUR }),
+        result({ season: 1, episode: 1, origin: 'play', ago: HOUR }),
+      ]
+      const scan = read(history, { season: 1, episode: 1 }).scan
+      expect(scan?.verdicts).toEqual({ a: 'stream' })
+      expect(scan?.qualities).toEqual({})
+    })
+
+    it("is a film's from the whole title, which is all it has", () => {
+      const film = (parts: Partial<SourceResult> & { ago?: number }) => result({ titleKey: 'movie:tt2', season: null, episode: null, ...parts })
+      const history = [film({ quality: 1080, ...offered, ago: 2 * HOUR }), film({ origin: 'preview', ago: HOUR })]
+      const { scan } = titleResults({ results: history, titleKey: 'movie:tt2', episode: null, here: 'desktop', now })
+      expect(scan?.qualities).toEqual({ a: 1080 })
+    })
+
+    it("is read from this kind of device's results only", () => {
+      const history = [result({ ...PHONE, quality: 1080, ...offered, ago: 2 * HOUR }), result({ quality: 480, ...floor, ago: HOUR })]
+      expect(read(history).scan?.qualities).toEqual({ a: 480 })
+    })
   })
 
   it('has no time or quality beside anything but a green', () => {
     const scan = read([result({ ms: 1_000, quality: 1080, ago: 2 * HOUR }), result({ verdict: 'unsure', ago: HOUR })]).scan
     expect(scan?.timings).toEqual({})
     expect(scan?.qualities).toEqual({})
+    expect(scan?.qualityKinds).toEqual({})
   })
 
   it('reads two desktops as one kind: what one measured decides for the other', () => {

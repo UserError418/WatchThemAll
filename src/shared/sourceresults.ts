@@ -51,12 +51,18 @@
  *    controlled measurement. The newest strong result decides. One weak
  *    failure newer than it turns the source amber, and two in a row turn it
  *    red.
- * 4. **Speed and quality from several results.** The time to stream is the
- *    median of the latest successes (`SAMPLE_SIZE`), so one slow evening does not move a
- *    source down. The quality is the best of them, since a player's first
- *    picture is often a lower rung of the stream's ladder.
+ * 4. **Speed from several results.** The time to stream is the median of
+ *    the latest successes (`SAMPLE_SIZE`), so one slow evening does not move
+ *    a source down.
+ * 5. **Quality from the results that carry one, by its own scope.** See
+ *    `qualityOf`: the newest offer for this episode (else its season), and
+ *    failing any offer the best floor among the latest readings. Most
+ *    successes carry no quality (a preview, a play on the phone, a cast), and
+ *    when the quality was taken from the latest successes of the verdict's
+ *    scope, those evicted the test that read it: the quality vanished, or
+ *    fell to a play's first picture, on exactly the sources being watched.
  *
- * 5. **What a television said is its own fact.** A cast's answer is read
+ * 6. **What a television said is its own fact.** A cast's answer is read
  *    apart from the rules above, across the whole title and both kinds of
  *    device, newest first, and a test never replaces it (2.0.18; see
  *    `titleResults`).
@@ -76,6 +82,7 @@ import type {
   DeviceKind,
   ProbeVerdict,
   ProviderScan,
+  QualityKind,
   ScanReason,
   SharedScan,
   StreamDelivery,
@@ -95,7 +102,10 @@ export const KEEP_PER_EPISODE = 10
  * background tester and everything watched in it.
  */
 export const MAX_RESULTS = 4_000
-/** How many of the latest successes the speed and quality are taken from. */
+/**
+ * How many of the latest successes the speed is taken from, and how many of
+ * the latest quality readings a floor is the best of.
+ */
 export const SAMPLE_SIZE = 5
 
 /**
@@ -144,6 +154,18 @@ export interface SourceResult {
   ms?: number
   /** A quality class (`streamquality.ts`). Successes only. */
   quality?: number
+  /**
+   * What `quality` is worth: the best on offer, or a floor under it
+   * (`QualityKind`).
+   *
+   * Absent from results filed before it was kept (2026-10), and those are
+   * read as floors: until then a reading of one rendition — a stream's
+   * header, a play's first picture — was filed as the best, and nothing tells
+   * which of them were. They age out with `KEEP_MS`. A kind this build does
+   * not know, from a newer one, is read as a floor too: a label may
+   * understate, but must not claim an offer it cannot vouch for.
+   */
+  qualityKind?: QualityKind
   /** Why a failure failed, where it could tell. */
   reason?: ScanReason
   delivery?: StreamDelivery
@@ -202,6 +224,9 @@ export function isSourceResult(value: unknown): value is SourceResult {
     VERDICTS.includes(r.verdict) &&
     optional(r.ms, count) &&
     optional(r.quality, count) &&
+    // Any word, not only the kinds this build knows: a newer build's kind
+    // must not get its whole result dropped here. Read as a floor (`isOffer`).
+    optional(r.qualityKind, (v) => typeof v === 'string') &&
     optional(r.reason, (v) => typeof v === 'object' && v !== null && typeof (v as { kind?: unknown }).kind === 'string') &&
     optional(r.delivery, (v) => DELIVERIES.includes(v)) &&
     optional(r.cast, (v) => CASTS.includes(v))
@@ -246,18 +271,30 @@ export function pruneResults(results: readonly SourceResult[], now: number): Sou
  *
  * A result is filed again under its own key only to add what was learned
  * later: the desktop re-files a play with the best picture of its first
- * minute. Which copy survived used to be whichever came second, and in a sync
- * that is the other device's file, so a play uploaded before its quality was
- * known came back over the re-filed copy and stayed. Decided by content, both
- * devices keep the same copy in either order: the higher quality, then the
- * one with a time, and for two that still differ any fixed rule (the larger
- * text) so that they agree.
+ * minute, and both platforms with the top of the player's own list once it
+ * answers. Which copy survived used to be whichever came second, and in a
+ * sync that is the other device's file, so a play uploaded before its
+ * quality was known came back over the re-filed copy and stayed. Decided by
+ * content, both devices keep the same copy in either order: the higher
+ * quality, then an offer over a floor, then the one with a time, and for two
+ * that still differ any fixed rule (the larger text) so that they agree.
+ *
+ * A play is only ever re-filed with a quality at least as high, and at the
+ * same quality only from a floor to an offer, so a build from before kinds
+ * were kept, which compares the text there, keeps the same copy: "offered"
+ * sorts above "floor".
  */
 function knowsMore(a: SourceResult, b: SourceResult): SourceResult {
   const quality = (result: SourceResult): number => result.quality ?? -1
   if (quality(a) !== quality(b)) return quality(a) > quality(b) ? a : b
+  if (isOffer(a) !== isOffer(b)) return isOffer(a) ? a : b
   if ((a.ms === undefined) !== (b.ms === undefined)) return a.ms === undefined ? b : a
   return JSON.stringify(a) >= JSON.stringify(b) ? a : b
+}
+
+/** Whether a result's quality is the best on offer rather than a floor under it. See `SourceResult.qualityKind`. */
+function isOffer(result: SourceResult): boolean {
+  return result.quality !== undefined && result.qualityKind === 'offered'
 }
 
 /** Both devices' histories as one: every result either had, bounded. */
@@ -327,6 +364,7 @@ export function resultsFromScan(
     }
     setOptional(result, 'ms', verdict === 'stream' ? scan.timings?.[providerId] : undefined)
     setOptional(result, 'quality', verdict === 'stream' ? scan.qualities?.[providerId] : undefined)
+    setOptional(result, 'qualityKind', result.quality !== undefined ? scan.qualityKinds?.[providerId] : undefined)
     setOptional(result, 'reason', verdict === 'stream' ? undefined : scan.reasons?.[providerId])
     setOptional(result, 'delivery', scan.delivery?.[providerId])
     setOptional(result, 'cast', scan.casts?.[providerId])
@@ -425,18 +463,65 @@ function inScope(
   return results
 }
 
-/** Rule 4: the median time to stream and the best quality of the latest successes. */
-function measurements(results: readonly SourceResult[]): { ms?: number; quality?: number } {
-  const latest = results
+/** Rule 4: the median time to stream of the latest successes. */
+function startTime(results: readonly SourceResult[]): number | undefined {
+  const times = results
     .filter((r) => r.verdict === 'stream')
     .sort((a, b) => b.at - a.at)
     .slice(0, SAMPLE_SIZE)
-  const times = latest.flatMap((r) => (r.ms === undefined ? [] : [r.ms]))
-  const qualities = latest.flatMap((r) => (r.quality === undefined ? [] : [r.quality]))
-  const out: { ms?: number; quality?: number } = {}
-  if (times.length > 0) out.ms = median(times)
-  if (qualities.length > 0) out.quality = Math.max(...qualities)
-  return out
+    .flatMap((r) => (r.ms === undefined ? [] : [r.ms]))
+  return times.length > 0 ? median(times) : undefined
+}
+
+/**
+ * Rule 5: the quality to show for one source, from this kind of device's
+ * results for it, and what it is worth.
+ *
+ * Only results that carry a quality are read, so the many that do not
+ * cannot crowd out the few that do. Its scope is its own, not the verdict's:
+ * this episode's readings, else its season's. A play of the episode makes
+ * its results the verdict's scope, and plays usually carry no quality; this
+ * way the season's test still names the quality after the next episode
+ * starts. A film has no season, so its scope is the title. Never another
+ * season: a source can serve one season at 1080p and another at 480p, and
+ * the label is about what plays here (the owner, 2026-10-09: "offered for
+ * this episode, recently, on this kind of device").
+ *
+ * Within the scope, the newest offer is the answer: what the source lists
+ * is its best. A floor never displaces an offer, even a higher floor,
+ * because a floor is one rendition seen at one moment and the offer is the
+ * whole list. With no offer, the best floor of the latest `SAMPLE_SIZE`
+ * readings, still as a floor: an adaptive player's first picture is often a
+ * lower rung, and the best of several is closer to what the source has.
+ */
+function qualityOf(
+  results: readonly SourceResult[],
+  episode: { season: number; episode: number } | null,
+): { quality: number; kind: QualityKind } | null {
+  const readings = qualityScope(
+    results.filter((r) => r.verdict === 'stream' && r.quality !== undefined),
+    episode,
+  ).sort((a, b) => b.at - a.at)
+  const offer = readings.find(isOffer)
+  if (offer !== undefined) return { quality: offer.quality!, kind: 'offered' }
+  const latest = readings.slice(0, SAMPLE_SIZE)
+  if (latest.length === 0) return null
+  return { quality: Math.max(...latest.map((r) => r.quality!)), kind: 'floor' }
+}
+
+/**
+ * The results a quality is read from (rule 5): the episode's, else its
+ * season's. Unlike `inScope`, never the whole title for an episode, which
+ * would be other seasons and results from before episodes were kept.
+ */
+function qualityScope(
+  results: readonly SourceResult[],
+  episode: { season: number; episode: number } | null,
+): SourceResult[] {
+  if (episode === null) return [...results]
+  const exact = results.filter((r) => r.season === episode.season && r.episode === episode.episode)
+  if (exact.length > 0) return exact
+  return results.filter((r) => r.season === episode.season)
 }
 
 function median(values: readonly number[]): number {
@@ -509,6 +594,7 @@ export function titleResults(input: {
     reasons: {},
     timings: {},
     qualities: {},
+    qualityKinds: {},
     delivery: {},
     casts: {},
     castAt: {},
@@ -534,9 +620,17 @@ export function titleResults(input: {
       row.testedAt[providerId] = own.at
       if (own.reason) row.reasons[providerId] = own.reason
       if (own.verdict === 'stream') {
-        const { ms, quality } = measurements(ownScope)
+        const ms = startTime(ownScope)
         if (ms !== undefined) row.timings[providerId] = ms
-        if (quality !== undefined) row.qualities[providerId] = quality
+        // From every result here, not the verdict's scope: see `qualityOf`.
+        const quality = qualityOf(
+          results.filter((r) => r.deviceKind === here),
+          episode,
+        )
+        if (quality !== null) {
+          row.qualities[providerId] = quality.quality
+          row.qualityKinds[providerId] = quality.kind
+        }
         fillDelivery(row, providerId, ownScope)
       }
       continue
