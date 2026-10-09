@@ -110,6 +110,25 @@ describe('planDownload', () => {
     expect(planned.ok && planned.plan.playlistUrl).toBe('https://cdn/ep.m3u8')
   })
 
+  /** Found by `findLadder`, as a test finds it: an advert's master is passed over by its variant's length. */
+  it("passes over an advert's master to the film's", async () => {
+    const net = fakeNetwork({
+      'https://ads/master.m3u8': { status: 200, body: master.replace('high.m3u8', 'ad-high.m3u8') },
+      'https://ads/ad-high.m3u8': { status: 200, body: clip },
+      'https://cdn/master.m3u8': { status: 200, body: master },
+      'https://cdn/high.m3u8': { status: 200, body: episode },
+    })
+    const planned = await planDownload(
+      [
+        { url: 'https://ads/master.m3u8', headers: H },
+        { url: 'https://cdn/master.m3u8', headers: H },
+      ],
+      net,
+      options,
+    )
+    expect(planned.ok && planned.plan.playlistUrl).toBe('https://cdn/high.m3u8')
+  })
+
   it('refuses DRM and separate audio with a reason', async () => {
     const drm = episode.replace('#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://x"')
     const net = fakeNetwork({ 'https://cdn/drm.m3u8': { status: 200, body: drm } })

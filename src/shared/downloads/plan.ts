@@ -8,7 +8,9 @@
  * fetched is the capture (newest first). A player fetches a master playlist
  * and then the rendition it chose, or goes straight to a rendition. A master
  * is preferred: it is what lets the viewer's quality cap choose. Without one,
- * the rendition the player fetched is the only one known.
+ * the rendition the player fetched is the only one known. Finding the film's
+ * master is shared with the source tests (`filmladder.ts`), which ask it what
+ * the source offers.
  *
  * ## The right film, before anything is kept
  *
@@ -26,10 +28,12 @@
  * each segment as it arrives, so the local playlist has no key line.
  */
 
+import { findLadder, type LadderRefusal } from '../filmladder'
+import { somethingElse } from '../rightfilm'
 import { lengthVerdict } from '../runtimecheck'
 import { parseMediaPlaylist, type MediaPlaylist, type UnfitReason } from '../segmentwindow'
 import type { CapturedRequest, StreamFetch } from '../streamfetch'
-import { masterVariants, qualityClass, type Variant } from '../streamquality'
+import { qualityClass, type Variant } from '../streamquality'
 import type { QualityCap } from './types'
 
 /** One segment to fetch, as `plan.json` keeps it. */
@@ -84,16 +88,6 @@ export interface PlanOptions {
   kind: 'film' | 'episode'
 }
 
-/** Enough of a response to see `#EXTM3U` and whether it is a master. */
-const SNIFF_BYTES = 16 * 1024
-
-/**
- * How many captured requests are sniffed. The capture keeps playlists and
- * the source's API calls, not its segments, so the chain that led to the
- * stream is well inside this.
- */
-const CANDIDATES_TRIED = 30
-
 /** The file names inside a download's folder. */
 export const PLAN_FILE = 'plan.json'
 export const PLAYLIST_FILE = 'index.m3u8'
@@ -134,10 +128,6 @@ export function hasSeparateAudio(master: string): boolean {
   return /^#EXT-X-MEDIA:(?=[^\n]*TYPE=AUDIO)(?=[^\n]*URI=)/m.test(master)
 }
 
-function minutes(seconds: number): string {
-  return `${Math.max(1, Math.round(seconds / 60))} min`
-}
-
 /** Why a playlist cannot be downloaded, in the words the Downloads page shows. */
 export function unfitReason(reason: UnfitReason | 'separate-audio' | 'nothing', source: string): string {
   switch (reason) {
@@ -158,9 +148,17 @@ function lengthFits(seconds: number, options: PlanOptions): boolean {
   return lengthVerdict(seconds, options.expectedMinutes) !== 'implausible'
 }
 
-function wrongLengthReason(seconds: number, options: PlanOptions): string {
-  const expected = options.expectedMinutes === null ? '' : ` for a ${options.expectedMinutes} min ${options.kind}`
-  return `${options.sourceName} plays something else here (a ${minutes(seconds)} video${expected})`
+/** The words for a refusal, for when nothing in the capture could be planned. */
+function refusalText(refused: LadderRefusal | null, options: PlanOptions): string {
+  if (refused === null) return unfitReason('nothing', options.sourceName)
+  switch (refused.kind) {
+    case 'unfit':
+      return unfitReason(refused.reason, options.sourceName)
+    case 'wrong-length':
+      return `${options.sourceName} ${somethingElse(refused.seconds, options.expectedMinutes, options.kind)}`
+    case 'caller':
+      return refused.reason
+  }
 }
 
 /** The key line's IV attribute, or null. */
@@ -210,66 +208,51 @@ export function planFrom(
 /**
  * The film's stream in a capture, as a plan; or why this source cannot be
  * downloaded, in words.
+ *
+ * The film's master is found the way a test finds it (`findLadder`), with the
+ * variant the quality cap allows as the one its length is checked on. A
+ * master whose sound is kept apart is passed over: a video-only rendition
+ * would download as a silent film. The chosen variant must then be one a
+ * download can fetch and join (`parseMediaPlaylist`); if it is not, the
+ * renditions the page fetched directly are tried, as when no master was seen.
+ * Until 2026-10 such a variant sent the plan on to the next master in the
+ * capture instead; a capture with two masters of the film's length is not
+ * one that has been seen.
  */
 export async function planDownload(requests: readonly CapturedRequest[], io: StreamFetch, options: PlanOptions): Promise<PlanOutcome> {
-  const masters: Array<{ body: string; url: string; headers: Record<string, string> }> = []
-  const media: Array<{ playlist: MediaPlaylist; url: string; headers: Record<string, string> }> = []
+  const found = await findLadder(requests, io, options.expectedMinutes, {
+    choose: (variants) => pickForCap(variants, options.cap),
+    refuseMaster: (body) =>
+      hasSeparateAudio(body) ? { kind: 'caller', reason: unfitReason('separate-audio', options.sourceName) } : null,
+  })
   /** Why the most telling candidate was refused, for when nothing qualifies. */
-  let refused: string | null = null
-  const tried = new Set<string>()
+  let refused = found.refused
 
-  for (const request of requests) {
-    if (tried.size >= CANDIDATES_TRIED) break
-    if (tried.has(request.url)) continue
-    tried.add(request.url)
-    const head = await io.fetchText(request.url, request.headers, SNIFF_BYTES)
-    if (head === null || (head.status !== 200 && head.status !== 206)) continue
-    if (!head.body.trimStart().startsWith('#EXTM3U')) continue
-    const text = head.body.length < SNIFF_BYTES ? head : await io.fetchText(request.url, request.headers)
-    if (text === null || text.status !== 200) continue
-    const parsed = parseMediaPlaylist(text.body, request.url)
-    if (parsed.ok) media.push({ playlist: parsed.playlist, url: request.url, headers: request.headers })
-    else if (parsed.reason === 'master') masters.push({ body: text.body, url: request.url, headers: request.headers })
-    else if (parsed.reason !== 'not-a-playlist') refused ??= unfitReason(parsed.reason, options.sourceName)
-  }
-
-  // A master first: it is what the quality cap chooses from.
-  for (const master of masters) {
-    if (hasSeparateAudio(master.body)) {
-      refused ??= unfitReason('separate-audio', options.sourceName)
-      continue
-    }
-    const variant = pickForCap(masterVariants(master.body, master.url), options.cap)
-    if (variant === null) continue
-    const text = await io.fetchText(variant.url, master.headers)
-    if (text === null || text.status !== 200) continue
-    const parsed = parseMediaPlaylist(text.body, variant.url)
-    if (!parsed.ok) {
-      refused ??= unfitReason(parsed.reason, options.sourceName)
-      continue
-    }
-    if (!lengthFits(parsed.playlist.totalSeconds, options)) {
-      refused = wrongLengthReason(parsed.playlist.totalSeconds, options)
-      continue
-    }
-    const plan = planFrom(parsed.playlist, variant.url, master.headers, {
-      width: variant.width,
-      height: variant.height,
-      bandwidth: variant.bandwidth || null,
-    })
+  // A master first: it is what the quality cap chose from.
+  if (found.ladder !== null) {
+    const { chosen } = found.ladder
+    const parsed = parseMediaPlaylist(found.ladder.playlist, chosen.url)
+    const plan = parsed.ok
+      ? planFrom(parsed.playlist, chosen.url, found.ladder.headers, {
+          width: chosen.width,
+          height: chosen.height,
+          bandwidth: chosen.bandwidth || null,
+        })
+      : null
     if (plan) return { ok: true, plan }
+    if (!parsed.ok) refused ??= { kind: 'unfit', reason: parsed.reason }
   }
 
   // Only renditions: the newest one that is the film.
-  for (const found of media) {
-    if (!lengthFits(found.playlist.totalSeconds, options)) {
-      refused = wrongLengthReason(found.playlist.totalSeconds, options)
+  for (const rendition of found.renditions) {
+    if (!lengthFits(rendition.playlist.totalSeconds, options)) {
+      refused = { kind: 'wrong-length', seconds: rendition.playlist.totalSeconds }
       continue
     }
-    const plan = planFrom(found.playlist, found.url, found.headers, { width: null, height: null, bandwidth: null })
+    const plan = planFrom(rendition.playlist, rendition.url, rendition.headers, { width: null, height: null, bandwidth: null })
     if (plan) return { ok: true, plan }
   }
-  return { ok: false, reason: refused ?? unfitReason('nothing', options.sourceName) }
+  return { ok: false, reason: refusalText(refused, options) }
 }
 
 /**
