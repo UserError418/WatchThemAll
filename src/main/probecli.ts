@@ -746,9 +746,11 @@ export async function runQualityCli(providers: Provider[], argv: string[]): Prom
     }
 
     const marks = mine.map((r) => QUALITY_MARK[r.judgement.outcome]).join(' ')
-    const known = mine.map((r) => r.judgement.best).filter((b): b is number => b !== null)
+    const known = mine.map((r) => r.judgement).filter((j) => j.best !== null)
     const streamed = mine.filter((r) => r.judgement.outcome !== 'no-stream').length
-    const best = known.length > 0 ? `${Math.max(...known)}p` : '—'
+    // The best reading across titles, an offer before a floor of the same class.
+    const top = [...known].sort((a, b) => b.best! - a.best! || Number(b.kind === 'offered') - Number(a.kind === 'offered'))[0]
+    const best = top ? formatQuality(top.best!, top.kind ?? 'floor') : '—'
     console.log(
       `  ${marks}  ${provider.id.padEnd(16)} best ${best.padEnd(6)} known on ${known.length}/${streamed} streamed`,
     )

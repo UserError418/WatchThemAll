@@ -18,8 +18,9 @@
  * ## Where results come from
  *
  * - `test`: "Test all sources" and the background tester, as before.
- * - `play`: the player, when a source really streams (with its time, and on
- *   the desktop its picture), and when the source's own servers declare a
+ * - `play`: the player, when a source really streams (with its time, the
+ *   top of its player's own list of qualities where that can be reached, and
+ *   on the desktop its picture), and when the source's own servers declare a
  *   failure: an error status for its page or its backend, or its video
  *   refused. A slow source, a dropped network or a crash is not a result.
  *   The phone files successes only. See `PlayMeasurement`. A cast is filed

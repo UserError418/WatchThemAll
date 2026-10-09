@@ -211,9 +211,13 @@ is how the cast feature already decides what it can hand a television.
 streams, the scan reads its oldest few playlists the same way — the
 master comes first, and it is the only playlist that lists renditions with
 their sizes — and parses them with the desktop's own parser
-(`src/shared/streamquality.ts`). A source with no master serves one rendition,
-and that rendition states its own size in its first bytes: the fMP4 init
-segment, or the H.264 header at the start of the first MPEG-TS segment. The
+(`src/shared/streamquality.ts`). Without a master, the rendition being played
+states its own size in its first bytes: the fMP4 init
+segment, or the H.264 header at the start of the first MPEG-TS segment. That
+size is a floor, shown as "720p+", never the source's best: a playlist that
+would not answer may have been the master (MoviesAPI read 240p here from one
+rung, where its ladder is 720p), and some sources keep their other qualities
+as separate streams that no master lists. The
 scan fetches the first 64 KB of it (`capture.peekBytes`, which asks
 `fetchText` for base64 so the binary arrives intact) and reads it with the
 shared parsers (`src/shared/streamheader.ts`), but only from a playlist at least
@@ -230,7 +234,10 @@ cross-origin frame, so those sources show no quality here. And VidSrc's
 playlists answer every re-request from the phone with 403 "ip … not in range",
 so VidSrc shows no quality on the phone while the desktop reads its ladder.
 Videasy (fMP4 init segment), VidFlix and 111Movies (first TS segment) read the
-same on both.
+same on both. Plays narrow both gaps where a source's player can be reached:
+once the film plays, the overlay asks the film relay for the player's own list
+of qualities (the same answer its quality menu shows) and the bridge files its
+top with the play as what the source offers (`WtaPlayerApi.offered`).
 
 ### The chrome bar hides only while our controls have the film
 
