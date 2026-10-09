@@ -18,7 +18,7 @@
  * from the list once it was over.
  */
 
-import type { ProbeVerdict, ProviderScanProgress, ScanInFlight, ScanReason, TitleRef } from '@shared/ipc'
+import type { ProbeVerdict, ProviderScanProgress, QualityKind, ScanInFlight, ScanReason, TitleRef } from '@shared/ipc'
 import { titleKey } from '@shared/titlekey'
 import { liveRunApplies, runIsAbout, type EpisodeRef, type RunSubject } from './liverun'
 
@@ -32,6 +32,8 @@ class ProviderScanState {
   timings = $state<Record<string, number>>({})
   /** Best quality class offered, for each provider whose stream says. */
   qualities = $state<Record<string, number>>({})
+  /** What each of `qualities` is worth: the best on offer, or a floor under it. */
+  qualityKinds = $state<Record<string, QualityKind>>({})
   /** Why each settled source that did not stream failed. */
   reasons = $state<Record<string, ScanReason>>({})
 
@@ -67,6 +69,7 @@ class ProviderScanState {
       this.verdicts = progress.verdicts
       this.timings = progress.timings
       this.qualities = progress.qualities
+      this.qualityKinds = progress.qualityKinds
       this.reasons = progress.reasons
       this.done = progress.done
       this.total = progress.total
@@ -126,6 +129,7 @@ class ProviderScanState {
     this.verdicts = {}
     this.timings = {}
     this.qualities = {}
+    this.qualityKinds = {}
     this.reasons = {}
     this.done = 0
     this.cancelled = false
@@ -152,6 +156,7 @@ class ProviderScanState {
     this.verdicts = {}
     this.timings = {}
     this.qualities = {}
+    this.qualityKinds = {}
     this.reasons = {}
     this.done = 0
     this.total = 0

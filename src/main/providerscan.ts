@@ -600,7 +600,15 @@ function bySpeed(providers: Provider[], ms: (id: string) => number | undefined):
   return [...groups.map(listed), ...(untimed.length ? [untimed] : [])]
 }
 
-/** Best quality first, one group per class. */
+/**
+ * Best quality first, one group per class, unknown last.
+ *
+ * By the value alone, whatever its kind: "720p+" and "720p" are one group.
+ * A floor says the source has at least this, an offer that it has this; to
+ * put the offer first would push a source down for how it was measured,
+ * which says nothing about its picture. The next key in the chain decides
+ * between them instead.
+ */
 function byQuality(providers: Provider[], quality: (id: string) => number | undefined): Provider[][] {
   const classes = [...new Set(providers.map((p) => quality(p.id)).filter((q): q is number => q !== undefined))]
   const unknown = providers.filter((p) => quality(p.id) === undefined)

@@ -206,6 +206,16 @@ describe('scanAwareOrder with a source order', () => {
     expect(run(scan, ['quality', 'speed', 'list']).slice(0, 3)).toEqual(['c', 'a', 'b'])
   })
 
+  it('orders by the quality value alone: a floor ties with an offer of its class, and unknown is last', () => {
+    // "720p+" and "720p" are one group, and the next key decides between
+    // them: the kind says what the label may claim, not which is better.
+    const scan = {
+      ...measured({ a: 5_000, b: 1_000, c: 3_000 }, { a: 720, b: 720, c: 1080 }),
+      qualityKinds: { a: 'offered' as const, b: 'floor' as const, c: 'floor' as const },
+    }
+    expect(run(scan, ['quality', 'speed', 'list'])).toEqual(['c', 'b', 'a', 'd', 'e'])
+  })
+
   it('puts a source with no measurement after the measured ones in its tier', () => {
     const scan = measured({ c: 3_000 }, { e: 1080 })
     expect(run(scan, ['speed', 'list', 'quality'])[0]).toBe('c')

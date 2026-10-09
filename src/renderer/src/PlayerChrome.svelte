@@ -19,6 +19,7 @@
     PlayerContext,
     PlayerSuggestion,
     ProbeVerdict,
+    QualityKind,
     ScanInFlight,
     ScanReason,
     TitleProviderState,
@@ -243,6 +244,7 @@
   let scanVerdicts = $state<Record<string, ProbeVerdict>>({})
   let scanTimings = $state<Record<string, number>>({})
   let scanQualities = $state<Record<string, number>>({})
+  let scanQualityKinds = $state<Record<string, QualityKind>>({})
   let scanReasons = $state<Record<string, ScanReason>>({})
   /** How each source's video arrived in the live run — what the cast list fills in from. */
   let scanDelivery = $state<Record<string, StreamDelivery>>({})
@@ -267,6 +269,7 @@
       scanVerdicts = progress.verdicts
       scanTimings = progress.timings
       scanQualities = progress.qualities
+      scanQualityKinds = progress.qualityKinds
       scanReasons = progress.reasons
       scanDelivery = progress.delivery
       scanDone = progress.done
@@ -285,6 +288,7 @@
     scanVerdicts = {}
     scanTimings = {}
     scanQualities = {}
+    scanQualityKinds = {}
     scanReasons = {}
     scanDelivery = {}
     scanning = false
@@ -322,9 +326,12 @@
   const qualities = $derived<Record<string, number>>(
     liveRun ? scanQualities : (sourceState.scan?.qualities ?? {}),
   )
+  const qualityKinds = $derived<Record<string, QualityKind>>(
+    liveRun ? scanQualityKinds : (sourceState.scan?.qualityKinds ?? {}),
+  )
   const reasons = $derived<Record<string, ScanReason>>(liveRun ? scanReasons : (sourceState.scan?.reasons ?? {}))
 
-  /** " · 3.8 s · 1080p" for a source that streamed; see `SourcePicker.svelte`. */
+  /** " · 3.8 s · 1080p", or "720p+" for a floor, for a source that streamed; see `SourcePicker.svelte`. */
   function measurement(id: string): string {
     const shared = sharedNote(id)
     if (verdicts[id] !== 'stream') return shared
@@ -332,7 +339,7 @@
     const quality = qualities[id]
     return (
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
-      (quality !== undefined ? ` · ${formatQuality(quality)}` : '') +
+      (quality !== undefined ? ` · ${formatQuality(quality, qualityKinds[id] ?? 'floor')}` : '') +
       shared
     )
   }

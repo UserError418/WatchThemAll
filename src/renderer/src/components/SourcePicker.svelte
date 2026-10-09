@@ -69,7 +69,7 @@
    * override ours — so a red row stays clickable.
    */
   import { flip } from 'svelte/animate'
-  import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
+  import type { ProbeVerdict, QualityKind, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
   import type { EpisodeStub } from '@shared/types'
   import { airedEpisode } from '@shared/aired'
   import { titleKey } from '@shared/titlekey'
@@ -191,6 +191,10 @@
   const qualities = $derived<Record<string, number>>(
     live ? scan.qualities : (sourceState.scan?.qualities ?? {}),
   )
+  /** What each of those is worth: the best on offer ("1080p"), or a floor ("720p+"). */
+  const qualityKinds = $derived<Record<string, QualityKind>>(
+    scan.matches(media) ? scan.qualityKinds : (sourceState.scan?.qualityKinds ?? {}),
+  )
   /** Why each source that did not stream failed, where the test could tell. Same run again. */
   const reasons = $derived<Record<string, ScanReason>>(live ? scan.reasons : (sourceState.scan?.reasons ?? {}))
 
@@ -240,9 +244,9 @@
 
   /**
    * What the last test measured about one source, for the end of its label:
-   * " · 3.8 s · 1080p". Only for a source that streamed; either part may be
-   * missing, and a missing quality means the stream did not say, not that it
-   * is poor.
+   * " · 3.8 s · 1080p", or "720p+" where only a floor is known. Only for a
+   * source that streamed; either part may be missing, and a missing quality
+   * means the stream did not say, not that it is poor.
    */
   function measurement(id: string): string {
     // Credit a result another of the user's devices measured — not during a
@@ -253,7 +257,8 @@
     const quality = qualities[id]
     return (
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
-      (quality !== undefined ? ` · ${formatQuality(quality)}` : '') +
+      // A quality without a kind is a floor: it never claims an offer.
+      (quality !== undefined ? ` · ${formatQuality(quality, qualityKinds[id] ?? 'floor')}` : '') +
       shared
     )
   }
