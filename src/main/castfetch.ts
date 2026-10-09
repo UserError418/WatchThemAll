@@ -11,7 +11,7 @@
  */
 
 import type { CastPath, Sample } from './castcheck'
-import { SAMPLE_HEAD_BYTES } from './castcheck'
+import { CHECK_REQUEST_TIMEOUT_MS, SAMPLE_HEAD_BYTES } from './castcheck'
 import { createCastProxy } from './castproxy'
 import { PLAYLIST_BYTES, type FetchedText, type RootFetch } from './castroot'
 import type { CastBundle } from './hlsrewrite'
@@ -50,17 +50,25 @@ export async function fetchHead(
   }
 }
 
-/** `RootFetch` over Node's fetch. */
-export const desktopRootFetch: RootFetch = {
-  async text(url, headers, limitBytes): Promise<FetchedText | null> {
-    const head = await fetchHead(url, headers, limitBytes)
-    return head && { status: head.status, contentType: head.contentType, totalBytes: head.totalBytes, body: new TextDecoder().decode(head.bytes) }
-  },
-  async bytes(url, headers, limitBytes) {
-    const head = await fetchHead(url, headers, limitBytes)
-    return head && { status: head.status, bytes: head.bytes }
-  },
+/** `RootFetch` over Node's fetch, each request given `timeoutMs` to answer. */
+function rootFetch(timeoutMs: number): RootFetch {
+  return {
+    async text(url, headers, limitBytes): Promise<FetchedText | null> {
+      const head = await fetchHead(url, headers, limitBytes, timeoutMs)
+      return head && { status: head.status, contentType: head.contentType, totalBytes: head.totalBytes, body: new TextDecoder().decode(head.bytes) }
+    },
+    async bytes(url, headers, limitBytes) {
+      const head = await fetchHead(url, headers, limitBytes, timeoutMs)
+      return head && { status: head.status, bytes: head.bytes }
+    },
+  }
 }
+
+/** For a cast: a source may take its time to answer, and the viewer is waiting for it anyway. */
+export const desktopRootFetch: RootFetch = rootFetch(FETCH_TIMEOUT_MS)
+
+/** For the cast check during a test, which has a few seconds in all (`castcheck.ts`). */
+export const checkRootFetch: RootFetch = rootFetch(CHECK_REQUEST_TIMEOUT_MS)
 
 /**
  * The cast check's path (`CastPath`): the bundle served by a cast proxy of
@@ -78,11 +86,11 @@ export async function desktopCastPath(bundle: CastBundle, headers: Record<string
   })
   return {
     async playlist(id) {
-      const answer = await fetchHead(`${base}${id}.m3u8`, {}, PLAYLIST_BYTES)
+      const answer = await fetchHead(`${base}${id}.m3u8`, {}, PLAYLIST_BYTES, CHECK_REQUEST_TIMEOUT_MS)
       return answer && { status: answer.status, body: new TextDecoder().decode(answer.bytes) }
     },
     async data(id, limitBytes) {
-      const answer = await fetchHead(`${base}${id}`, {}, limitBytes)
+      const answer = await fetchHead(`${base}${id}`, {}, limitBytes, CHECK_REQUEST_TIMEOUT_MS)
       return answer && { status: answer.status, bytes: answer.bytes }
     },
     sample: (id, request) => timedSample(`${base}${id}`, request),

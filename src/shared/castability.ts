@@ -88,7 +88,7 @@ export function piecesDelivery(playlists: { hls: boolean; dash: boolean }): 'seg
 /**
  * Which delivery describes a page that showed more than one.
  *
- * The one a cast would send: `identifyStream` takes a whole castable file over
+ * The one a cast would send: `chooseCastRoot` takes a whole castable file over
  * a playlist wherever it finds both, so a test that saw both must record the
  * file, or it would call a source uncastable that casts. After that, an HLS
  * playlist over DASH or another container (the cast would try the playlist),

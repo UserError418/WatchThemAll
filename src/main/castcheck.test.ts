@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { afterEach, describe, expect, it } from 'vitest'
 import { TS_H264_HIGH_2160X1080, WHOLE_MP4_HEAD } from '@shared/streamsignature.fixture'
 import { checkCast, paceOf } from './castcheck'
-import { desktopCastPath, desktopRootFetch } from './castfetch'
+import { checkRootFetch, desktopCastPath } from './castfetch'
 import { MIN_WHOLE_FILE_BYTES } from './mediarequest'
 
 /** A media playlist of `count` segments of `seconds` each. */
@@ -66,7 +66,7 @@ const check = (origin: string, paths: string[], runtimeMinutes: number | null = 
   checkCast({
     candidates: paths.map((path) => ({ url: origin + path, headers })),
     runtimeMinutes,
-    io: desktopRootFetch,
+    io: checkRootFetch,
     open: desktopCastPath,
   })
 

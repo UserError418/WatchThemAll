@@ -341,9 +341,9 @@ export async function buildCastBundle(
    * nested-URL problem as HLS and would need their own rewriter; no provider
    * measured so far serves DASH in a form that plays outside its page at all
    * (`CinemaOS` is `sealed`), so building one now would be speculative. No
-   * cast reaches this with DASH: `identifyStream` takes only an HLS playlist
-   * or a whole file, and since 2.0.18 a test files DASH as `dash`, which the
-   * cast list does not offer (`StreamDelivery`).
+   * cast reaches this with DASH: `chooseCastRoot` (`castroot.ts`) takes only
+   * an HLS playlist or a whole file, and since 2.0.18 a test files DASH as
+   * `dash`, which the cast list does not offer (`StreamDelivery`).
    */
   if (kind !== 'hls') {
     const id = idFor(streamUrl, 's')

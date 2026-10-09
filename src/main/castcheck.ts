@@ -64,6 +64,20 @@ export const FILE_SAMPLE_BYTES = 2 * 1024 * 1024
 /** The most of a key or an init segment read: a key is 16 bytes, an init segment a few kilobytes. */
 const DATA_BYTES = 1024 * 1024
 
+/**
+ * How long a check spends asking which capture is the stream, at most: the
+ * candidates are asked four at a time, and one that never answers must not
+ * use up the budget the segment needs. Those asked by then are chosen from.
+ */
+const ROOT_CHOICE_MS = 3_000
+
+/**
+ * How long a check waits for any one request to its source to answer: well
+ * under a cast's own 15 s, for the same reason. The platforms' `RootFetch`
+ * for a check take it (`checkRootFetch` on the desktop, `checkCastOnPhone`).
+ */
+export const CHECK_REQUEST_TIMEOUT_MS = 4_000
+
 /** One segment, or a whole file's opening, as the proxy served it, timed. */
 export interface Sample {
   status: number
@@ -110,7 +124,7 @@ export interface CastCheckInput {
 export async function checkCast(input: CastCheckInput): Promise<CastCheck> {
   const now = input.now ?? Date.now
   const started = now()
-  const choice = await chooseCastRoot(input.candidates, input.io, input.runtimeMinutes)
+  const choice = await chooseCastRoot(input.candidates, input.io, input.runtimeMinutes, { deadline: started + ROOT_CHOICE_MS, now })
   const root = choice.root
   if (root === null) return unrooted(choice.passedOver)
 

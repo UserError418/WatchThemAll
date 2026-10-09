@@ -244,7 +244,9 @@ public class CastPlugin extends Plugin {
         JSObject headers = call.getObject("headers", new JSObject());
         int limit = call.getInt("limitBytes", 4 * 1024 * 1024);
         boolean binary = "base64".equals(call.getString("encoding", "text"));
-        offThread(call, () -> fetchTextNow(call, url, headers, limit, binary));
+        // How long the source has to answer; the cast check asks for less (castcheck.ts).
+        int timeoutMs = call.getInt("timeoutMs", 15_000);
+        offThread(call, () -> fetchTextNow(call, url, headers, limit, binary, timeoutMs));
     }
 
     /**
@@ -425,13 +427,13 @@ public class CastPlugin extends Plugin {
      * body is encoded and crosses the bridge, which the cast check divides by
      * a segment's length (`castcheck.ts`).
      */
-    private static void fetchTextNow(PluginCall call, String url, JSObject headers, int limit, boolean binary) {
+    private static void fetchTextNow(PluginCall call, String url, JSObject headers, int limit, boolean binary, int timeoutMs) {
         HttpURLConnection connection = null;
         long startedAt = android.os.SystemClock.elapsedRealtime();
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();
-            connection.setConnectTimeout(15_000);
-            connection.setReadTimeout(15_000);
+            connection.setConnectTimeout(timeoutMs);
+            connection.setReadTimeout(timeoutMs);
             connection.setInstanceFollowRedirects(true);
             if (headers != null) {
                 Iterator<String> keys = headers.keys();

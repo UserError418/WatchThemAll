@@ -35,7 +35,7 @@ import { registerPlugin } from '@capacitor/core'
 import type { CastDevice, CastStatus } from '@shared/ipc'
 import { buildCastBundle } from '@main/hlsrewrite'
 import { chooseCastRoot, PLAYLIST_BYTES, rootRefusal, rootSignature, type FetchedText, type RootFetch } from '@main/castroot'
-import { checkCast, SAMPLE_HEAD_BYTES, type CastPath } from '@main/castcheck'
+import { CHECK_REQUEST_TIMEOUT_MS, checkCast, SAMPLE_HEAD_BYTES, type CastPath } from '@main/castcheck'
 import type { CastBundle } from '@main/hlsrewrite'
 import type { CastCheck } from '@shared/types'
 import {
@@ -66,6 +66,8 @@ interface CastNative {
     limitBytes?: number
     /** `base64` returns the raw bytes, encoded; see `capture.peekBytes`. */
     encoding?: 'text' | 'base64'
+    /** How long the source has to answer; 15 s when not given (2.0.19). */
+    timeoutMs?: number
   }): Promise<{
     status: number
     contentType: string
@@ -296,25 +298,33 @@ function bytesOf(base64: string): Uint8Array {
  * The phone's network for choosing what to cast (`castroot.ts`): the native
  * fetch, which can send the `Referer` and `Origin` a WebView refuses to set,
  * reading only as far as asked. The same client the proxy fetches with.
+ * Each request has `timeoutMs` to answer: the native default for a cast,
+ * a few seconds for the cast check.
  */
-export const phoneRootFetch: RootFetch = {
-  async text(url, headers, limitBytes): Promise<FetchedText | null> {
-    try {
-      const answer = await Cast.fetchText({ url, headers, limitBytes })
-      return { status: answer.status, contentType: answer.contentType, totalBytes: answer.totalBytes ?? null, body: answer.body }
-    } catch {
-      return null // Unreachable host, or a URL that has already expired.
-    }
-  },
-  async bytes(url, headers, limitBytes) {
-    try {
-      const answer = await Cast.fetchText({ url, headers, limitBytes, encoding: 'base64' })
-      return { status: answer.status, bytes: bytesOf(answer.body) }
-    } catch {
-      return null
-    }
-  },
+function phoneFetch(timeoutMs?: number): RootFetch {
+  const timeout = timeoutMs === undefined ? {} : { timeoutMs }
+  return {
+    async text(url, headers, limitBytes): Promise<FetchedText | null> {
+      try {
+        const answer = await Cast.fetchText({ url, headers, limitBytes, ...timeout })
+        return { status: answer.status, contentType: answer.contentType, totalBytes: answer.totalBytes ?? null, body: answer.body }
+      } catch {
+        return null // Unreachable host, or a URL that has already expired.
+      }
+    },
+    async bytes(url, headers, limitBytes) {
+      try {
+        const answer = await Cast.fetchText({ url, headers, limitBytes, encoding: 'base64', ...timeout })
+        return { status: answer.status, bytes: bytesOf(answer.body) }
+      } catch {
+        return null
+      }
+    },
+  }
 }
+
+export const phoneRootFetch: RootFetch = phoneFetch()
+const checkFetch: RootFetch = phoneFetch(CHECK_REQUEST_TIMEOUT_MS)
 
 /**
  * The cast check's path on the phone (`CastPath`): the bundle's playlists
@@ -335,7 +345,7 @@ function phoneCastPath(bundle: CastBundle, headers: Record<string, string>): Cas
     },
     async data(id, limitBytes) {
       const url = targets.get(id)
-      return url === undefined ? null : phoneRootFetch.bytes(url, headers, limitBytes)
+      return url === undefined ? null : checkFetch.bytes(url, headers, limitBytes)
     },
     async sample(id, request) {
       const url = targets.get(id)
@@ -375,7 +385,7 @@ export function checkCastOnPhone(requests: readonly Candidate[], runtimeMinutes:
   return checkCast({
     candidates: requests.map((r) => ({ url: r.url, headers: replayable(r.headers) })),
     runtimeMinutes,
-    io: phoneRootFetch,
+    io: checkFetch,
     open: async (bundle, headers) => phoneCastPath(bundle, headers),
   })
 }

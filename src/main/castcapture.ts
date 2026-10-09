@@ -28,7 +28,7 @@
  * extractor reports "no stream at all" for providers that demonstrably play:
  * several serve manifests from paths with no extension — `…/pl/H4sIAAAA…`,
  * `…/v1/proxy?data=…`. So this keeps candidates and refuses to judge them; the
- * decision is made by fetching one, in `identifyStream`.
+ * decision is made by fetching one, in `chooseCastRoot` (`castroot.ts`).
  */
 
 import type { Session } from 'electron'

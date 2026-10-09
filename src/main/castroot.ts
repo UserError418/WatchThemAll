@@ -168,11 +168,19 @@ interface Sniffed {
   answer: FetchedText | null
 }
 
-/** Choose the stream to cast from a page's captured requests, newest first; see the header. */
+/**
+ * Choose the stream to cast from a page's captured requests, newest first;
+ * see the header.
+ *
+ * `deadline` (a time, by `now`) stops asking about further candidates once
+ * it has passed, and chooses from those already asked: the cast check's
+ * budget (`castcheck.ts`). A cast has none: a beam waits for its answer.
+ */
 export async function chooseCastRoot(
   candidates: readonly RootCandidate[],
   io: RootFetch,
   runtimeMinutes: number | null,
+  limits: { deadline?: number; now?: () => number } = {},
 ): Promise<RootChoice> {
   const passedOver: PassedOver[] = []
   const bodies = new Map<string, string>()
@@ -183,7 +191,9 @@ export async function chooseCastRoot(
     return true
   }).slice(0, MAX_CANDIDATES)
 
-  const sniffed = await inBatches(asked, AT_ONCE, async (candidate): Promise<Sniffed> => {
+  const now = limits.now ?? Date.now
+  const inTime = (): boolean => limits.deadline === undefined || now() < limits.deadline
+  const sniffed = await inBatches(asked, AT_ONCE, inTime, async (candidate): Promise<Sniffed> => {
     const answer = await io.text(candidate.url, candidate.headers, PEEK_BYTES).catch(() => null)
     // A playlist cut off by the peek is read whole: its length is every segment's.
     if (answer && isOk(answer.status) && isPlaylist(answer.body) && answer.body.length >= PEEK_BYTES) {
@@ -377,10 +387,10 @@ function isOk(status: number): boolean {
   return status === 200 || status === 206
 }
 
-/** `work` over every item, `size` at a time, the results in the items' order. */
-async function inBatches<T, R>(items: readonly T[], size: number, work: (item: T) => Promise<R>): Promise<R[]> {
+/** `work` over the items, `size` at a time, the results in the items' order; no new batch once `goOn` says not. */
+async function inBatches<T, R>(items: readonly T[], size: number, goOn: () => boolean, work: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
-  for (let i = 0; i < items.length; i += size) {
+  for (let i = 0; i < items.length && goOn(); i += size) {
     results.push(...(await Promise.all(items.slice(i, i + size).map(work))))
   }
   return results

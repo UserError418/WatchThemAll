@@ -193,6 +193,28 @@ describe('chooseCastRoot', () => {
   })
 })
 
+describe('chooseCastRoot with a deadline', () => {
+  it("stops asking about further candidates once the cast check's time for it is up", async () => {
+    let clock = 0
+    const io = network({ [CDN + 'film.m3u8']: { body: media(2700) } })
+    const slow: RootFetch = {
+      ...io,
+      // Each batch of four takes a second of the check's clock.
+      text: async (url, headers, limit) => {
+        clock += 250
+        return io.text(url, headers, limit)
+      },
+    }
+    const late = ['a', 'b', 'c', 'd'].map((x) => at(`api/${x}`))
+    const choice = await chooseCastRoot([...late, at('film.m3u8')], slow, null, { deadline: 1_000, now: () => clock })
+    // The film's playlist was in the second batch, never asked about.
+    expect(choice.root).toBeNull()
+    expect(io.asked).toEqual(late.map((c) => c.url))
+    // Without one, as for a cast, every candidate is asked about.
+    expect((await chooseCastRoot([...late, at('film.m3u8')], io, null)).root).toMatchObject({ url: CDN + 'film.m3u8' })
+  })
+})
+
 describe('rootRefusal', () => {
   it('says why when only renditions were left', () => {
     expect(rootRefusal([{ why: 'rendition' }], 'VidZee', null)).toBe('VidZee hands out only a separate sound or subtitle stream. Try another source.')
