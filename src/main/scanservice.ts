@@ -92,6 +92,8 @@ interface Measured {
   quality: number | null
   /** What `quality` is worth: the best on offer, or a floor under it. Null with no quality. */
   qualityKind: QualityKind | null
+  /** The languages its sound is offered in, for a stream whose master or engine listed them; null otherwise. */
+  audio: string[] | null
   /** Why it did not stream; null when it did. */
   reason: ScanReason | null
   /** How the video arrived, for a source that streamed; null otherwise. See `StreamDelivery`. */
@@ -250,6 +252,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       ms: streamed ? result.timeToMediaMs : null,
       quality: streamed ? result.judgement.best : null,
       qualityKind: streamed ? result.judgement.kind : null,
+      audio: null,
       reason: streamed ? null : result.reason,
       // A stream whose traffic showed nothing identifiable is still an answer
       // (`unknown`), so the tester does not keep coming back to ask.
@@ -279,6 +282,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       }
       if (measured.reason !== null) scan.reasons = { [provider.id]: measured.reason }
       if (measured.delivery !== null) scan.delivery = { [provider.id]: measured.delivery }
+      if (measured.audio !== null && measured.audio.length > 0) scan.audio = { [provider.id]: measured.audio }
       return scan
     },
 
@@ -302,6 +306,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const qualities: Record<string, number> = {}
       /** What each of `qualities` is worth. */
       const qualityKinds: Record<string, QualityKind> = {}
+      /** The languages each streaming provider's sound is offered in, where known. */
+      const audio: Record<string, string[]> = {}
       /** Why each provider that did not stream failed. */
       const reasons: Record<string, ScanReason> = {}
       /** When each provider's standing result was measured. */
@@ -332,6 +338,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
           timings: { ...timings },
           qualities: { ...qualities },
           qualityKinds: { ...qualityKinds },
+          audio: { ...audio },
           reasons: { ...reasons },
           delivery: { ...delivery },
           finished,
@@ -355,6 +362,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         }
         if (measured.delivery !== null) delivery[provider.id] = measured.delivery
         else delete delivery[provider.id]
+        if (measured.audio !== null && measured.audio.length > 0) audio[provider.id] = measured.audio
+        else delete audio[provider.id]
       }
 
       /**
@@ -422,7 +431,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
         await (tasks.size > 0 ? Promise.race(tasks) : wait())
       }
 
-      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, reasons, delivery }
+      const scan: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
       if (token === mine) running = false
       publish(true)
       return scan

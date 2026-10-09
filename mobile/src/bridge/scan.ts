@@ -189,6 +189,8 @@ interface Measured {
   quality: number | null
   /** What `quality` is worth: the best on offer, or a floor under it. Null with no quality. */
   qualityKind: QualityKind | null
+  /** The languages its sound is offered in, for a stream whose master or engine listed them; null otherwise. */
+  audio: string[] | null
   reason: ScanReason | null
   /** How the video arrived, for a stream only. See `StreamDelivery`. */
   delivery: StreamDelivery | null
@@ -260,6 +262,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
     const qualities: Record<string, number> = {}
     /** What each of `qualities` is worth. */
     const qualityKinds: Record<string, QualityKind> = {}
+    /** The languages each streaming provider's sound is offered in, where known. */
+    const audio: Record<string, string[]> = {}
     /** Why each provider that did not stream failed. */
     const reasons: Record<string, ScanReason> = {}
     /** When each provider's standing result was measured. */
@@ -293,6 +297,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         timings: { ...timings },
         qualities: { ...qualities },
         qualityKinds: { ...qualityKinds },
+        audio: { ...audio },
         reasons: { ...reasons },
         delivery: { ...delivery },
         finished,
@@ -317,6 +322,8 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       }
       if (measured.delivery !== null) delivery[provider.id] = measured.delivery
       else delete delivery[provider.id]
+      if (measured.audio !== null && measured.audio.length > 0) audio[provider.id] = measured.audio
+      else delete audio[provider.id]
     }
 
     const measure = (provider: Provider, budgetMs: number): Promise<Measured> => {
@@ -325,7 +332,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       // this media type, or an id it needs and the title lacks. Nothing to
       // load, and nothing transient about it.
       if (url === null) {
-        return Promise.resolve({ verdict: 'dead', ms: null, quality: null, qualityKind: null, reason: { kind: 'unsupported' }, delivery: null })
+        return Promise.resolve({ verdict: 'dead', ms: null, quality: null, qualityKind: null, audio: null, reason: { kind: 'unsupported' }, delivery: null })
       }
       return probeOne(url, budgetMs, cancelled)
     }
@@ -387,7 +394,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       if (token === mine) running = false
     }
 
-    const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, reasons, delivery }
+    const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
     testing.clear()
     publish(true)
     return result
@@ -527,7 +534,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   } catch {
     // No session at all: the plugin is missing (the browser preview harness)
     // or refused. That says nothing about the provider.
-    return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, reason: null, delivery: null }
+    return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, audio: null, reason: null, delivery: null }
   }
 
   /** Every request the session has logged, oldest first. */
@@ -589,7 +596,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
       if (!open || gone) {
         // The renderer went, and took the provider with it. A crash is not a
         // verdict on the provider's catalogue, so amber, with nothing to add.
-        return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, reason: null, delivery: null }
+        return { verdict: 'unsure', ms: null, quality: null, qualityKind: null, audio: null, reason: null, delivery: null }
       }
       // The document failed in a way no waiting changes; nothing will follow.
       if (documentError && documentFailedForGood(documentError)) break
@@ -603,6 +610,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
           ms,
           quality: quality.best,
           qualityKind: quality.kind,
+          audio: null,
           reason: null,
           delivery: proven.delivery,
           requests: [...candidates()].reverse(),
@@ -618,7 +626,7 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
     }
 
     const judged = judgeMissedStream({ documentError, lastRequestAtMs, endedAtMs: Date.now(), budgetMs })
-    return { verdict: judged.verdict, ms: null, quality: null, qualityKind: null, reason: judged.reason, delivery: null }
+    return { verdict: judged.verdict, ms: null, quality: null, qualityKind: null, audio: null, reason: judged.reason, delivery: null }
   } finally {
     await session.close().catch(() => {})
   }

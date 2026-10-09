@@ -133,6 +133,45 @@ describe('isSourceResult', () => {
   })
 })
 
+describe('the languages a source is heard in (2026-10)', () => {
+  it('takes a result with its audio, and turns away audio it could not have written', () => {
+    const good = result({ quality: 1080, qualityKind: 'offered', audio: ['en', 'de'] })
+    expect(isSourceResult(good)).toBe(true)
+    expect(isSourceResult({ ...good, audio: 'en' })).toBe(false)
+    expect(isSourceResult({ ...good, audio: ['English'] })).toBe(false)
+  })
+
+  it('keeps an old record without audio as it was, through a round trip and a merge', () => {
+    // Written by 2.0.18, before audio was kept.
+    const old = result({ ms: 1_200, quality: 1080, qualityKind: 'offered', delivery: 'segmented' })
+    const stored = JSON.parse(JSON.stringify(old)) as unknown
+    expect(isSourceResult(stored)).toBe(true)
+    expect(mergeResults([], [stored as SourceResult], now)).toEqual([old])
+    expect(read([old]).scan?.audio).toEqual({})
+  })
+
+  it('keeps the re-filed copy of a test that learned its audio, in either order', () => {
+    // A test is re-filed once its verdict is in, under its own moment.
+    const first = result({ ms: 2_000, quality: 1080, qualityKind: 'offered' })
+    const refiled = result({ ms: 2_000, quality: 1080, qualityKind: 'offered', audio: ['ja', 'en'] })
+    expect(mergeResults([first], [refiled], now)).toEqual([refiled])
+    expect(mergeResults([refiled], [first], now)).toEqual([refiled])
+  })
+
+  it("reads the newest listing in the episode, else the season, and never another season's", () => {
+    const results = [
+      result({ season: 1, episode: 2, audio: ['en'], ago: 3 * HOUR }),
+      result({ season: 1, episode: 2, audio: ['ja', 'en'], ago: 2 * HOUR }),
+      // A newer success that says nothing about the sound does not hide it.
+      result({ season: 1, episode: 2, origin: 'play', ago: HOUR }),
+      result({ season: 2, episode: 1, audio: ['de'], ago: MINUTE }),
+    ]
+    expect(read(results, { season: 1, episode: 2 }).scan?.audio).toEqual({ a: ['ja', 'en'] })
+    expect(read(results, { season: 1, episode: 5 }).scan?.audio).toEqual({ a: ['ja', 'en'] })
+    expect(read(results, { season: 3, episode: 1 }).scan?.audio).toEqual({})
+  })
+})
+
 describe('mergeResults', () => {
   it("is every result either device had, whichever side it is merged from", () => {
     const mine = [result({ ago: 2 * HOUR }), result({ ago: HOUR })]
@@ -170,6 +209,7 @@ describe('resultsFromScan', () => {
       timings: { a: 2_000 },
       qualities: { a: 1080 },
       qualityKinds: { a: 'offered' },
+      audio: { a: ['en', 'de'], b: ['fr'] },
       reasons: { b: { kind: 'error', status: 404 } },
       delivery: { a: 'segmented' },
     }
@@ -187,6 +227,7 @@ describe('resultsFromScan', () => {
         ms: 2_000,
         quality: 1080,
         qualityKind: 'offered',
+        audio: ['en', 'de'],
         delivery: 'segmented',
       },
       {
@@ -201,6 +242,11 @@ describe('resultsFromScan', () => {
         reason: { kind: 'error', status: 404 },
       },
     ])
+  })
+
+  it('files no audio for an empty list: none listed is unknown, not silence', () => {
+    const scan: ProviderScan = { titleKey: 'tv:tt1', at: now, verdicts: { a: 'stream' }, audio: { a: [] } }
+    expect(resultsFromScan(scan, PC, null)[0]).not.toHaveProperty('audio')
   })
 })
 

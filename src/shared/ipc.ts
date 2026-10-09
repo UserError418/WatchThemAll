@@ -633,6 +633,8 @@ export interface ProviderScanProgress {
   qualities: Record<string, number>
   /** What each of `qualities` is worth: the best on offer, or a floor under it. See `QualityKind`. */
   qualityKinds: Record<string, QualityKind>
+  /** The languages each streaming provider's sound is offered in, where known. See `ProviderScan.audio`. */
+  audio: Record<string, string[]>
   /** Why each settled provider that did not stream failed. See `ProviderScan.reasons`. */
   reasons: Record<string, ScanReason>
   /** How each streaming provider's video arrived, so the cast list fills in live. See `ProviderScan.delivery`. */

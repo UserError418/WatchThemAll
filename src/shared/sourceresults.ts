@@ -75,6 +75,7 @@
  * (`legacyResults`). Nothing is migrated or deleted: they age out.
  */
 
+import { isAudioList } from './audiotracks'
 import { isDownloadedSource } from './downloads/types'
 import { RESULT_TTL_MS, testedAtOf } from './scanrow'
 import type { TitleResults } from './scanshare'
@@ -167,6 +168,13 @@ export interface SourceResult {
    * understate, but must not claim an offer it cannot vouch for.
    */
   qualityKind?: QualityKind
+  /**
+   * The languages its sound is offered in (`audiotracks.ts`), where the
+   * stream's master or its engine listed them. Successes only. Absent from
+   * results filed before it was kept (2026-10), and from any that could not
+   * tell: unknown, never "one language".
+   */
+  audio?: string[]
   /** Why a failure failed, where it could tell. */
   reason?: ScanReason
   delivery?: StreamDelivery
@@ -228,6 +236,7 @@ export function isSourceResult(value: unknown): value is SourceResult {
     // Any word, not only the kinds this build knows: a newer build's kind
     // must not get its whole result dropped here. Read as a floor (`isOffer`).
     optional(r.qualityKind, (v) => typeof v === 'string') &&
+    optional(r.audio, isAudioList) &&
     optional(r.reason, (v) => typeof v === 'object' && v !== null && typeof (v as { kind?: unknown }).kind === 'string') &&
     optional(r.delivery, (v) => DELIVERIES.includes(v)) &&
     optional(r.cast, (v) => CASTS.includes(v))
@@ -284,12 +293,18 @@ export function pruneResults(results: readonly SourceResult[], now: number): Sou
  * same quality only from a floor to an offer, so a build from before kinds
  * were kept, which compares the text there, keeps the same copy: "offered"
  * sorts above "floor".
+ *
+ * A test is re-filed once its verdict is in, with the offer and the audio
+ * found in what its page fetched (`findLadder`); the copy that knows the
+ * audio is the one kept. A build from before audio was kept compares the
+ * text there and may keep the other copy; nothing reads audio there.
  */
 function knowsMore(a: SourceResult, b: SourceResult): SourceResult {
   const quality = (result: SourceResult): number => result.quality ?? -1
   if (quality(a) !== quality(b)) return quality(a) > quality(b) ? a : b
   if (isOffer(a) !== isOffer(b)) return isOffer(a) ? a : b
   if ((a.ms === undefined) !== (b.ms === undefined)) return a.ms === undefined ? b : a
+  if ((a.audio === undefined) !== (b.audio === undefined)) return a.audio === undefined ? b : a
   return JSON.stringify(a) >= JSON.stringify(b) ? a : b
 }
 
@@ -366,6 +381,7 @@ export function resultsFromScan(
     setOptional(result, 'ms', verdict === 'stream' ? scan.timings?.[providerId] : undefined)
     setOptional(result, 'quality', verdict === 'stream' ? scan.qualities?.[providerId] : undefined)
     setOptional(result, 'qualityKind', result.quality !== undefined ? scan.qualityKinds?.[providerId] : undefined)
+    setOptional(result, 'audio', verdict === 'stream' ? nonEmpty(scan.audio?.[providerId]) : undefined)
     setOptional(result, 'reason', verdict === 'stream' ? undefined : scan.reasons?.[providerId])
     setOptional(result, 'delivery', scan.delivery?.[providerId])
     setOptional(result, 'cast', scan.casts?.[providerId])
@@ -530,6 +546,20 @@ function qualityScope(
   return results.filter((r) => r.season === episode.season)
 }
 
+/**
+ * The languages a source's sound is offered in: from the newest result that
+ * listed them, in the quality's own scope (`qualityScope`), since both are
+ * read off the same stream. Another season can be other encodes, and
+ * another season's dub is not this one's.
+ */
+function audioOf(
+  results: readonly SourceResult[],
+  episode: { season: number; episode: number } | null,
+): string[] | undefined {
+  const listed = results.filter((r) => r.verdict === 'stream' && r.audio !== undefined).sort((a, b) => b.at - a.at)
+  return qualityScope(listed, episode)[0]?.audio
+}
+
 function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
@@ -601,6 +631,7 @@ export function titleResults(input: {
     timings: {},
     qualities: {},
     qualityKinds: {},
+    audio: {},
     delivery: {},
     casts: {},
     castAt: {},
@@ -637,6 +668,11 @@ export function titleResults(input: {
           row.qualities[providerId] = quality.quality
           row.qualityKinds[providerId] = quality.kind
         }
+        const audio = audioOf(
+          results.filter((r) => r.deviceKind === here),
+          episode,
+        )
+        if (audio !== undefined) row.audio[providerId] = audio
         fillDelivery(row, providerId, ownScope)
       }
       continue
@@ -691,6 +727,11 @@ export function deviceRows(results: readonly SourceResult[], now: number): Share
 
 function withReason(decision: Decision, reason: ScanReason | undefined): Decision {
   return reason === undefined ? decision : { ...decision, reason }
+}
+
+/** A language list, or nothing for an empty one: no languages listed is unknown, not none. */
+function nonEmpty(audio: string[] | undefined): string[] | undefined {
+  return audio !== undefined && audio.length > 0 ? audio : undefined
 }
 
 function setOptional<K extends keyof SourceResult>(target: SourceResult, key: K, value: SourceResult[K] | undefined): void {

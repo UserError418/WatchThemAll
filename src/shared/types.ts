@@ -896,6 +896,12 @@ export interface ProviderScan {
    */
   qualityKinds?: Record<string, QualityKind>
   /**
+   * The languages each streaming provider's sound is offered in, where its
+   * master or its engine lists them (`audiotracks.ts`): "en", "ja". Absent
+   * for a provider means unknown, not one language.
+   */
+  audio?: Record<string, string[]>
+  /**
    * How each streaming provider's video arrived. Only providers whose verdict
    * is `stream` have one.
    *

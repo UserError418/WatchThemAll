@@ -30,6 +30,7 @@ function progress(
     timings: {},
     qualities: {},
     qualityKinds: {},
+    audio: {},
     reasons: {},
     delivery: {},
     finished,
