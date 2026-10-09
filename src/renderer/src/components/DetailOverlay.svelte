@@ -1130,6 +1130,7 @@
                 episode={subject.type === 'movie'
                   ? null
                   : { season: resumeAt.season, episode: resumeAt.episode }}
+                lastAired={detail?.lastEpisode ?? null}
                 notOut={notOutYet(detail?.releaseDate, Date.now())}
                 downloaded={resumeDownload !== null && downloads.of(resumeDownload)?.state === 'done'}
                 onselect={chooseProvider}

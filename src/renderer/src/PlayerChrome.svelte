@@ -43,6 +43,7 @@
   import { actionForEvent } from '@shared/playerkeys'
   import { nextAiredEpisode, previousEpisode, type NextEpisode } from '@shared/episodesteps'
   import { episodeOf } from '@shared/sourceresults'
+  import { liveRunApplies, type RunSubject } from './lib/liverun'
   import { isDownloadedSource } from '@shared/downloads/types'
   import {
     nudgeTarget,
@@ -249,9 +250,19 @@
   let scanTotal = $state(0)
   /** Every source under test right now; the rows mark each one. */
   let scanTesting = $state<ScanInFlight[]>([])
+  /** What the live run measures, as its progress names it. */
+  let scanSubject = $state.raw<RunSubject | null>(null)
+  /** Runs finished or cancelled since this document opened: see `liveRunApplies`. */
+  let scanFinished = $state(0)
+  /** `scanFinished` when the stored state on screen was asked for (`refreshSourceState`). */
+  let readAfter = $state(0)
+  /** Counts the reads asked for, so only the latest answer is taken. */
+  let reads = 0
 
   $effect(() =>
     api?.onProviderScan((progress) => {
+      scanSubject = { titleKey: progress.titleKey, episode: progress.episode }
+      if (progress.finished) scanFinished += 1
       scanVerdicts = progress.verdicts
       scanTimings = progress.timings
       scanQualities = progress.qualities
@@ -279,22 +290,38 @@
     scanDone = 0
     scanTotal = 0
     scanTesting = []
+    scanSubject = null
   }
 
-  /** Live run first, falling back to whatever was stored for this title. */
+  /**
+   * Whether the live run colours the list rather than what is stored: by the
+   * detail view's rule (`liverun.ts`). Only a run of the episode playing, and
+   * once it is over only until the stored results have been read again,
+   * which hold its results and order Automatic. The list used to keep a
+   * finished run's verdicts until an episode step. As before, a run that has
+   * settled nothing yet leaves the stored dots up.
+   */
+  const liveRun = $derived(
+    context !== null &&
+      Object.keys(scanVerdicts).length > 0 &&
+      liveRunApplies(
+        { subject: scanSubject, running: scanning, finished: scanFinished },
+        { type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId },
+        episodeOf(context),
+        readAfter,
+      ),
+  )
+
+  /** Live run first while `liveRun` says so, else whatever was stored for this title. */
   const verdicts = $derived<Record<string, ProbeVerdict>>(
-    Object.keys(scanVerdicts).length > 0 ? scanVerdicts : (sourceState.scan?.verdicts ?? {}),
+    liveRun ? scanVerdicts : (sourceState.scan?.verdicts ?? {}),
   )
   /** Time to stream for the sources that streamed, from the same run as `verdicts`. */
-  const timings = $derived<Record<string, number>>(
-    Object.keys(scanVerdicts).length > 0 ? scanTimings : (sourceState.scan?.timings ?? {}),
-  )
+  const timings = $derived<Record<string, number>>(liveRun ? scanTimings : (sourceState.scan?.timings ?? {}))
   const qualities = $derived<Record<string, number>>(
-    Object.keys(scanVerdicts).length > 0 ? scanQualities : (sourceState.scan?.qualities ?? {}),
+    liveRun ? scanQualities : (sourceState.scan?.qualities ?? {}),
   )
-  const reasons = $derived<Record<string, ScanReason>>(
-    Object.keys(scanVerdicts).length > 0 ? scanReasons : (sourceState.scan?.reasons ?? {}),
-  )
+  const reasons = $derived<Record<string, ScanReason>>(liveRun ? scanReasons : (sourceState.scan?.reasons ?? {}))
 
   /** " · 3.8 s · 1080p" for a source that streamed; see `SourcePicker.svelte`. */
   function measurement(id: string): string {
@@ -315,7 +342,7 @@
    * Not during a live run here, whose results are all this device's.
    */
   function sharedNote(id: string): string {
-    if (Object.keys(scanVerdicts).length > 0) return ''
+    if (liveRun) return ''
     return sharedLabel(sourceState.sharedFrom[id])
   }
 
@@ -348,8 +375,9 @@
         ? { season: context.season, episode: context.episode }
         : null
     await api.scan(media, episode)
-    // Re-read so the dots and the stored scan describe one moment.
-    sourceState = await api.outcomes(media, episode)
+    // Re-read so the dots and the stored scan describe one moment. The run's
+    // results are filed by the time the call returns.
+    await refreshSourceState()
   }
 
   /* ── Casting ──────────────────────────────────────────────────────────────
@@ -463,7 +491,7 @@
   function castabilityOf(id: string): Castability {
     // A download is a playlist and segments served from this device: it casts.
     if (isDownloadedSource(id)) return 'yes'
-    return deliveryCastability(scanDelivery[id]) ?? sourceState.castability[id] ?? 'unknown'
+    return deliveryCastability(liveRun ? scanDelivery[id] : undefined) ?? sourceState.castability[id] ?? 'unknown'
   }
 
   /**
@@ -489,15 +517,21 @@
   /** Re-read what is known about this title's sources — for the dots, and for castability. */
   async function refreshSourceState(): Promise<void> {
     if (context === null) return
+    const asked = ++reads
+    const finished = scanFinished
+    let result: TitleProviderState
     try {
-      sourceState = await api.outcomes(
+      result = await api.outcomes(
         { type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId },
         episodeOf(context),
       )
     } catch {
       // No record is a fair answer: every dot is blank, every source unchecked.
-      sourceState = NO_SOURCE_STATE
+      result = NO_SOURCE_STATE
     }
+    if (asked !== reads) return
+    sourceState = result
+    readAfter = finished
   }
 
   /** The cast button, and C: straight into the remote, whatever state it is in. */
@@ -784,15 +818,7 @@
       return
     }
     panel = 'sources'
-    if (context === null) return
-    void api
-      .outcomes({ type: context.type, imdbId: context.imdbId, tmdbId: context.tmdbId }, episodeOf(context))
-      .then((result) => (sourceState = result))
-      .catch(() => {
-        // No record is a fair answer: every dot is simply blank, which is what
-        // "never tried" looks like anyway.
-        sourceState = NO_SOURCE_STATE
-      })
+    void refreshSourceState()
   }
 
   /** Episodes of the season being browsed, which need not be the one playing. */

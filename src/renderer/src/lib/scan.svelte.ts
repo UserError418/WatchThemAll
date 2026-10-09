@@ -7,34 +7,24 @@
  * and the player has to pick up a run it did not begin. So the live run lives
  * here, one subscription for the whole renderer, and both surfaces read it.
  *
- * ## Why this matches on `TitleRef` rather than on the key
+ * ## Which run a list draws, and for how long
  *
- * Main identifies a scan by `titleKey` — `tv:tt0903747` — and the renderer
- * cannot build one. `outcomes.ts` is a main-process module and the renderer has
- * no `@main` alias, deliberately: the business layer is not the renderer's to
- * import. Re-implementing the key here would be a second definition of identity
- * that agrees until the day someone changes the separator.
- *
- * So the comparison is done on the parts the renderer already holds. That is
- * not a weaker check — `titleKey` is derived from exactly these fields — it
- * just keeps the derivation in one process.
+ * Only a run of the title *and episode* the list shows, and once that run is
+ * over only until the list has read its stored results again: see
+ * `liverun.ts`. Matched by `titleKey`, the key the run's results are filed
+ * under (`@shared/titlekey`). This used to compare the title's parts, while
+ * the renderer could not build a key; that also matched a run filed under a
+ * different key from the one the list reads, so its verdicts would vanish
+ * from the list once it was over.
  */
 
 import type { ProbeVerdict, ProviderScanProgress, ScanInFlight, ScanReason, TitleRef } from '@shared/ipc'
-
-/** Whether two title references mean the same title. Mirrors `titleKey`'s inputs. */
-function sameTitle(a: TitleRef | null, b: TitleRef | null): boolean {
-  if (!a || !b) return false
-  if (a.type !== b.type) return false
-  // IMDB id wins when both carry one, for the same reason `titleKey` prefers
-  // it: a title opened from an IMDB-sourced summary may not have a TMDB id yet.
-  if (a.imdbId && b.imdbId) return a.imdbId === b.imdbId
-  return a.tmdbId !== 0 && a.tmdbId === b.tmdbId
-}
+import { titleKey } from '@shared/titlekey'
+import { liveRunApplies, runIsAbout, type EpisodeRef, type RunSubject } from './liverun'
 
 class ProviderScanState {
-  /** The title the running scan is measuring, or the last one measured. */
-  private subject = $state<TitleRef | null>(null)
+  /** The title and episode the running scan is measuring, or the last ones measured. */
+  private subject = $state.raw<RunSubject | null>(null)
 
   /** Verdicts settled so far. Replaced wholesale, never mutated in place. */
   verdicts = $state<Record<string, ProbeVerdict>>({})
@@ -52,6 +42,12 @@ class ProviderScanState {
   testing = $state<ScanInFlight[]>([])
   /** Set when the last run was stopped by the user rather than finishing. */
   cancelled = $state(false)
+  /**
+   * Runs finished or cancelled since the renderer started. A list notes it
+   * when it asks for its stored results, so it knows whether they can hold
+   * the last run's (`liveRunApplies`).
+   */
+  finished = $state(0)
 
   /**
    * Start listening once, for the life of the renderer.
@@ -67,7 +63,7 @@ class ProviderScanState {
       // first watch's, an addition's) speak here too, and with the subject
       // left at the title last tested by hand, their verdicts showed as
       // that title's.
-      if (progress.title) this.subject = progress.title
+      this.subject = { titleKey: progress.titleKey, episode: progress.episode }
       this.verdicts = progress.verdicts
       this.timings = progress.timings
       this.qualities = progress.qualities
@@ -76,8 +72,21 @@ class ProviderScanState {
       this.total = progress.total
       this.testing = progress.testing
       this.cancelled = progress.cancelled
-      this.running = !progress.finished
+      if (progress.finished) this.end()
+      else this.running = true
     })
+  }
+
+  /**
+   * The run is over: finished, cancelled here, or its call failed. Counted
+   * once, whichever of those comes first. Stop sets this before main's last
+   * report arrives, and counting that report again would put the run's
+   * verdicts back up over results the list had already read afresh.
+   */
+  private end(): void {
+    if (!this.running) return
+    this.running = false
+    this.finished += 1
   }
 
   /** The provider's test in progress, if it is under test right now. */
@@ -85,9 +94,23 @@ class ProviderScanState {
     return this.testing.find((test) => test.providerId === providerId)
   }
 
-  /** Whether the live run describes the title a surface is showing. */
-  matches(media: TitleRef): boolean {
-    return sameTitle(this.subject, media)
+  /** Whether the live run measures (or last measured) this title and episode. */
+  isAbout(media: TitleRef, episode: EpisodeRef | null): boolean {
+    return runIsAbout(this.subject, media, episode)
+  }
+
+  /**
+   * Whether a list draws the live run rather than its stored results:
+   * `readAfter` is `finished` as it was when the list asked for them. See
+   * `liveRunApplies`.
+   */
+  overrides(media: TitleRef, episode: EpisodeRef | null, readAfter: number): boolean {
+    return liveRunApplies(
+      { subject: this.subject, running: this.running, finished: this.finished },
+      media,
+      episode,
+      readAfter,
+    )
   }
 
   /**
@@ -98,8 +121,8 @@ class ProviderScanState {
    * scanning "the show" without saying which episode would measure whichever
    * one the probe happened to build a URL for.
    */
-  async start(media: TitleRef, episode: { season: number; episode: number } | null): Promise<void> {
-    this.subject = media
+  async start(media: TitleRef, episode: EpisodeRef | null): Promise<void> {
+    this.subject = { titleKey: titleKey(media), episode: media.type === 'tv' ? episode : null }
     this.verdicts = {}
     this.timings = {}
     this.qualities = {}
@@ -114,13 +137,13 @@ class ProviderScanState {
     } finally {
       // The finished event normally clears this. Doing it here too means a
       // rejected call cannot leave the button spinning forever.
-      this.running = false
+      this.end()
     }
   }
 
   async cancel(): Promise<void> {
     await window.wta.providers.cancelScan()
-    this.running = false
+    this.end()
   }
 
   /** Forget the last run, so a surface for another title starts blank. */

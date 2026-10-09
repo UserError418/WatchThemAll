@@ -45,7 +45,10 @@
    *
    * The rows do not move while a test is running. The order is re-read when it
    * finishes, so the dots fill in where the user is looking and the list
-   * re-sorts once, at the end, rather than shuffling under the pointer.
+   * re-sorts once, at the end, rather than shuffling under the pointer. From
+   * that re-read on, the stored results colour the dots too, not the run's
+   * own verdicts (`liverun.ts`): the dots and the order then come from the
+   * same decision, so a green row cannot sit below a red one Automatic skips.
    * A source that streamed also shows how long it took to start and, where its
    * stream says, the best quality it offers.
    *
@@ -67,6 +70,8 @@
    */
   import { flip } from 'svelte/animate'
   import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
+  import type { EpisodeStub } from '@shared/types'
+  import { airedEpisode } from '@shared/aired'
   import {
     formatQuality,
     formatStreamTime,
@@ -96,6 +101,12 @@
      */
     episode?: { season: number; episode: number } | null
     /**
+     * TMDB's last aired episode, for a series. A test of an episode after it
+     * measures this one instead (`airedEpisode`), so this is the episode a
+     * test run from here is about.
+     */
+    lastAired?: Pick<EpisodeStub, 'season' | 'episode'> | null
+    /**
      * The title has not come out yet, so there is nothing to test: every
      * source would come back red. Says so instead of offering the test.
      */
@@ -108,7 +119,15 @@
     onselect: (providerId: string | null) => void
   }
 
-  const { selected, media, episode = null, notOut = false, downloaded = false, onselect }: Props = $props()
+  const {
+    selected,
+    media,
+    episode = null,
+    lastAired = null,
+    notOut = false,
+    downloaded = false,
+    onselect,
+  }: Props = $props()
 
   let open = $state(false)
   let sourceState = $state<TitleProviderState>({
@@ -120,34 +139,60 @@
     order: [],
   })
 
+  /** The episode a test from here measures: see `lastAired`. Null for a film. */
+  const tested = $derived(episode === null ? null : airedEpisode(episode, lastAired))
+
+  /** `scan.finished` when the stored state on screen was asked for: see `liveRunApplies`. */
+  let readAfter = $state(0)
+  /** Counts the reads asked for, so only the latest answer is taken. */
+  let reads = 0
+
   /**
-   * The verdicts to draw, live run preferred over the stored one.
+   * Read what is stored for this title, and note which runs it can hold.
    *
-   * A scan in flight for *this* title is the most current thing there is, and
-   * its partial results are what make the dots fill in one by one instead of
-   * appearing all at once at the end. When nothing is running, or the running
-   * scan is measuring a different title, the stored scan is used — which
-   * `providers.outcomes` has already discarded if it aged out.
+   * Re-read every time the menu opens and when a test from here ends: the
+   * log is appended to by the player as it plays, so the interesting change
+   * is almost always the one that just happened — a source the user tried a
+   * minute ago. Caching this would show them the state before their own
+   * attempt.
    */
+  async function readStored(): Promise<void> {
+    const asked = ++reads
+    const finished = scan.finished
+    const result = await window.wta.providers.outcomes(media, episode)
+    if (asked !== reads) return
+    sourceState = result
+    readAfter = finished
+  }
+
+  /**
+   * Whether the live run colours the dots rather than the stored results.
+   *
+   * A run of *this* title and episode is the most current thing there is
+   * while it runs, and its partial results are what make the dots fill in
+   * one by one instead of appearing all at once at the end. Once it is over,
+   * the stored results take over as soon as they have been read again: they
+   * hold the run's results, and they are what Automatic orders by. A run of
+   * another title or episode never colours them. See `liverun.ts`.
+   */
+  const live = $derived(scan.overrides(media, tested, readAfter))
+
+  /** The verdicts to draw: the live run's or the stored ones, as `live` says. */
   const verdicts = $derived<Record<string, ProbeVerdict>>(
-    scan.matches(media) ? scan.verdicts : (sourceState.scan?.verdicts ?? {}),
+    live ? scan.verdicts : (sourceState.scan?.verdicts ?? {}),
   )
 
   /** How long each streaming source took to start, from the same run as `verdicts`. */
-  const timings = $derived<Record<string, number>>(
-    scan.matches(media) ? scan.timings : (sourceState.scan?.timings ?? {}),
-  )
+  const timings = $derived<Record<string, number>>(live ? scan.timings : (sourceState.scan?.timings ?? {}))
   /** The best quality each streaming source offers, where its stream says. Same run again. */
   const qualities = $derived<Record<string, number>>(
-    scan.matches(media) ? scan.qualities : (sourceState.scan?.qualities ?? {}),
+    live ? scan.qualities : (sourceState.scan?.qualities ?? {}),
   )
   /** Why each source that did not stream failed, where the test could tell. Same run again. */
-  const reasons = $derived<Record<string, ScanReason>>(
-    scan.matches(media) ? scan.reasons : (sourceState.scan?.reasons ?? {}),
-  )
+  const reasons = $derived<Record<string, ScanReason>>(live ? scan.reasons : (sourceState.scan?.reasons ?? {}))
 
-  /** True while a scan of the title this picker is showing is running. */
-  const scanning = $derived(scan.running && scan.matches(media))
+  /** True while a scan of the title and episode this picker is showing is running. */
+  const scanning = $derived(scan.running && scan.isAbout(media, tested))
 
   let trigger = $state<HTMLButtonElement | null>(null)
   /**
@@ -199,7 +244,7 @@
   function measurement(id: string): string {
     // Credit a result another of the user's devices measured — not during a
     // live run here, whose results are all this device's. See `sharedLabel`.
-    const shared = scan.matches(media) ? '' : sharedLabel(sourceState.sharedFrom[id])
+    const shared = live ? '' : sharedLabel(sourceState.sharedFrom[id])
     if (verdicts[id] !== 'stream') return shared
     const ms = timings[id]
     const quality = qualities[id]
@@ -237,7 +282,7 @@
 
   /** How many sources the last scan found streaming, once it has finished. */
   const scanSummary = $derived.by(() => {
-    if (scanning || !scan.matches(media)) return null
+    if (scanning || !scan.isAbout(media, tested)) return null
     const settled = Object.keys(scan.verdicts).length
     if (settled === 0) return null
     const working = Object.values(scan.verdicts).filter((v) => v === 'stream').length
@@ -250,23 +295,20 @@
       await scan.cancel()
       return
     }
-    await scan.start(media, episode)
+    // The episode the test will measure, which main would move it to anyway:
+    // so the run is about what this list compares it with from the start.
+    await scan.start(media, tested)
     // Re-read so the stored scan and the outcome dots come from one moment.
-    sourceState = await window.wta.providers.outcomes(media, episode)
+    // The run's results are filed by the time the call returns.
+    await readStored()
   }
 
-  /**
-   * Re-read every time the menu opens.
-   *
-   * The log is appended to by the player as it plays, so the interesting change
-   * is almost always the one that just happened — a source the user tried a
-   * minute ago. Caching this would show them the state before their own attempt.
-   */
+  /** Re-read every time the menu opens: see `readStored`. */
   function toggle(): void {
     open = !open
     if (!open) return
     placeMenu()
-    void window.wta.providers.outcomes(media, episode).then((result) => (sourceState = result))
+    void readStored()
   }
 
   // The overlay behind the menu scrolls and the window resizes; a fixed menu
