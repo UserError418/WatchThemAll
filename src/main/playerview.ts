@@ -1334,6 +1334,14 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * them to reach what the connection allows, and the result then stays put.
    */
   const PICTURE_WINDOW_MS = 60_000
+  /**
+   * The top of the source's own list, told before this load was filed as
+   * streaming; filed with it when it is (`noteStreamed`). Measured live on
+   * VidSrc (2026-10-09): the shell saw the film's time move and asked for
+   * the list before `media-started-playing` reached here, and the shell asks
+   * only once, so dropping the early answer lost the play's offer for good.
+   */
+  let heldOffer: number | null = null
 
   const noteStreamed = (providerId: string): void => {
     if (measured?.streamed) return
@@ -1341,7 +1349,15 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     const ms = at - loadStartedAt
     // Past the silence check, the wait included the user: see `PLAY_TIMING_MAX_MS`.
     measured = { providerId, at, streamed: true, ...(ms <= PLAY_TIMING_MAX_MS ? { ms } : {}) }
-    options.reportResult?.(providerId, { at, streamed: true, ...(measured.ms === undefined ? {} : { ms: measured.ms }) })
+    const offered = heldOffer === null ? null : withQualityReading(measured, { quality: heldOffer, kind: 'offered' })
+    heldOffer = null
+    if (offered !== null) measured = offered
+    options.reportResult?.(providerId, {
+      at,
+      streamed: true,
+      ...(measured.ms === undefined ? {} : { ms: measured.ms }),
+      ...(measured.quality === undefined ? {} : { quality: measured.quality, qualityKind: measured.qualityKind ?? 'floor' }),
+    })
   }
 
   /** The success again, under the same moment, so it replaces the result rather than adding one. */
@@ -1374,13 +1390,17 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
    * once the film plays (`WtaPlayerApi.offered`): filed with this play as
    * what the source offers.
    *
-   * Only for a load already filed as streaming. The decoder's start
-   * (`media-started-playing`) comes before the shell sees the film's time
-   * move and asks for the list, so a report with nothing filed yet is from a
-   * page being left, and not this load's.
+   * Before this load is filed as streaming it is held (`heldOffer`): the
+   * shell can see the film's time move before the decoder's start reaches
+   * here. Before the new page has committed, it can only be the page being
+   * left, and is dropped.
    */
   const noteOffered = (quality: number): void => {
-    if (!measured?.streamed) return
+    if (!committed || closed) return
+    if (!measured?.streamed) {
+      heldOffer = quality
+      return
+    }
     const better = withQualityReading(measured, { quality, kind: 'offered' })
     if (better === null) return
     measured = better
@@ -1513,6 +1533,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     committed = false
     loadNumber += 1
     measured = null
+    heldOffer = null
     lastActivityAt = Date.now()
     idleSinceCheck = false
     // Whatever the previous page left open is aborted by the navigation.
