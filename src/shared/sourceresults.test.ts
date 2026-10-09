@@ -349,12 +349,35 @@ describe('titleResults', () => {
       expect(scan?.qualityKinds).toEqual({ a: 'offered' })
     })
 
-    it("prefers the episode's own readings to its season's", () => {
+    it("takes the season's offer over the episode's own floor", () => {
+      // Episode 2 was only played: its first picture is a floor. The season's
+      // test read the list, which says more about episode 2 than one picture
+      // does; the episode's floor used to win and read "720p+", too low.
       const history = [
         result({ episode: 1, quality: 1080, ...offered, ago: 3 * HOUR }),
         result({ episode: 2, origin: 'play', quality: 720, ...floor, ago: HOUR }),
       ]
+      const scan = read(history, { season: 1, episode: 2 }).scan
+      expect(scan?.qualities).toEqual({ a: 1080 })
+      expect(scan?.qualityKinds).toEqual({ a: 'offered' })
+    })
+
+    it("prefers the episode's own offer to its season's, even an older one", () => {
+      const history = [
+        result({ episode: 2, quality: 720, ...offered, ago: 3 * HOUR }),
+        result({ episode: 1, quality: 1080, ...offered, ago: HOUR }),
+      ]
       expect(read(history, { season: 1, episode: 2 }).scan?.qualities).toEqual({ a: 720 })
+    })
+
+    it("keeps the episode's floors ahead of the season's when neither has an offer", () => {
+      const history = [
+        result({ episode: 1, quality: 1080, ...floor, ago: 3 * HOUR }),
+        result({ episode: 2, origin: 'play', quality: 720, ...floor, ago: HOUR }),
+      ]
+      const scan = read(history, { season: 1, episode: 2 }).scan
+      expect(scan?.qualities).toEqual({ a: 720 })
+      expect(scan?.qualityKinds).toEqual({ a: 'floor' })
     })
 
     it('never falls back to another season, nor to results of the whole title', () => {

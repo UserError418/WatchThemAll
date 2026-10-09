@@ -488,24 +488,29 @@ function startTime(results: readonly SourceResult[]): number | undefined {
  * "offered for this episode, recently, on this kind of device". Another
  * season is other encodes, and its readings would be a guess about these.
  *
- * Within the scope, the newest offer is the answer: what the source lists
- * is its best. A floor never displaces an offer, even a higher floor,
- * because a floor is one rendition seen at one moment and the offer is the
- * whole list. With no offer, the best floor of the latest `SAMPLE_SIZE`
- * readings, still as a floor: an adaptive player's first picture is often a
- * lower rung, and the best of several is closer to what the source has.
+ * The newest offer is the answer: what the source lists is its best. It is
+ * looked for in the episode, then in the season, before any floor is: an
+ * episode that has only been played carries the play's first picture, a
+ * floor, and the season's list says more about this episode than that
+ * picture does. Letting the episode's floor win showed "720p+" on an
+ * episode whose season the source lists at 1080p, which is the label too
+ * low that the owner asked to be rid of. A floor never displaces an offer,
+ * even a higher floor, because a floor is one rendition seen at one moment
+ * and the offer is the whole list. With no offer, the best floor of the
+ * latest `SAMPLE_SIZE` readings in the scope, still as a floor: an adaptive
+ * player's first picture is often a lower rung, and the best of several is
+ * closer to what the source has.
  */
 function qualityOf(
   results: readonly SourceResult[],
   episode: { season: number; episode: number } | null,
 ): { quality: number; kind: QualityKind } | null {
-  const readings = qualityScope(
-    results.filter((r) => r.verdict === 'stream' && r.quality !== undefined),
-    episode,
-  ).sort((a, b) => b.at - a.at)
-  const offer = readings.find(isOffer)
+  const readings = results
+    .filter((r) => r.verdict === 'stream' && r.quality !== undefined)
+    .sort((a, b) => b.at - a.at)
+  const offer = qualityScope(readings.filter(isOffer), episode)[0]
   if (offer !== undefined) return { quality: offer.quality!, kind: 'offered' }
-  const latest = readings.slice(0, SAMPLE_SIZE)
+  const latest = qualityScope(readings, episode).slice(0, SAMPLE_SIZE)
   if (latest.length === 0) return null
   return { quality: Math.max(...latest.map((r) => r.quality!)), kind: 'floor' }
 }

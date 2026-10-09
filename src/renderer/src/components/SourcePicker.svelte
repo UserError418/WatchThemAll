@@ -193,7 +193,7 @@
   )
   /** What each of those is worth: the best on offer ("1080p"), or a floor ("720p+"). */
   const qualityKinds = $derived<Record<string, QualityKind>>(
-    scan.matches(media) ? scan.qualityKinds : (sourceState.scan?.qualityKinds ?? {}),
+    live ? scan.qualityKinds : (sourceState.scan?.qualityKinds ?? {}),
   )
   /** Why each source that did not stream failed, where the test could tell. Same run again. */
   const reasons = $derived<Record<string, ScanReason>>(live ? scan.reasons : (sourceState.scan?.reasons ?? {}))
