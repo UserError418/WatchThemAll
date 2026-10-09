@@ -274,7 +274,9 @@ export function liveCastability(
  *   stream of the class it serves now (or, before signatures were filed,
  *   played it on this title).
  * - `checked`: the cast check during a test reached the stream through the
- *   proxy, it is the title, and its signature fits this model's profile.
+ *   proxy, it is the title, and its signature fits this model's profile, or
+ *   a television of this model played a stream of the same class from
+ *   another source (a measurement outranks the spec).
  * - `hidden`, with the reason: a television of this model refused it on
  *   this title, or refused a stream of the same class from any source, or
  *   its signature is outside the profile. Also, as before, a stream only
@@ -427,14 +429,18 @@ export function castTier(input: {
     if (today !== null) return { tier: 'blocked', reason: today }
     if (check.reach === 'ok') {
       if (!check.signature) return { tier: 'unchecked', reason: 'reached, but what it holds could not be read' }
-      const refusedClass = current === null ? undefined : classAnswer(evidence.answers, current, model)
-      if (refusedClass?.outcome === 'refused') {
-        return { tier: 'hidden', reason: `a TV like this one refused ${whatWas(check.signature)}` }
+      // What a television of this model last said about a stream of this
+      // class, from any source: a measurement, so it outranks the spec.
+      const what = whatWas(check.signature)
+      const byClass = current === null ? undefined : classAnswer(evidence.answers, current, model)
+      if (byClass?.outcome === 'refused') return { tier: 'hidden', reason: `a TV like this one refused ${what}` }
+      if (byClass?.outcome === 'played') {
+        const mine = classAnswer(evidence.answers, current!, model, providerId)
+        if (mine?.outcome === 'played') return { tier: 'plays', reason: `played ${what} on a TV like this one` }
+        return { tier: 'checked', reason: `a TV like this one played ${what} from another source` }
       }
       const fit = fitsProfile(check.signature, profile)
       if (fit.fit === 'no') return { tier: 'hidden', reason: fit.reason }
-      const played = current === null ? undefined : classAnswer(evidence.answers, current, model, providerId)
-      if (played?.outcome === 'played') return { tier: 'plays', reason: `played ${whatWas(check.signature)} on a TV like this one` }
       if (fit.fit === 'yes') return { tier: 'checked', reason: null }
       return { tier: 'unchecked', reason: fit.reason }
     }

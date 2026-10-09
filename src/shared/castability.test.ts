@@ -281,7 +281,19 @@ describe('castTier', () => {
     expect(tier(evidence, 'Chromecast Ultra')).toEqual({ tier: 'checked', reason: null })
     // A newer play of the class on this model lifts it.
     const replayed = { ...evidence, answers: [answer({ providerId: 'c', titleKey: 'movie:tt8', at: now - 10 * MINUTE }), elsewhere] }
-    expect(tier(replayed).tier).toBe('checked')
+    expect(tier(replayed)).toEqual({ tier: 'checked', reason: 'a TV like this one played H.264 1920×1080 from another source' })
+  })
+
+  it("lets a television's play of a class outrank the spec that says it cannot", () => {
+    // Outside a plain Chromecast's published 1920 wide, yet measured playing on one.
+    const wide = sig(2048, 858)
+    const played = answer({ providerId: 'b', titleKey: 'movie:tt9', signature: wide })
+    expect(tier({ checks: { a: check({ signature: wide }) } }).tier).toBe('hidden')
+    expect(tier({ answers: [played], checks: { a: check({ signature: wide }) } }).tier).toBe('checked')
+    expect(tier({ answers: [{ ...played, providerId: 'a' }], checks: { a: check({ signature: wide }) } })).toEqual({
+      tier: 'plays',
+      reason: 'played H.264 2048×858 on a TV like this one',
+    })
   })
 
   it('proves a source that played a stream of this class on this model on another title', () => {

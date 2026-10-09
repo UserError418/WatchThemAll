@@ -24,6 +24,7 @@ import {
   scanAwareOrder,
   scanEpisode,
   scanProgress,
+  titleCastEvidence,
   titleResults,
   WarmStarts,
   WARM_START_MS,
@@ -392,6 +393,21 @@ describe('titleResults', () => {
       sharedScans: parts.sharedScans ?? [],
       streamOutcomes: parts.streamOutcomes ?? [],
     },
+  })
+
+  /*
+   * What the cast list decides its tiers from: the history's checks and
+   * answers, and the answers in the old title-wide rows too, which stand for
+   * any television, as they always did.
+   */
+  it("gathers the title's cast checks and every answer, old rows included", () => {
+    const checked = { ...tested('a', 'stream', now - day), castCheck: { reach: 'ok', identity: 'film' } }
+    const legacy: ProviderScan = { titleKey: 'movie:tt9', at: now - 2 * day, verdicts: { b: 'stream' }, casts: { b: 'refused' } }
+    const evidence = titleCastEvidence(sources({ history: [checked], providerScans: [legacy] }), 'tv:tt1', 'desktop', now)
+    expect(evidence.checks).toEqual({ a: { reach: 'ok', identity: 'film', at: now - day } })
+    expect(evidence.answers).toEqual([
+      { providerId: 'b', titleKey: 'movie:tt9', outcome: 'refused', at: now - 2 * day, receiver: null, signature: null },
+    ])
   })
 
   /** For `autotest.ts`: a scan cancelled part-way is not a finished one, and the other kind's tests are not this one's. */
