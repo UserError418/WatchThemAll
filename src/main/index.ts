@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { isListed } from '@shared/listed'
 import { EV } from '@shared/ipc'
-import type { PlayRequest, PreviewPlan, TitleRef } from '@shared/ipc'
+import type { PlayRequest, PreviewPlan, ResultsChanged, TitleRef } from '@shared/ipc'
 import type { CapturedRequest } from './segmentsave'
 import { NodePersistence, Store } from './store'
 import { registerIpc, type IpcHandles } from './ipc'
@@ -83,6 +83,7 @@ import { SyncService } from './syncservice'
 import { TokenStore } from './synctokens'
 import { airedEpisode, localMidnight, notOutYet } from '@shared/aired'
 import { batchChanges } from '@shared/store/changebatch'
+import { batchResultChanges } from '@shared/store/resultsbatch'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -155,6 +156,20 @@ store.subscribe(batchChanges((keys) => send(EV.storeChanged, keys)))
  * Compact rather than indented: nobody repairs it by hand, and it syncs.
  */
 const resultStore = new ResultStore(new NodePersistence(store.dir, join(store.dir, 'source-results.json'), false))
+
+/**
+ * Open screens hear which titles' results changed, from wherever the results
+ * came: a test, a play, a preview, a sync. Gathered over a moment
+ * (`batchResultChanges`), because they come in bursts. The player's chrome
+ * is a separate document with its own preload, so it is told separately; it
+ * re-reads only for the title it is playing, as the app window's lists do.
+ */
+const announceResults = batchResultChanges((titleKeys) => {
+  const change: ResultsChanged = { titleKeys }
+  send(EV.resultsChanged, change)
+  player?.notifyChrome(EV.resultsChanged, change)
+})
+resultStore.subscribe((_change, titleKeys) => announceResults(titleKeys))
 
 /** The results as everything that reads or records them reaches them. */
 const testResults: ResultsAccess = {

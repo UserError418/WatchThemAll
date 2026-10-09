@@ -53,6 +53,7 @@ import type {
   PlayerSuggestion,
   ProviderScan,
   ProviderScanProgress,
+  ResultsChanged,
   SkipOffer,
   TitleProviderState,
   TitleRef,
@@ -87,6 +88,8 @@ export interface ChromeDeps {
   scan(media: TitleRef, episode?: { season: number; episode: number } | null): Promise<ProviderScan>
   cancelScan(): Promise<void>
   subscribeScan(cb: (progress: ProviderScanProgress) => void): () => void
+  /** Test results changed for these titles (`EV.resultsChanged`). */
+  subscribeResults(cb: (change: ResultsChanged) => void): () => void
   /** The cast controls, already built — see `createCastBridge`. */
   cast: WtaChromeApi['cast']
   /** v2: what our own controls tell the bar, and the bar them (`overlayhub.ts`). */
@@ -118,6 +121,7 @@ export function createChromeApi(deps: ChromeDeps): WtaChromeApi {
     scan: (media, episode) => deps.scan(media, episode),
     cancelScan: () => deps.cancelScan(),
     onProviderScan: (cb) => deps.subscribeScan(cb),
+    onResultsChanged: (cb) => deps.subscribeResults(cb),
     cast: deps.cast,
 
     /** Nothing raises a suggestion here, so there is never one to dismiss. */

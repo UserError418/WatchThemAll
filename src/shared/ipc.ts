@@ -352,6 +352,17 @@ export const EV = {
   providerScan: 'evt:provider-scan',
   /** The watchlist tester's state, whenever it changes. See `WatchlistTestStatus`. */
   watchlistTest: 'evt:watchlist-test',
+  /**
+   * Test results changed for these titles. See `ResultsChanged`.
+   *
+   * Sent to the app window and to the player's chrome, because every source
+   * list re-read its results only when it opened or when a test run from it
+   * ended. Results also come from tests nobody watches (the background
+   * tester, the automatic tests), from plays and previews, and from sync, and
+   * until this event none of those reached a list, or the detail view's
+   * preview, that was already open.
+   */
+  resultsChanged: 'evt:results-changed',
 } as const
 
 /**
@@ -594,10 +605,10 @@ export interface ProviderScanProgress {
    */
   title?: TitleRef
   /**
-   * The episode under test, or null for a film. Absent where the sender does
-   * not say (the phone's bridge): "this title, episode unknown". Results are
-   * per episode, so the player's source list shows a run only for the
-   * episode it is playing (`progressIsAbout`).
+   * The episode under test, or null for a film. Both platforms' runs name
+   * it; absent would read as "this title, episode unknown". Results are per
+   * episode, so a source list shows a run only for the episode it shows
+   * (`progressIsAbout`, and the renderer's `liverun.ts`).
    */
   episode?: { season: number; episode: number } | null
   /**
@@ -642,6 +653,18 @@ export interface WatchlistTestStatus {
   /** Watchlist (title, source) pairs with a result not yet due for a re-test, of all pairs. */
   done: number
   total: number
+}
+
+/**
+ * Which titles' test results just changed (`EV.resultsChanged`), by
+ * `titleKey`, the key every result is filed under (`@shared/titlekey`).
+ *
+ * A list rather than one title per message: changes are gathered over a
+ * moment and sent once (`batchResultChanges`), and one sync can touch dozens
+ * of titles. A screen re-reads only when the title it shows is named.
+ */
+export interface ResultsChanged {
+  titleKeys: string[]
 }
 
 /**
@@ -1289,6 +1312,8 @@ export interface WtaApi {
     providerScan(cb: (progress: ProviderScanProgress) => void): () => void
     /** The watchlist tester's state, whenever it changes. Never fires on the phone. */
     watchlistTest(cb: (status: WatchlistTestStatus) => void): () => void
+    /** Test results changed for these titles, from anywhere: see `EV.resultsChanged`. */
+    resultsChanged(cb: (change: ResultsChanged) => void): () => void
     /**
      * Sync state, whenever it changes.
      *
@@ -1368,6 +1393,8 @@ export interface WtaChromeApi {
   cancelScan(): Promise<void>
   /** Progress of a scan, wherever it was started from. */
   onProviderScan(cb: (progress: ProviderScanProgress) => void): () => void
+  /** Test results changed for these titles, from anywhere: see `EV.resultsChanged`. */
+  onResultsChanged(cb: (change: ResultsChanged) => void): () => void
   dismissSuggestion(): Promise<void>
   /**
    * Take the offer on screen — "Switch now", or its countdown running out.

@@ -52,6 +52,7 @@ import type {
   ForYouRowRequest,
   ProviderScan,
   ProviderScanProgress,
+  ResultsChanged,
   TitleProviderState,
   TitleRef,
   WtaApi,
@@ -173,6 +174,7 @@ import { throttle } from '@shared/sync/throttle'
 import type { SyncStatus } from '@shared/sync/types'
 import { recoveredLibrary, unreadableLibrary } from '@shared/store/core'
 import { batchChanges } from '@shared/store/changebatch'
+import { batchResultChanges } from '@shared/store/resultsbatch'
 
 /** How long a local change settles before it is pushed. Matches the desktop. */
 const SYNC_AFTER_WRITE_MS = 8_000
@@ -250,6 +252,14 @@ export async function createBridge(): Promise<WtaApi> {
   const playerPaused = new Signal<boolean>()
   const playerPointerTop = new Signal<boolean>()
   const providerScan = new Signal<ProviderScanProgress>()
+  /**
+   * Test results changed for these titles, gathered over a moment, as the
+   * desktop's main process announces them: every open list re-reads, and the
+   * detail view plans its preview again (`EV.resultsChanged`).
+   */
+  const resultsChanged = new Signal<ResultsChanged>()
+  const announceResults = batchResultChanges((titleKeys) => resultsChanged.emit({ titleKeys }))
+  resultStore.subscribe((_change, titleKeys) => announceResults(titleKeys))
   const syncStatus = new Signal<SyncStatus>()
   const downloadsStatus = new Signal<DownloadsStatus>()
 
@@ -2164,6 +2174,7 @@ export async function createBridge(): Promise<WtaApi> {
         if (session && progressIsAbout(progress, titleKey(session.req), episodeOf(session.req))) cb(progress)
       }),
     outcomes: async (media, episode) => providerStateFor(media, episode),
+    subscribeResults: (cb) => resultsChanged.subscribe(cb),
     overlay: overlayHub.chrome,
     /**
      * The chrome gets the same cast bridge the main API uses, not a second one.
@@ -2691,6 +2702,7 @@ export async function createBridge(): Promise<WtaApi> {
       playerPointerTop: (cb) => playerPointerTop.subscribe(cb),
       providerScan: (cb) => providerScan.subscribe(cb),
       watchlistTest: () => () => {},
+      resultsChanged: (cb) => resultsChanged.subscribe(cb),
       downloads: (cb) => downloadsStatus.subscribe(cb),
       syncStatus: (cb) => syncStatus.subscribe(cb),
       malProgress: (cb) => malProgress.subscribe(cb),

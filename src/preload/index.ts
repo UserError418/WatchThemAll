@@ -144,6 +144,7 @@ const api: WtaApi = {
     playerPointerTop: (cb) => subscribe(EV.playerPointerTop, cb),
     providerScan: (cb) => subscribe(EV.providerScan, cb),
     watchlistTest: (cb) => subscribe(EV.watchlistTest, cb),
+    resultsChanged: (cb) => subscribe(EV.resultsChanged, cb),
     syncStatus: (cb) => subscribe(EV.syncStatus, cb),
     malProgress: (cb) => subscribe(EV.malProgress, cb),
   },

@@ -38,6 +38,8 @@
   import Score from './Score.svelte'
   import { seasonScore } from '@shared/score'
   import { notOutYet } from '@shared/aired'
+  import { titleKey } from '@shared/titlekey'
+  import { mayPlanAgain, type HeroNow } from '../lib/previewreplan'
 
   interface Props {
     media: MediaSummary
@@ -674,19 +676,21 @@
    * Ask how this episode previews, from the place it was left, and start
    * over: the one way a preview begins. Main (or the bridge) reads the saved
    * place at the moment of asking, so asking again after the player picks up
-   * where the player stopped.
+   * where the player stopped. `known` is the answer, when the caller has
+   * only just asked (new test results, below).
    */
-  function startPreview(key: string, req: PlayRequest): void {
+  function startPreview(key: string, req: PlayRequest, known?: PreviewPlan | null): void {
     const asked = ++planAsked
     endHandover()
     stream = { key, req, plan: undefined }
     streamStop = null
+    trailerHeld = false
     watching = new PreviewWatch()
     kept = false
     recordedKey = null
     dropCopy()
-    void window.wta.preview
-      .plan(req)
+    const answer = known !== undefined ? Promise.resolve(known) : window.wta.preview.plan(req)
+    void answer
       .then((plan) => {
         if (asked !== planAsked) return
         stream = { key, req, plan }
@@ -828,6 +832,48 @@
     })
   })
 
+  /*
+   * New test results for this title, from anywhere: "Test all sources", a
+   * background or automatic test, a play, a sync. Asked again while the hero
+   * shows only the trailer or the still (`mayPlanAgain`), so a source just
+   * found fast enough loads silently over it and crossfades in, as on
+   * opening; never over anything that streams.
+   */
+  $effect(() =>
+    window.wta.on.resultsChanged((change) => {
+      if (stream === null || previewRequest === null) return
+      if (!change.titleKeys.includes(titleKey(stream.req))) return
+      if (!mayPlanAgain(heroNow())) return
+      const { key } = stream
+      const req = previewRequest
+      void window.wta.preview
+        .plan(req)
+        .then((plan) => {
+          // Nothing to play is no reason to start over: the trailer would
+          // go and come back. And the hero may have moved on while asking.
+          if (plan === null || stream?.key !== key || !mayPlanAgain(heroNow())) return
+          const trailerUp = showTrailer
+          // A copy that played to its end before its source gave up has a
+          // place and a watch time to keep, as closing the view keeps them.
+          void keepPreviewPlace(stream.req)
+          startPreview(key, req, plan)
+          trailerHeld = trailerUp
+        })
+        .catch(() => {})
+    }),
+  )
+
+  /** The hero as `mayPlanAgain` needs to see it. */
+  function heroNow(): HeroNow {
+    return {
+      answered: stream !== null && stream.key === previewKey && stream.plan !== undefined,
+      streamMounted: streamPlan !== null,
+      copyLoaded: copy !== null,
+      playerOpen: previewAudio.suspended,
+      carrying: carrying.active || handingOver,
+    }
+  }
+
   const streamPlan = $derived(
     stream !== null && stream.key === previewKey && streamStop === null ? (stream.plan ?? null) : null,
   )
@@ -945,8 +991,19 @@
       stream.key === previewKey &&
       (stream.plan === null || (streamStop === 'failed' && !copyShown)),
   )
+  /**
+   * The trailer stays up under a preview planned while it played (new test
+   * results, above) until that preview covers it, and the two crossfade as
+   * they did in 2.0.4. Without it the trailer would give way to the still
+   * for the seconds the stream takes to start.
+   */
+  let trailerHeld = $state(false)
   const showTrailer = $derived(
-    showHeroTrailer && noPreview && !!detail?.trailerKey && !previewAudio.suspended && !trailerCovered,
+    showHeroTrailer &&
+      (noPreview || trailerHeld) &&
+      !!detail?.trailerKey &&
+      !previewAudio.suspended &&
+      !trailerCovered,
   )
   /**
    * The source Resume uses while a preview is on: the preview's own. Only

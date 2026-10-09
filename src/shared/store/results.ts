@@ -14,7 +14,14 @@
  * rule stays.
  */
 
-import { isSourceResult, mergeResults, pruneResults, withoutFutureResults, type SourceResult } from '../sourceresults'
+import {
+  isSourceResult,
+  mergeResults,
+  pruneResults,
+  resultKey,
+  withoutFutureResults,
+  type SourceResult,
+} from '../sourceresults'
 import { withoutByteOrderMark, type StorePersistence } from './core'
 
 /** The file's shape. `results` marks it and is bumped only if the shape ever changes. */
@@ -26,11 +33,18 @@ interface ResultsFile {
 /** A result written here, or one taken from another device's copy. */
 export type ResultsChange = 'local' | 'remote'
 
+/**
+ * Told of every change: where it came from, and the titles (`titleKey`)
+ * whose results it changed, so an open screen can tell whether it shows one
+ * of them. Empty when nothing anyone reads changed.
+ */
+export type ResultsListener = (change: ResultsChange, titleKeys: readonly string[]) => void
+
 const FLUSH_DELAY_MS = 2_000
 
 export class ResultStore {
   private items: SourceResult[] = []
-  private listeners = new Set<(change: ResultsChange) => void>()
+  private listeners = new Set<ResultsListener>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private writing: Promise<void> = Promise.resolve()
   private unsaved = false
@@ -89,7 +103,7 @@ export class ResultStore {
     this.replace(pruneResults(withoutFutureResults(results, now), now), 'remote')
   }
 
-  subscribe(listener: (change: ResultsChange) => void): () => void {
+  subscribe(listener: ResultsListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
@@ -115,16 +129,43 @@ export class ResultStore {
   }
 
   private replace(items: SourceResult[], change: ResultsChange): void {
+    const titleKeys = changedTitles(this.items, items)
     this.items = items
     this.unsaved = true
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = setTimeout(() => void this.flush(), FLUSH_DELAY_MS)
     for (const listener of this.listeners) {
       try {
-        listener(change)
+        listener(change, titleKeys)
       } catch (err) {
         console.error('[results] subscriber threw:', err)
       }
     }
   }
+}
+
+/**
+ * The titles whose results differ between two histories: a result added,
+ * gone (aged out, or pushed out by newer ones), or filed again with more in
+ * it (a play's picture, learned a minute later).
+ *
+ * Worked out rather than taken from what was recorded, because a sync
+ * replaces the whole history and keeping one result can push out another
+ * title's. Cheap: a result that did not change is the same object in both,
+ * so only a result filed again is compared by content.
+ */
+function changedTitles(before: readonly SourceResult[], after: readonly SourceResult[]): string[] {
+  const held = new Map(before.map((result) => [resultKey(result), result]))
+  const changed = new Set<string>()
+  for (const result of after) {
+    const key = resultKey(result)
+    const was = held.get(key)
+    held.delete(key)
+    if (was === result) continue
+    if (was !== undefined && JSON.stringify(was) === JSON.stringify(result)) continue
+    changed.add(result.titleKey)
+    if (was !== undefined) changed.add(was.titleKey)
+  }
+  for (const gone of held.values()) changed.add(gone.titleKey)
+  return [...changed]
 }

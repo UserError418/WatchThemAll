@@ -22,6 +22,7 @@ import type {
   SkipOffer,
   ProviderScan,
   ProviderScanProgress,
+  ResultsChanged,
   TitleProviderState,
   TitleRef,
   WtaChromeApi,
@@ -162,6 +163,11 @@ const api: WtaChromeApi = {
     const listener = (_e: unknown, progress: ProviderScanProgress): void => cb(progress)
     ipcRenderer.on(EV.providerScan, listener)
     return () => ipcRenderer.removeListener(EV.providerScan, listener)
+  },
+  onResultsChanged: (cb: (change: ResultsChanged) => void): (() => void) => {
+    const listener = (_e: unknown, change: ResultsChanged): void => cb(change)
+    ipcRenderer.on(EV.resultsChanged, listener)
+    return () => ipcRenderer.removeListener(EV.resultsChanged, listener)
   },
 
   /** Stop the countdown and stay on the current source. */

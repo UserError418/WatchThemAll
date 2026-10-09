@@ -72,6 +72,7 @@
   import type { ProbeVerdict, ScanReason, TitleProviderState, TitleRef } from '@shared/ipc'
   import type { EpisodeStub } from '@shared/types'
   import { airedEpisode } from '@shared/aired'
+  import { titleKey } from '@shared/titlekey'
   import {
     formatQuality,
     formatStreamTime,
@@ -150,11 +151,13 @@
   /**
    * Read what is stored for this title, and note which runs it can hold.
    *
-   * Re-read every time the menu opens and when a test from here ends: the
-   * log is appended to by the player as it plays, so the interesting change
-   * is almost always the one that just happened — a source the user tried a
-   * minute ago. Caching this would show them the state before their own
-   * attempt.
+   * Re-read every time the menu opens, when a test from here ends, and when
+   * this title's results change while the menu is open: the log is appended
+   * to by the player as it plays, by tests nobody here started (the
+   * background tester, the automatic tests) and by sync, so the interesting
+   * change is almost always the one that just happened — a source the user
+   * tried a minute ago. Caching this would show them the state before their
+   * own attempt.
    */
   async function readStored(): Promise<void> {
     const asked = ++reads
@@ -310,6 +313,13 @@
     placeMenu()
     void readStored()
   }
+
+  // And whenever this title's results change while it is open; see `readStored`.
+  $effect(() =>
+    window.wta.on.resultsChanged((change) => {
+      if (open && change.titleKeys.includes(titleKey(media))) void readStored()
+    }),
+  )
 
   // The overlay behind the menu scrolls and the window resizes; a fixed menu
   // does not follow either on its own.

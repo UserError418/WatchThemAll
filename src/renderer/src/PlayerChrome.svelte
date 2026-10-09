@@ -44,6 +44,7 @@
   import { nextAiredEpisode, previousEpisode, type NextEpisode } from '@shared/episodesteps'
   import { episodeOf } from '@shared/sourceresults'
   import { liveRunApplies, type RunSubject } from './lib/liverun'
+  import { titleKey } from '@shared/titlekey'
   import { isDownloadedSource } from '@shared/downloads/types'
   import {
     nudgeTarget,
@@ -533,6 +534,18 @@
     sourceState = result
     readAfter = finished
   }
+
+  /*
+   * Results for the title playing changed: a test, this play or another, a
+   * sync. Re-read while the source list or the cast list shows them, so
+   * neither shows what was stored before; closed, the next open re-reads.
+   */
+  $effect(() =>
+    api?.onResultsChanged((change) => {
+      if (context === null || !change.titleKeys.includes(titleKey(context))) return
+      if (panel === 'sources' || showRemote) void refreshSourceState()
+    }),
+  )
 
   /** The cast button, and C: straight into the remote, whatever state it is in. */
   function openRemote(): void {
