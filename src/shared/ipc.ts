@@ -807,6 +807,16 @@ export interface CastDevice {
   id: string
   name: string
   selected: boolean
+  /**
+   * What kind of television it is: the desktop reads the mDNS TXT `md`, the
+   * phone `CastDevice.getModelName()`. "Chromecast" for a plain dongle. The
+   * cast list judges each stream against this model's profile
+   * (`receivers.ts`); absent when the device did not say, which gets the
+   * strictest profile.
+   */
+  model?: string
+  /** The mDNS TXT `ca` capability bits, on the desktop. Kept, not yet read. */
+  capabilities?: number
 }
 
 /** Where a cast is, as far as the phone can tell. */

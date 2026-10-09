@@ -194,7 +194,7 @@ export function createCastService(): CastService {
 
   let known: CastDevice[] = []
   /** Address and port per device, kept so `connect` needs no second discovery. */
-  const routes = new Map<string, { address: string; port: number; name: string }>()
+  const routes = new Map<string, { address: string; port: number; name: string; model: string | null }>()
 
   let session: CastSession | null = null
   let sessionEnded: (() => void) | null = null
@@ -237,11 +237,15 @@ export function createCastService(): CastService {
 
   const refresh = async (): Promise<void> => {
     const found = await discover(3000)
-    for (const device of found) routes.set(device.id, { address: device.address, port: device.port, name: device.name })
+    for (const device of found) {
+      routes.set(device.id, { address: device.address, port: device.port, name: device.name, model: device.model ?? null })
+    }
     known = found.map((device) => ({
       id: device.id,
       name: device.name,
       selected: session !== null && session.deviceName === device.name,
+      ...(device.model === undefined ? {} : { model: device.model }),
+      ...(device.capabilities === undefined ? {} : { capabilities: device.capabilities }),
     }))
   }
 

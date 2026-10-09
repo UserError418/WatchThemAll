@@ -550,6 +550,12 @@ public class CastPlugin extends Plugin {
                 entry.put("id", route.getId());
                 entry.put("name", route.getName());
                 entry.put("selected", route.isSelected());
+                // What kind of television it is, which the cast list judges
+                // each stream against (`src/shared/receivers.ts`). The desktop
+                // reads the same name from the mDNS TXT record's `md`.
+                CastDevice device = CastDevice.getFromBundle(route.getExtras());
+                String model = device != null ? device.getModelName() : null;
+                if (model != null && !model.isEmpty()) entry.put("model", model);
                 out.put(entry);
             }
         }

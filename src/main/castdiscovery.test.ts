@@ -158,6 +158,19 @@ describe('devicesFrom', () => {
   })
 
   /**
+   * The model is what a stream is judged against (`receivers.ts`): a plain
+   * Chromecast announces `md=Chromecast`, the owner's among them.
+   */
+  it('keeps the model and the capability bits the TXT record announces', () => {
+    const withModel = base.map((r) =>
+      r.type === 16 ? { ...r, txt: new Map([['id', 'uuid-1'], ['fn', 'Wohnzimmer'], ['md', 'Chromecast'], ['ca', '201221']]) } : r,
+    )
+    expect(devicesFrom(withModel)).toEqual([
+      { id: 'uuid-1', name: 'Wohnzimmer', address: '192.168.1.42', port: 8009, model: 'Chromecast', capabilities: 201221 },
+    ])
+  })
+
+  /**
    * A device that cannot be connected to is worse than a shorter list: the user
    * taps it, nothing happens, and nothing explains why.
    */

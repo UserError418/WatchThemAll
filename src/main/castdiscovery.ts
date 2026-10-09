@@ -8,6 +8,7 @@
  *   PTR  the service name          -> an instance name
  *   SRV  the instance              -> a port and a host
  *   TXT  key=value pairs, of which `fn` is the name the user gave the device
+ *        and `md` the model ("Chromecast", "Chromecast Ultra")
  *   A    the host                  -> an IPv4 address
  *
  * The alternative was `multicast-dns`, and the reasoning is the same as in
@@ -67,6 +68,13 @@ export interface DiscoveredDevice {
   name: string
   address: string
   port: number
+  /**
+   * TXT `md`: the kind of device, "Chromecast" for a plain dongle. What the
+   * cast list judges a stream against (`receivers.ts`). Absent when not sent.
+   */
+  model?: string
+  /** TXT `ca`: the device's capability bits, as announced. Kept, not yet read. */
+  capabilities?: number
 }
 
 /* ── Names ──────────────────────────────────────────────────────────────── */
@@ -249,12 +257,17 @@ export function devicesFrom(records: Record[]): DiscoveredDevice[] {
     // and is itself usually that uuid.
     const id = txt?.get('id') ?? instance
 
-    devices.set(id, {
+    const device: DiscoveredDevice = {
       id,
       name: txt?.get('fn') ?? instance,
       address,
       port: record.port,
-    })
+    }
+    const model = txt?.get('md')?.trim()
+    if (model) device.model = model
+    const capabilities = Number(txt?.get('ca'))
+    if (txt?.has('ca') && Number.isInteger(capabilities)) device.capabilities = capabilities
+    devices.set(id, device)
   }
 
   return [...devices.values()].sort((a, b) => a.name.localeCompare(b.name))
