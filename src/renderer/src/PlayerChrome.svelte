@@ -27,6 +27,7 @@
     CastStatus,
   } from '@shared/ipc'
   import {
+    formatAudio,
     formatQuality,
     formatStreamTime,
     inScanOrder,
@@ -245,6 +246,7 @@
   let scanTimings = $state<Record<string, number>>({})
   let scanQualities = $state<Record<string, number>>({})
   let scanQualityKinds = $state<Record<string, QualityKind>>({})
+  let scanAudio = $state<Record<string, string[]>>({})
   let scanReasons = $state<Record<string, ScanReason>>({})
   /** How each source's video arrived in the live run — what the cast list fills in from. */
   let scanDelivery = $state<Record<string, StreamDelivery>>({})
@@ -270,6 +272,7 @@
       scanTimings = progress.timings
       scanQualities = progress.qualities
       scanQualityKinds = progress.qualityKinds
+      scanAudio = progress.audio
       scanReasons = progress.reasons
       scanDelivery = progress.delivery
       scanDone = progress.done
@@ -289,6 +292,7 @@
     scanTimings = {}
     scanQualities = {}
     scanQualityKinds = {}
+    scanAudio = {}
     scanReasons = {}
     scanDelivery = {}
     scanning = false
@@ -329,9 +333,10 @@
   const qualityKinds = $derived<Record<string, QualityKind>>(
     liveRun ? scanQualityKinds : (sourceState.scan?.qualityKinds ?? {}),
   )
+  const audio = $derived<Record<string, string[]>>(liveRun ? scanAudio : (sourceState.scan?.audio ?? {}))
   const reasons = $derived<Record<string, ScanReason>>(liveRun ? scanReasons : (sourceState.scan?.reasons ?? {}))
 
-  /** " · 3.8 s · 1080p", or "720p+" for a floor, for a source that streamed; see `SourcePicker.svelte`. */
+  /** " · 3.8 s · 1080p · EN/DE", or "720p+" for a floor, for a source that streamed; see `SourcePicker.svelte`. */
   function measurement(id: string): string {
     const shared = sharedNote(id)
     if (verdicts[id] !== 'stream') return shared
@@ -340,6 +345,7 @@
     return (
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
       (quality !== undefined ? ` · ${formatQuality(quality, qualityKinds[id] ?? 'floor')}` : '') +
+      formatAudio(audio[id]) +
       shared
     )
   }

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatQuality, formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote, tagText } from './scanrank'
+import { formatAudio, formatQuality, formatStreamTime, inScanOrder, normalizeSourceOrder, ordinal, resumeNote, tagText } from './scanrank'
 
 const rows = (...ids: string[]): Array<{ id: string }> => ids.map((id) => ({ id }))
 const ids = (items: Array<{ id: string }>): string[] => items.map((item) => item.id)
@@ -126,5 +126,22 @@ describe('tagText', () => {
     expect(tagText(null, ' · 3.4 s · 720p')).toBe('3.4 s · 720p')
     expect(tagText(null, ' · Phone')).toBe('Phone')
     expect(tagText(null, '')).toBe('')
+  })
+})
+
+describe('formatAudio', () => {
+  it('names the languages after the quality, only when they are known', () => {
+    expect(formatAudio(['en', 'de'])).toBe(' · EN/DE')
+    expect(formatAudio(['ja'])).toBe(' · JA')
+    expect(formatAudio([])).toBe('')
+    expect(formatAudio(undefined)).toBe('')
+  })
+
+  it('counts what does not fit beside a name', () => {
+    expect(formatAudio(['ja', 'en', 'de', 'fr', 'es'])).toBe(' · JA/EN/DE+2')
+  })
+
+  it('reads as one tag with the rest of the row', () => {
+    expect(tagText(null, ` · 3.8 s · ${formatQuality(1080)}${formatAudio(['en', 'de'])}`)).toBe('3.8 s · 1080p · EN/DE')
   })
 })

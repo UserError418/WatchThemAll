@@ -74,6 +74,7 @@
   import { airedEpisode } from '@shared/aired'
   import { titleKey } from '@shared/titlekey'
   import {
+    formatAudio,
     formatQuality,
     formatStreamTime,
     inScanOrder,
@@ -195,6 +196,8 @@
   const qualityKinds = $derived<Record<string, QualityKind>>(
     live ? scan.qualityKinds : (sourceState.scan?.qualityKinds ?? {}),
   )
+  /** The languages each streaming source's sound is offered in, where known. Same run again. */
+  const audio = $derived<Record<string, string[]>>(live ? scan.audio : (sourceState.scan?.audio ?? {}))
   /** Why each source that did not stream failed, where the test could tell. Same run again. */
   const reasons = $derived<Record<string, ScanReason>>(live ? scan.reasons : (sourceState.scan?.reasons ?? {}))
 
@@ -244,7 +247,7 @@
 
   /**
    * What the last test measured about one source, for the end of its label:
-   * " · 3.8 s · 1080p", or "720p+" where only a floor is known. Only for a
+   * " · 3.8 s · 1080p · EN/DE", or "720p+" where only a floor is known. Only for a
    * source that streamed; either part may be missing, and a missing quality
    * means the stream did not say, not that it is poor.
    */
@@ -259,6 +262,7 @@
       (ms !== undefined ? ` · ${formatStreamTime(ms)}` : '') +
       // A quality without a kind is a floor: it never claims an offer.
       (quality !== undefined ? ` · ${formatQuality(quality, qualityKinds[id] ?? 'floor')}` : '') +
+      formatAudio(audio[id]) +
       shared
     )
   }

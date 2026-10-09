@@ -34,6 +34,8 @@ class ProviderScanState {
   qualities = $state<Record<string, number>>({})
   /** What each of `qualities` is worth: the best on offer, or a floor under it. */
   qualityKinds = $state<Record<string, QualityKind>>({})
+  /** The languages each streaming provider's sound is offered in, where known. */
+  audio = $state<Record<string, string[]>>({})
   /** Why each settled source that did not stream failed. */
   reasons = $state<Record<string, ScanReason>>({})
 
@@ -70,6 +72,7 @@ class ProviderScanState {
       this.timings = progress.timings
       this.qualities = progress.qualities
       this.qualityKinds = progress.qualityKinds
+      this.audio = progress.audio
       this.reasons = progress.reasons
       this.done = progress.done
       this.total = progress.total
@@ -130,6 +133,7 @@ class ProviderScanState {
     this.timings = {}
     this.qualities = {}
     this.qualityKinds = {}
+    this.audio = {}
     this.reasons = {}
     this.done = 0
     this.cancelled = false
@@ -157,6 +161,7 @@ class ProviderScanState {
     this.timings = {}
     this.qualities = {}
     this.qualityKinds = {}
+    this.audio = {}
     this.reasons = {}
     this.done = 0
     this.total = 0

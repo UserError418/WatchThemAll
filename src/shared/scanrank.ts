@@ -261,6 +261,23 @@ export function formatQuality(quality: number, kind: QualityKind = 'offered'): s
   return kind === 'floor' ? `${quality}p+` : `${quality}p`
 }
 
+/** How many languages a source's row names before it counts the rest. */
+const LANGUAGES_SHOWN = 3
+
+/**
+ * The languages a source's sound is offered in, for the end of its row:
+ * " · EN/DE", or " · JA/EN/DE+2" past three. Nothing when they are not known.
+ *
+ * No "dub" or "sub": with more than one language the languages are the
+ * information, and with one the viewer knows which it is.
+ */
+export function formatAudio(languages: readonly string[] | undefined): string {
+  if (languages === undefined || languages.length === 0) return ''
+  const shown = languages.slice(0, LANGUAGES_SHOWN).map((code) => code.toUpperCase())
+  const more = languages.length - shown.length
+  return ` · ${shown.join('/')}${more > 0 ? `+${more}` : ''}`
+}
+
 /** Every key a source order can hold, in the default priority. See `Settings.sourceOrder`. */
 export const SOURCE_SORT_KEYS: readonly SourceSortKey[] = ['list', 'speed', 'quality']
 

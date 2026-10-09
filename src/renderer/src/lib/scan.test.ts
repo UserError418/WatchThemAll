@@ -65,6 +65,15 @@ afterEach(() => {
 })
 
 describe('the live test run', () => {
+  it('carries the languages each source is heard in, and forgets them with the run', async () => {
+    const { scan, speak } = await listening()
+    void scan.start(A, S1E1)
+    speak({ ...progress(A, 'stream', S1E1), audio: { vidsrc: ['ja', 'en'] } })
+    expect(scan.audio).toEqual({ vidsrc: ['ja', 'en'] })
+    scan.reset()
+    expect(scan.audio).toEqual({})
+  })
+
   it("is not shown on a title's list when it measures another title", async () => {
     const { scan, speak } = await listening()
 
