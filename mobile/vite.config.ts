@@ -29,8 +29,11 @@ export default defineConfig(({ mode }) => {
       '@shared': resolve(__dirname, '../src/shared'),
       '@': resolve(__dirname, '../src/renderer/src'),
       // The business layer lives under src/main because that is where it runs
-      // on desktop. None of the modules the phone build imports touch Node or
-      // Electron — see mobile/README.md for the list and why it holds.
+      // on desktop. None of the modules the phone build reaches may touch
+      // Node or Electron, and ESLint and `mobile/src/boundary.test.ts` check
+      // every one (see mobile/README.md). They find them by following imports
+      // through these aliases, as `tools/phonereach.js` lists them: a new
+      // alias goes there too, or the walk stops with an error.
       '@main': resolve(__dirname, '../src/main'),
     },
   },

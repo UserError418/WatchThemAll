@@ -62,14 +62,15 @@ export function reducedChromeUA(chromeVersion: string, platform: NodeJS.Platform
 /**
  * This app's identity. `process.versions.chrome` is Electron's own Chromium.
  *
- * `process` is looked up rather than assumed: this module reaches the phone
- * too, through `tmdb.ts`, `imdb.ts` and `catalog.ts`, and a WebView has no
- * `process` at all — read unguarded, it stopped the phone app at startup
- * with an empty screen. Plain Node (the tests) has a `process` but no
- * Chromium. Either way the fallback stands in; the phone's own requests carry
- * its WebView's identity regardless.
+ * `process` is looked up on `globalThis` rather than assumed: this module
+ * reaches the phone too, through `tmdb.ts`, `imdb.ts` and `catalog.ts`, and a
+ * WebView has no `process` at all — read unguarded, it stopped the phone app
+ * at startup with an empty screen. Plain Node (the tests) has a `process` but
+ * no Chromium. Either way the fallback stands in; the phone's own requests
+ * carry its WebView's identity regardless. ESLint refuses the bare global in
+ * every module the phone reaches (`eslint.config.js`).
  */
-const host = typeof process === 'undefined' ? undefined : process
+const host: NodeJS.Process | undefined = globalThis.process
 export const CHROME_UA = reducedChromeUA(host?.versions?.chrome ?? '148.0.0.0', host?.platform ?? 'linux')
 
 /**

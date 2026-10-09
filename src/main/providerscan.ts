@@ -42,13 +42,14 @@
  *
  * ## Why everything here is pure
  *
- * The phone runs the same scan against the same store, and `mobile/README.md`
- * lists `outcomes.ts` among the modules shared verbatim. This file is in that
- * set: every function is a transformation of plain data, and the only imports
- * are types and one shared pure module. The platform-specific part — *how* you
- * make a provider try to play — lives in `scanservice.ts` on the desktop and
- * `bridge/scan.ts` on the phone. Importing Electron here would break the port
- * and the `lint-imports` contract that guards it.
+ * The phone runs the same scan against the same store, and its bridge imports
+ * this file. Every function here is a transformation of plain data, over
+ * other pure modules. The platform-specific part — *how* you make a provider
+ * try to play — lives in `scanservice.ts` on the desktop and `bridge/scan.ts`
+ * on the phone. Importing Electron or Node here would break the port: ESLint
+ * refuses it in every file the phone's bundle reaches (`eslint.config.js`,
+ * with the set worked out from the imports by `tools/phonereach.js`), and
+ * `mobile/src/boundary.test.ts` loads each of them with no `process`.
  */
 
 import type {

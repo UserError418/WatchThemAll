@@ -36,8 +36,23 @@ second implementation of that interface, in `mobile/src/bridge/`.
 | `src/main/store.ts` | replaced | Node `fs` → `bridge/store.ts`. |
 | `src/main/playerview.ts`, `windows.ts` | not ported | Replaced by `bridge/playersurface.ts`. |
 
-This held because the business layer never imported Electron or Node, which the
-`lint-imports` contract has enforced since before the port.
+This holds because nothing the phone reaches imports Electron or Node. About a
+third of `src/main` does (the player, the preview, the probes, casting, the
+store, the windows, the local server: 28 files in the 2026-10 review), and the
+bridge has its own versions of those. Until 2026-10 nothing checked which side a module was
+on; this file used to credit a `lint-imports` contract, which is a Python tool
+and never existed here. Now:
+
+- ESLint refuses Electron, Node's modules and Node's globals (`process`,
+  `Buffer`, …) in `src/shared` and in every file the phone's bundle reaches.
+  That set is not a list: `tools/phonereach.js` works it out from the imports,
+  starting at `mobile/src/main.ts`, on every run. A type-only import is fine;
+  the build erases it.
+- `mobile/src/boundary.test.ts` checks the same set: no Node or Electron
+  package anywhere in it, and every `src/main` and `src/shared` module in it
+  loads with no `process` at all, as in a WebView. (2.0.11 caught an
+  unguarded `process.versions` in `identity.ts` only on the emulator, as a
+  blank screen.) Code that may run on either reads `globalThis.process?.…`.
 
 Two things made the rest fit:
 

@@ -1,8 +1,50 @@
+import { builtinModules } from 'node:module'
 import js from '@eslint/js'
 import ts from 'typescript-eslint'
 import svelte from 'eslint-plugin-svelte'
 import svelteParser from 'svelte-eslint-parser'
 import globals from 'globals'
+import { phoneReach } from './tools/phonereach.js'
+
+/*
+  Code that runs without Node or Electron: everything in src/shared, which the
+  renderer imports too, and every file the phone's bundle reaches. The second
+  set is not kept by hand. It is worked out from the imports on every run
+  (tools/phonereach.js), so a module the bridge starts importing is covered
+  from that moment, with everything it imports in turn.
+*/
+const PORTABLE = ['src/shared/**/*.ts', ...phoneReach(import.meta.dirname).files]
+
+const PORTABLE_IMPORT =
+  'This module runs where there is no Node and no Electron: the phone reaches it (tools/phonereach.js), or it is in src/shared. Keep the platform part behind a port, as scanservice.ts and bridge/scan.ts do. A type-only import is fine.'
+
+/** Node's built-in modules by every name they answer to, and Electron's. */
+const NOT_PORTABLE = [...builtinModules, 'electron'].map((name) => ({
+  name,
+  message: PORTABLE_IMPORT,
+  allowTypeImports: true,
+}))
+
+/** Node's globals, which a WebView does not have. */
+const NODE_GLOBALS = [
+  {
+    name: 'process',
+    message:
+      'A WebView has no `process`; read it as `globalThis.process?.…`, which says it may be missing (see identity.ts). 2.0.11 blanked the phone at startup on an unguarded read.',
+  },
+  {
+    name: 'Buffer',
+    message: 'A WebView has no `Buffer`: use Uint8Array, TextEncoder and TextDecoder.',
+  },
+  { name: '__dirname', message: 'Node only: this module runs where there is no file system path.' },
+  {
+    name: '__filename',
+    message: 'Node only: this module runs where there is no file system path.',
+  },
+  { name: 'require', message: 'Node only: use an import.' },
+  { name: 'global', message: 'Node only: use `globalThis`.' },
+  { name: 'setImmediate', message: 'Node only: use `setTimeout` or `queueMicrotask`.' },
+]
 
 export default [
   {
@@ -57,11 +99,39 @@ export default [
   },
   {
     /*
+      The portable layer: no Node, no Electron, no Node globals. "src/main is
+      the business layer, not the Electron half" was a rule nothing checked
+      until 2026-10, by when 28 files there touched Node or Electron and the
+      docs still said six. See PORTABLE above for which files this covers.
+      Tests and fixtures run under Node on purpose.
+    */
+    files: PORTABLE,
+    ignores: ['**/*.test.ts', '**/*.fixture.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          paths: NOT_PORTABLE,
+          patterns: [
+            { group: ['node:*', 'electron/*'], message: PORTABLE_IMPORT, allowTypeImports: true },
+          ],
+        },
+      ],
+      'no-restricted-globals': ['error', ...NODE_GLOBALS],
+    },
+  },
+  {
+    /*
       Build and diagnostic scripts run under Node, and `preview-mobile.cjs` is
       CommonJS on purpose — it is loaded by the Electron binary as a main
       script, which resolves `.cjs` without the package needing a type field.
     */
-    files: ['scripts/**/*.{js,cjs,mjs,ts}', '*.config.ts', 'mobile/vite.config.ts'],
+    files: [
+      'scripts/**/*.{js,cjs,mjs,ts}',
+      'tools/**/*.js',
+      '*.config.ts',
+      'mobile/vite.config.ts',
+    ],
     languageOptions: { globals: { ...globals.node } },
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },

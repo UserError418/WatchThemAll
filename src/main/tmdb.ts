@@ -24,9 +24,16 @@ const BASE = 'https://api.themoviedb.org/3'
  * A widely-shared public key, kept only so a fresh clone works without setup.
  * It is rate-limited across everyone using it — set `VITE_TMDB_KEY` at build
  * time with a personal key for anything beyond trying the app out.
+ *
+ * `process` is looked up on `globalThis`, as `identity.ts` does: the phone
+ * reaches this module and a WebView has none. The bare `process.env` only
+ * worked there because Vite's phone build replaces that exact expression
+ * with `{}`; under the test that loads this module without a `process`, it
+ * threw.
  */
 const FALLBACK_KEY = '1f54bd990f1cdfb230adb312546d765d'
-const API_KEY = process.env.VITE_TMDB_KEY || FALLBACK_KEY
+const host: NodeJS.Process | undefined = globalThis.process
+const API_KEY = host?.env?.VITE_TMDB_KEY || FALLBACK_KEY
 
 const CACHE_TTL_MS = 10 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 10_000
