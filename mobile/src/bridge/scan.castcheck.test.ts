@@ -11,6 +11,10 @@ import type { Provider } from '@shared/types'
 import type { ProviderScanProgress } from '@shared/ipc'
 
 const MASTER = 'https://cdn.example/master.m3u8'
+const ENGINE_LINE = JSON.stringify({
+  frame: 'f1',
+  videos: [{ duration: 8_340, width: 1920, height: 1080, levels: [{ width: 1920, height: 1080 }], streams: false, audio: [] }],
+})
 
 vi.mock('./probeview', () => ({
   openProbe: vi.fn(async () => {
@@ -31,7 +35,10 @@ vi.mock('./probeview', () => ({
             ]
           : []
         first = false
-        return { requests, open: true, playingAtMs: 100 }
+        // The page script's reading of the source's engine: the film's length
+        // and its one level. Without it the quality read waits its few seconds
+        // for one (`readQuality`), longer than this test does.
+        return { requests, open: true, playingAtMs: 100, quality: [ENGINE_LINE] }
       },
       tap: async () => {},
       close: async () => {},
@@ -77,7 +84,7 @@ it('checks a source that streamed, after its verdict is out, and files the check
     },
   })
 
-  const running = scans.run('movie:tt1', film, { runtimeMinutes: 139 })
+  const running = scans.run('movie:tt1', { ...film, runtimeMinutes: 139 })
   await vi.waitFor(() => expect(asked).toHaveLength(1))
   expect(progress.some((p) => p.verdicts.a === 'stream' && !p.finished)).toBe(true)
   expect(progress.some((p) => p.finished)).toBe(false)
