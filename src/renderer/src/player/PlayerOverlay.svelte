@@ -20,7 +20,7 @@
    */
   import { fade } from 'svelte/transition'
   import type { BarState, PlayerContext, PlayerOverlayConfig, WtaPlayerApi } from '@shared/ipc'
-  import type { FilmTrack } from '@shared/filmrelay'
+  import { offeredQuality, type FilmTrack } from '@shared/filmrelay'
   import { actionForEvent, SEEK_STEP_SECONDS, VOLUME_STEP, type TransportAction } from '@shared/playerkeys'
   import { clock } from '../lib/format'
   import { cuesAt, type Cue, type SubtitleLanguage } from '@shared/subtitles'
@@ -679,6 +679,29 @@
 
   $effect(() => {
     if (engaged) link.askQuality()
+  })
+
+  /**
+   * What the source offers, for the test results: once the film plays, its
+   * own list of qualities is asked for once, and the top of it told to the
+   * host (`WtaPlayerApi.offered`), which files it with this play. The same
+   * answer the menu above shows, so a play now names the source's best where
+   * it used to file at most its first picture (a floor), or on the phone
+   * nothing. Once per load; nothing when the engine lists nothing.
+   */
+  let offerAsked = false
+  let offerTold = false
+  $effect(() => {
+    if (!started || offerAsked) return
+    offerAsked = true
+    link.askQuality()
+  })
+  $effect(() => {
+    if (!started || offerTold || view.quality === null) return
+    const top = offeredQuality(view.quality)
+    if (top === null) return
+    offerTold = true
+    api?.offered(top)
   })
 
   function toggleQualityMenu(): void {

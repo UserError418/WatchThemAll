@@ -52,7 +52,7 @@
  * `mobile/src/boundary.test.ts` loads each of them with no `process`.
  */
 
-import type { DeviceKind, Provider, ScanReason, SourceSortKey, StoreShape } from '@shared/types'
+import type { DeviceKind, Provider, QualityKind, ScanReason, SourceSortKey, StoreShape } from '@shared/types'
 import type { CastLearned } from '@shared/castanswer'
 import { isDownloadedSource } from '@shared/downloads/types'
 import { verdictForReason } from '@shared/scanreason'
@@ -212,8 +212,11 @@ export const PLAY_MIN_FILM_SECONDS = 120
  * that cannot be mistaken.
  *
  * Re-reported with the same `at` as more is learned (the picture improves in
- * the first minute), which replaces the result rather than adding one: a
- * result is identified by its device, time and source.
+ * the first minute; the player's own list of qualities answers), which
+ * replaces the result rather than adding one: a result is identified by its
+ * device, time and source. Re-reported only ever with a quality at least as
+ * high, and at the same quality only from a floor to an offer, which is the
+ * order `knowsMore` keeps copies in on every build.
  */
 export type PlayMeasurement =
   | {
@@ -221,8 +224,12 @@ export type PlayMeasurement =
       streamed: true
       /** From the start of the load to the stream playing. Absent when the wait included the user. */
       ms?: number
-      /** The best picture seen, as a quality class. */
+      /**
+       * The source's best as a quality class: the top of its player's own
+       * list (offered), or failing that the best picture seen (a floor).
+       */
       quality?: number
+      qualityKind?: QualityKind
     }
   | {
       at: number
@@ -275,6 +282,31 @@ export class WarmStarts {
   }
 }
 
+/**
+ * A play's success with one more quality reading taken in, or null when the
+ * reading changes nothing and the play need not be filed again.
+ *
+ * - An offer (the top of the player's own list) is final for the play: a
+ *   floor never displaces it, and the list is asked for once.
+ * - A floor (a decoded picture) is taken when it is better than the one held.
+ * - An offer is taken over a floor at least as high. One below a picture
+ *   already decoded is not believed: the list found is not the one playing.
+ *
+ * So a play is only ever filed again with a quality at least as high, and at
+ * the same quality only from a floor to an offer: the order `knowsMore`
+ * (`sourceresults.ts`) keeps the copies in, on this build and on one from
+ * before kinds were kept. Both platforms' players go through here.
+ */
+export function withQualityReading<T extends { at: number; quality?: number; qualityKind?: QualityKind }>(
+  seen: T,
+  reading: { quality: number; kind: QualityKind },
+): T | null {
+  if (seen.qualityKind === 'offered') return null
+  const held = seen.quality ?? 0
+  const taken = reading.kind === 'offered' ? reading.quality >= held : reading.quality > held
+  return taken ? { ...seen, quality: reading.quality, qualityKind: reading.kind } : null
+}
+
 /** A play's or a preview's measurement as a result: weaker than a test when it failed, see `sourceresults.ts`. */
 export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: PlayMeasurement): SourceResult {
   if (!seen.streamed) {
@@ -286,6 +318,7 @@ export function playResult(where: MeasuredAt, origin: 'play' | 'preview', seen: 
     verdict: 'stream',
     ...(seen.ms === undefined ? {} : { ms: seen.ms }),
     ...(seen.quality === undefined ? {} : { quality: seen.quality }),
+    ...(seen.quality === undefined || seen.qualityKind === undefined ? {} : { qualityKind: seen.qualityKind }),
   })
 }
 

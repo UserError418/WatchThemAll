@@ -68,6 +68,7 @@ const api: WtaPlayerApi = {
   activity: (hold) => ipcRenderer.send(EV.playerActivity, hold === true),
   pressPlay: () => ipcRenderer.send(EV.playerPressPlay),
   owned: (owned) => ipcRenderer.send(EV.playerOwned, owned === true),
+  offered: (quality) => ipcRenderer.send(EV.playerOffered, quality),
   // Only meaningful in a `<webview>` (the detail view's preview), where the
   // host is the app's page; see `PREVIEW_STATE`.
   preview: {

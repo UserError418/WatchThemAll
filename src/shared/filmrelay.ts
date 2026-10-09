@@ -32,6 +32,7 @@
  */
 
 import { PRESS_PLAY_SCRIPT } from './pressplayscript'
+import { qualityClass } from './streamquality'
 
 /**
  * How near a video's length must be to the one a command was aimed at.
@@ -129,6 +130,20 @@ export interface FilmQuality {
   /** The picture's size as decoded, 0 before the first frame. */
   width: number
   height: number
+}
+
+/**
+ * The best the source offers by its own engine's report: the top of its
+ * levels, or of its list of whole streams, as a quality class. Null when the
+ * report lists nothing (no engine found, or one rendition with no size);
+ * then only the picture says anything, and the picture is a floor.
+ *
+ * What a play files as the source's offer (`WtaPlayerApi.offered`): the
+ * same list the quality menu shows, so the source list and the menu agree.
+ */
+export function offeredQuality(quality: FilmQuality): number | null {
+  if (quality.levels.length === 0) return null
+  return Math.max(...quality.levels.map((level) => qualityClass({ width: level.width > 0 ? level.width : null, height: level.height })))
 }
 
 export interface FilmTrack {

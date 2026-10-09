@@ -20,9 +20,11 @@ import {
   filmRelayScript,
   parseCues,
   parseFilmState,
+  offeredQuality,
   parseHello,
   parseQuality,
   parseTracks,
+  type FilmQuality,
   type FilmState,
 } from './filmrelay'
 
@@ -576,6 +578,37 @@ describe('quality', () => {
     command(w, { command: 'watch' })
     command(w, { command: 'levels', duration: 2_885 })
     expect(qualityOf(w.heard)?.levels).toEqual([])
+  })
+})
+
+describe('offeredQuality', () => {
+  const report = (levels: FilmQuality['levels']): FilmQuality => ({
+    levels,
+    current: 0,
+    auto: true,
+    canAuto: true,
+    width: 1280,
+    height: 720,
+  })
+
+  it("is the top of the engine's ladder, named as the source lists name it", () => {
+    const ladder = [
+      { index: 0, width: 640, height: 360, bitrate: 800_000 },
+      { index: 1, width: 1920, height: 800, bitrate: 5_000_000 },
+      { index: 2, width: 1280, height: 536, bitrate: 2_500_000 },
+    ]
+    // Whatever rung is playing: the list is what the source offers.
+    expect(offeredQuality(report(ladder))).toBe(1080)
+  })
+
+  it("is the top of a list of whole streams, which gives heights only", () => {
+    // Videasy's streams, as the relay reads their labels.
+    const streams = [1080, 720, 480].map((height, index) => ({ index, width: 0, height, bitrate: 0 }))
+    expect(offeredQuality(report(streams))).toBe(1080)
+  })
+
+  it('is nothing when the engine lists nothing: the picture alone is only a floor', () => {
+    expect(offeredQuality(report([]))).toBeNull()
   })
 })
 

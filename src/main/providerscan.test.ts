@@ -18,6 +18,7 @@ import {
   kindTested,
   lastPlayedHere,
   ownRows,
+  playResult,
   providerRank,
   resumeFirst,
   scanAwareOrder,
@@ -26,9 +27,10 @@ import {
   titleResults,
   WarmStarts,
   WARM_START_MS,
+  withQualityReading,
   type ResultSources,
 } from './providerscan'
-import type { SourceResult } from '@shared/sourceresults'
+import { mergeResults, type SourceResult } from '@shared/sourceresults'
 
 const provider = (id: string): Provider => ({
   id,
@@ -509,6 +511,48 @@ describe('castResults', () => {
   it('files nothing for a cast of a download, which is not a source', () => {
     const download = { ...where, providerId: 'downloaded' }
     expect(castResults(download, { delivery: 'segmented', outcome: 'played' }, now)).toEqual([])
+  })
+})
+
+/**
+ * What a play files about the source's quality, as it learns it: the best
+ * picture of its first minute (a floor), and the top of the player's own
+ * list once it answers (an offer).
+ */
+describe("a play's quality", () => {
+  const at = 1_800_000_000_000
+  const where = { device: { deviceId: 'pc-1', deviceKind: 'desktop' as const }, titleKey: 'tv:tt1', episode: { season: 1, episode: 2 }, providerId: 'a' }
+  const play = { at, streamed: true as const, ms: 2_000 }
+
+  it('takes a better picture as a floor, and not a worse one', () => {
+    const first = withQualityReading(play, { quality: 480, kind: 'floor' })
+    expect(first).toEqual({ ...play, quality: 480, qualityKind: 'floor' })
+    expect(withQualityReading(first!, { quality: 720, kind: 'floor' })).toEqual({ ...play, quality: 720, qualityKind: 'floor' })
+    expect(withQualityReading(first!, { quality: 360, kind: 'floor' })).toBeNull()
+  })
+
+  it("takes the player's list over a floor at least as high, and keeps it", () => {
+    const floor = { ...play, quality: 720, qualityKind: 'floor' as const }
+    const offer = withQualityReading(floor, { quality: 1080, kind: 'offered' })
+    expect(offer).toEqual({ ...play, quality: 1080, qualityKind: 'offered' })
+    expect(withQualityReading(floor, { quality: 720, kind: 'offered' })).toEqual({ ...play, quality: 720, qualityKind: 'offered' })
+    // A floor never displaces the offer, even a higher one; nor does a second list.
+    expect(withQualityReading(offer!, { quality: 2160, kind: 'floor' })).toBeNull()
+    expect(withQualityReading(offer!, { quality: 2160, kind: 'offered' })).toBeNull()
+  })
+
+  it('does not believe a list below a picture already decoded', () => {
+    expect(withQualityReading({ ...play, quality: 1080, qualityKind: 'floor' }, { quality: 720, kind: 'offered' })).toBeNull()
+  })
+
+  it('files the kind with the quality, and each filing replaces the last in either order', () => {
+    const first = playResult(where, 'play', play)
+    const picture = playResult(where, 'play', withQualityReading(play, { quality: 720, kind: 'floor' })!)
+    const listed = playResult(where, 'play', { ...play, quality: 720, qualityKind: 'offered' })
+    expect(listed).toMatchObject({ origin: 'play', verdict: 'stream', quality: 720, qualityKind: 'offered' })
+    // The sync merge keeps the copy that knows most, whichever device it comes from.
+    expect(mergeResults([first, picture], [listed], at)).toEqual([listed])
+    expect(mergeResults([listed], [picture, first], at)).toEqual([listed])
   })
 })
 

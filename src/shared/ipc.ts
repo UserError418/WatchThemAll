@@ -328,6 +328,8 @@ export const EV = {
   chromeOwned: 'evt:chrome-owned',
   /** shell → main: the source has no film yet; press its own play control in its frames. */
   playerPressPlay: 'player:press-play',
+  /** shell → main: the top of the source's own list of qualities; see `WtaPlayerApi.offered`. */
+  playerOffered: 'player:offered',
   /** main → chrome: the arrows and Enter, while the episode strip is open. */
   chromeEpisodeNav: 'evt:chrome-episode-nav',
   syncStatus: 'evt:sync-status',
@@ -1527,6 +1529,14 @@ export interface WtaPlayerApi {
   pressPlay(): void
   /** Whether our controls have the film now; the chrome lays itself out by it. */
   owned(owned: boolean): void
+  /**
+   * The top of the source's own list of qualities, as a class: its engine's
+   * levels or its list of whole streams (`offeredQuality`), told once per
+   * load after the film plays. The host files it with this load's play as
+   * what the source offers, where a play otherwise has at most a floor (the
+   * desktop's best picture of the first minute) or, on the phone, nothing.
+   */
+  offered(quality: number): void
   /**
    * Hide the controls and the bar now: a tap on the picture while they show.
    * The phone only; on the desktop the pointer leaving does it.

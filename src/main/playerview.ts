@@ -58,11 +58,11 @@ import { mediaKind, totalBytesOf } from './mediarequest'
 import { isSameOrigin } from './sameorigin'
 import { observeCompleted, observeErrors, observeSendHeaders } from './webrequesthub'
 import { loadFailureReason } from './loadfailure'
-import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, type PlayMeasurement } from './providerscan'
+import { PLAY_MIN_FILM_SECONDS, PLAY_TIMING_MAX_MS, withQualityReading, type PlayMeasurement } from './providerscan'
 import { CarryOver } from '@shared/carryover'
 import type { CarryAction, CarryReport } from '@shared/ipc'
-import { qualityClass } from '@shared/streamquality'
-import type { ScanReason } from '@shared/types'
+import { QUALITY_CLASSES, qualityClass } from '@shared/streamquality'
+import type { QualityKind, ScanReason } from '@shared/types'
 
 /** Where the video sits, in the app window's content coordinates. */
 export interface PlayerBounds {
@@ -1316,10 +1316,18 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
   const stillOnScreen = (asked: number | null): boolean => asked !== null && asked === loadNumber && !closed
   /**
    * What this load has told the test results: a success, improved as the
-   * picture does, or a failure the source's servers declared. Once per load,
+   * picture does and once more when the player's own list of qualities
+   * answers, or a failure the source's servers declared. Once per load,
    * except that a load which plays after a declared failure is a success.
    */
-  let measured: { providerId: string; at: number; streamed: boolean; ms?: number; quality?: number } | null = null
+  let measured: {
+    providerId: string
+    at: number
+    streamed: boolean
+    ms?: number
+    quality?: number
+    qualityKind?: QualityKind
+  } | null = null
   /**
    * How long into playing the picture still counts toward the play's
    * quality. Adaptive streams start low and climb; a minute is enough for
@@ -1336,19 +1344,47 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     options.reportResult?.(providerId, { at, streamed: true, ...(measured.ms === undefined ? {} : { ms: measured.ms }) })
   }
 
+  /** The success again, under the same moment, so it replaces the result rather than adding one. */
+  const refileStreamed = (success: NonNullable<typeof measured>): void => {
+    options.reportResult?.(success.providerId, {
+      at: success.at,
+      streamed: true,
+      ...(success.ms === undefined ? {} : { ms: success.ms }),
+      ...(success.quality === undefined ? {} : { quality: success.quality, qualityKind: success.qualityKind ?? 'floor' }),
+    })
+  }
+
+  /**
+   * The picture, as a floor under the source's best: an adaptive player
+   * starts low and climbs, so the best of the first minute is kept. Never
+   * over the source's own list (`noteOffered`); see `withQualityReading`.
+   */
   const notePicture = (found: VideoPosition): void => {
     if (!measured?.streamed || !found.height || found.duration < PLAY_MIN_FILM_SECONDS) return
     if (Date.now() - measured.at > PICTURE_WINDOW_MS) return
     const quality = qualityClass({ width: found.width ?? null, height: found.height })
-    if (quality <= (measured.quality ?? 0)) return
-    measured.quality = quality
-    // The same moment again, so this replaces the result rather than adding one.
-    options.reportResult?.(measured.providerId, {
-      at: measured.at,
-      streamed: true,
-      ...(measured.ms === undefined ? {} : { ms: measured.ms }),
-      quality,
-    })
+    const better = withQualityReading(measured, { quality, kind: 'floor' })
+    if (better === null) return
+    measured = better
+    refileStreamed(better)
+  }
+
+  /**
+   * The top of the source's own list of qualities, from the shell's controls
+   * once the film plays (`WtaPlayerApi.offered`): filed with this play as
+   * what the source offers.
+   *
+   * Only for a load already filed as streaming. The decoder's start
+   * (`media-started-playing`) comes before the shell sees the film's time
+   * move and asks for the list, so a report with nothing filed yet is from a
+   * page being left, and not this load's.
+   */
+  const noteOffered = (quality: number): void => {
+    if (!measured?.streamed) return
+    const better = withQualityReading(measured, { quality, kind: 'offered' })
+    if (better === null) return
+    measured = better
+    refileStreamed(better)
   }
 
 
@@ -1967,6 +2003,7 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     ipcMain.removeListener(EV.playerActivity, onActivity)
     ipcMain.removeListener(EV.playerOwned, onOwned)
     ipcMain.removeListener(EV.playerPressPlay, onPressPlay)
+    ipcMain.removeListener(EV.playerOffered, onOffered)
     leaveFullscreen()
     if (!win.isDestroyed()) {
       win.removeListener('enter-full-screen', sendConfig)
@@ -2290,10 +2327,16 @@ export function createInlinePlayer(options: InlinePlayerOptions): InlinePlayer {
     if (event.sender !== contents || !alive()) return
     void clickPlayInFrames(contents).catch(() => {})
   }
+  /** The top of the source's own list of qualities; see `noteOffered`. Checked here: a renderer's message is never trusted by shape. */
+  const onOffered = (event: Electron.IpcMainEvent, quality: unknown): void => {
+    if (event.sender !== contents || !alive()) return
+    if (typeof quality === 'number' && QUALITY_CLASSES.includes(quality)) noteOffered(quality)
+  }
   ipcMain.on(EV.playerKey, onPlayerKey)
   ipcMain.on(EV.playerActivity, onActivity)
   ipcMain.on(EV.playerOwned, onOwned)
   ipcMain.on(EV.playerPressPlay, onPressPlay)
+  ipcMain.on(EV.playerOffered, onOffered)
 
   if (overlay !== null) {
     ipcMain.on(EV.chromeOverlayArea, onOverlayArea)
