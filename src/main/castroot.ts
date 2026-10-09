@@ -28,7 +28,8 @@
  * ## The rule
  *
  * Every candidate is asked for again with its own headers, its opening read
- * (`PEEK_BYTES`), a playlist in full. Then, in this order:
+ * (`PEEK_BYTES`), a playlist in full: up to `MAX_CANDIDATES`, those whose
+ * name says playlist or film file before the opaque ones. Then, in this order:
  *
  * 1. **A whole MP4/WebM file**: one that is not a piece of a stream
  *    (`isWholeVideoFile`), at least `MIN_WHOLE_FILE_BYTES` where its size is
@@ -41,7 +42,8 @@
  *    subtitles, does not list audio or subtitle files for segments, and runs
  *    as long as the title.
  *
- * Within each, the newest capture first. "As long as the title" is
+ * Within each, in the capture's order (`CaptureBuffer`: the load's first
+ * requests, newest of them first, then the rest, newest first). "As long as the title" is
  * `lengthVerdict`: within the band around TMDB's runtime when it is known,
  * and at least ten minutes when it is not.
  */
@@ -54,7 +56,7 @@ import { readTransportStreamCodecs } from '@shared/transportstream'
 import { streamSignature, type StreamSignature } from '@shared/streamsignature'
 import { isCastableFileType } from '@shared/castability'
 import { isMasterPlaylist, isPlaylist, isWholeVideoFile } from './hlsrewrite'
-import { MEDIA_PATTERN, MIN_WHOLE_FILE_BYTES } from './mediarequest'
+import { MIN_WHOLE_FILE_BYTES, PLAYLIST_URL, WHOLE_FILE_URL } from './mediarequest'
 
 /** A request the source's page made, with the headers to replay for it. */
 export interface RootCandidate {
@@ -93,11 +95,19 @@ export const PLAYLIST_BYTES = 2 * 1024 * 1024
 export const FILE_HEAD_BYTES = 64 * 1024
 
 /**
- * How many candidates are asked about, newest first. The capture keeps forty,
- * most of them a page's API calls and adverts; the chain that leads to the
- * stream is among the newest.
+ * How many candidates are asked about: those named as a stream first, then
+ * the rest, each group in the capture's order. The capture holds up to sixty,
+ * most of them a page's API calls, adverts and, on some sources, segments
+ * named with no extension. Measured 2026-10-09 on MoviesAPI: its named master
+ * sat past the first two dozen behind its `file2/…` segments, every one of
+ * which answered, and none of which is a root, so the choice found nothing.
  */
 const MAX_CANDIDATES = 24
+
+/** Whether a URL names itself a playlist or a whole file: asked about before the opaque ones. */
+function namesStream(url: string): boolean {
+  return PLAYLIST_URL.test(url) || WHOLE_FILE_URL.test(url)
+}
 
 /** Candidates asked about at once: a beam should not take a request's round trip per candidate. */
 const AT_ONCE = 4
@@ -107,6 +117,9 @@ const AT_ONCE = 4
  * platforms, but a test's log keeps them), and the page's own files.
  */
 const NEVER_ROOT = /\.(ts|m4s|aac|mp3|vtt|srt|webvtt|js|mjs|css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|html?)(\?|$)/i
+
+/** What a segment is served as, beside an fMP4 piece's `video/mp4`. */
+const STREAM_PIECE_TYPE = /^(video|audio)\/(mp2t|iso\.segment)/i
 
 /** A media playlist whose segments are these is audio or subtitles alone. */
 const AUDIO_SEGMENT = /\.(aac|mp3|ac3|ec3|eac3|m4a)(\?|$)/i
@@ -149,14 +162,23 @@ export type PassedOver =
   | { why: 'small'; bytes: number }
   | { why: 'rendition' }
   | { why: 'dash' }
+  /**
+   * A piece of a stream: a segment, or an fMP4 fragment or init segment.
+   * With no root beside it, the stream was HLS but its playlist never crossed
+   * the network where a capture sees it. Measured 2026-10-09: MoviesAPI's
+   * player gets its playlist that way on some loads (its `workers.dev`
+   * mirror) and over plain HTTP on others; only the key and the segments of
+   * the first are ever requested.
+   */
+  | { why: 'piece' }
 
 export interface RootChoice {
   root: CastRoot | null
   passedOver: PassedOver[]
   /**
-   * Whether every candidate was asked about before the deadline, and
-   * answered. When not, the stream may be among the rest, and nothing being
-   * chosen is no evidence that there was none.
+   * Whether every candidate was asked about — none past `MAX_CANDIDATES`,
+   * none after the deadline — and answered. When not, the stream may be among
+   * the rest, and nothing being chosen is no evidence that there was none.
    */
   complete: boolean
   /** Every playlist body read, by URL, for the bundle to reuse rather than fetch again. */
@@ -180,8 +202,8 @@ interface Sniffed {
 }
 
 /**
- * Choose the stream to cast from a page's captured requests, newest first;
- * see the header.
+ * Choose the stream to cast from a page's captured requests, in the capture's
+ * order; see the header.
  *
  * `deadline` (a time, by `now`) stops asking about further candidates once
  * it has passed, and chooses from those already asked: the cast check's
@@ -196,11 +218,12 @@ export async function chooseCastRoot(
   const passedOver: PassedOver[] = []
   const bodies = new Map<string, string>()
   const seen = new Set<string>()
-  const asked = candidates.filter((c) => {
+  const usable = candidates.filter((c) => {
     if (!couldBeRoot(c.url) || seen.has(c.url)) return false
     seen.add(c.url)
     return true
-  }).slice(0, MAX_CANDIDATES)
+  })
+  const asked = [...usable.filter((c) => namesStream(c.url)), ...usable.filter((c) => !namesStream(c.url))].slice(0, MAX_CANDIDATES)
 
   const now = limits.now ?? Date.now
   const inTime = (): boolean => limits.deadline === undefined || now() < limits.deadline
@@ -214,7 +237,7 @@ export async function chooseCastRoot(
     return { candidate, answer }
   })
 
-  const complete = sniffed.length === asked.length && sniffed.every((entry) => entry.answer !== null)
+  const complete = usable.length === asked.length && sniffed.length === asked.length && sniffed.every((entry) => entry.answer !== null)
   const files: Sniffed[] = []
   const masters: Sniffed[] = []
   const media: Sniffed[] = []
@@ -222,7 +245,7 @@ export async function chooseCastRoot(
     const answer = entry.answer
     if (answer === null) continue
     if (!isOk(answer.status)) {
-      passedOver.push({ why: 'status', status: answer.status, media: MEDIA_PATTERN.test(entry.candidate.url) })
+      passedOver.push({ why: 'status', status: answer.status, media: namesStream(entry.candidate.url) })
       continue
     }
     if (isPlaylist(answer.body)) {
@@ -232,6 +255,9 @@ export async function chooseCastRoot(
       passedOver.push({ why: 'dash' })
     } else if (isCastableFileType(answer.contentType) && isWholeVideoFile(answer.body)) {
       files.push(entry)
+    } else if (STREAM_PIECE_TYPE.test(answer.contentType) || isCastableFileType(answer.contentType)) {
+      // An MP4 that is not a whole file is a fragment or an init segment.
+      passedOver.push({ why: 'piece' })
     }
   }
 
@@ -393,6 +419,9 @@ export function rootRefusal(passedOver: readonly PassedOver[], providerName: str
   }
   if (passedOver.some((p) => p.why === 'rendition')) {
     return `${providerName} hands out only a separate sound or subtitle stream. Try another source.`
+  }
+  if (passedOver.some((p) => p.why === 'piece')) {
+    return `${providerName} gave its player this stream's playlist where a cast cannot see it. Play the source again, or try another.`
   }
   return null
 }

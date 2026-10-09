@@ -167,7 +167,9 @@ export async function checkCast(input: CastCheckInput): Promise<CastCheck | null
  * blocks casting" on three sources that cast (MoviesAPI, 111Movies,
  * ScreenScape; measured 2026-10-09). "Nothing to cast" likewise needs every
  * candidate heard: one refused, unanswered or not reached in time may have
- * been the stream.
+ * been the stream. And pieces of a stream with no playlist to play them are
+ * this load's, not the source's: the same source hands its player the
+ * playlist where a capture sees it on another load (`PassedOver`'s `piece`).
  */
 function unrooted(choice: RootChoice): CastCheck | null {
   const { passedOver } = choice
@@ -175,7 +177,7 @@ function unrooted(choice: RootChoice): CastCheck | null {
   if (wrongLength) return { reach: 'not-media', identity: 'wrong-length', seconds: wrongLength.seconds }
   const refused = passedOver.find((p): p is Extract<PassedOver, { why: 'status' }> => p.why === 'status' && p.media)
   if (refused) return { reach: 'blocked', identity: 'unknown', status: refused.status }
-  if (!choice.complete || passedOver.some((p) => p.why === 'status')) return null
+  if (!choice.complete || passedOver.some((p) => p.why === 'status' || p.why === 'piece')) return null
   return { reach: 'not-media', identity: 'unknown' }
 }
 

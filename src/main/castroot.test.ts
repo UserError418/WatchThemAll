@@ -205,7 +205,8 @@ describe('chooseCastRoot with a deadline', () => {
         return io.text(url, headers, limit)
       },
     }
-    const late = ['a', 'b', 'c', 'd'].map((x) => at(`api/${x}`))
+    // Named as playlists, as adverts' are: asked about in the capture's order, ahead of the film's.
+    const late = ['a', 'b', 'c', 'd'].map((x) => at(`ad/${x}.m3u8`))
     const choice = await chooseCastRoot([...late, at('film.m3u8')], slow, null, { deadline: 1_000, now: () => clock })
     // The film's playlist was in the second batch, never asked about.
     expect(choice.root).toBeNull()
@@ -213,6 +214,40 @@ describe('chooseCastRoot with a deadline', () => {
     expect(io.asked).toEqual(late.map((c) => c.url))
     // Without one, as for a cast, every candidate is asked about.
     expect((await chooseCastRoot([...late, at('film.m3u8')], io, null)).root).toMatchObject({ url: CDN + 'film.m3u8' })
+  })
+
+  it('asks about named playlists before opaque requests, so segments with no extension cannot crowd one out', async () => {
+    // Measured 2026-10-09 on MoviesAPI: thirty `file2/…` segments captured
+    // ahead of its named master; each answered, none is a root.
+    const segments = Array.from({ length: 30 }, (_, n) => `file2/${n}`)
+    const io = network({
+      ...Object.fromEntries(segments.map((path) => [CDN + path, { body: 'G@\u0000\u0010' }])),
+      [CDN + 'master.m3u8']: { body: MASTER },
+      [CDN + '720/index.m3u8']: { body: media(8340) },
+    })
+    const choice = await chooseCastRoot([...segments.map(at), at('master.m3u8')], io, 139)
+    expect(choice.root).toMatchObject({ kind: 'hls', url: CDN + 'master.m3u8' })
+  })
+
+  it('is incomplete when there were more candidates than it asks about', async () => {
+    const segments = Array.from({ length: 30 }, (_, n) => `file2/${n}`)
+    const io = network(Object.fromEntries(segments.map((path) => [CDN + path, { body: 'G@\u0000\u0010' }])))
+    const choice = await chooseCastRoot(segments.map(at), io, 139)
+    expect(choice).toMatchObject({ root: null, complete: false })
+  })
+
+  it('notes pieces of a stream captured with no playlist, and says so for the cast', async () => {
+    // Measured 2026-10-09: a MoviesAPI load whose playlist was never requested.
+    const io = network({
+      [CDN + 'file2/a']: { type: 'video/MP2T', body: 'G@\u0000\u0010' },
+      [CDN + 'encryption.key']: { type: 'application/octet-stream', body: '0123456789abcdef' },
+      [CDN + 'api/movie']: { type: 'application/json', body: '{"result":true}' },
+    })
+    const choice = await chooseCastRoot([at('file2/a'), at('encryption.key'), at('api/movie')], io, 139)
+    expect(choice).toMatchObject({ root: null, passedOver: [{ why: 'piece' }], complete: true })
+    expect(rootRefusal(choice.passedOver, 'MoviesAPI', 139)).toBe(
+      "MoviesAPI gave its player this stream's playlist where a cast cannot see it. Play the source again, or try another.",
+    )
   })
 
   it("tells a refusal of the stream's from an advert's: only one named as media counts", async () => {
@@ -224,9 +259,10 @@ describe('chooseCastRoot with a deadline', () => {
     const choice = await chooseCastRoot([at('cuid/'), at('film.m3u8')], io, null)
     expect(choice.root).toBeNull()
     expect(choice.complete).toBe(true)
+    // The named playlist is asked about first, though captured last.
     expect(choice.passedOver).toEqual([
-      { why: 'status', status: 400, media: false },
       { why: 'status', status: 403, media: true },
+      { why: 'status', status: 400, media: false },
     ])
   })
 })

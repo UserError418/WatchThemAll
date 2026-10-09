@@ -188,6 +188,11 @@ describe('checkCast, through the desktop proxy', () => {
     expect(await checkOrNothing(origin, ['/cuid/', '/api/config'])).toBeNull()
   })
 
+  it("files nothing for a stream's pieces with no playlist: that load's, not the source's", async () => {
+    const origin = await serve({ '/file2/a': bytes(segment()), '/api/config': text('{"ok":true}', 'application/json') })
+    expect(await checkOrNothing(origin, ['/file2/a', '/api/config'])).toBeNull()
+  })
+
   it('says not-media when every request answered and none of them is media', async () => {
     const origin = await serve({ '/api/config': text('{"ok":true}', 'application/json') })
     expect(await check(origin, ['/api/config'])).toEqual({ reach: 'not-media', identity: 'unknown' })
