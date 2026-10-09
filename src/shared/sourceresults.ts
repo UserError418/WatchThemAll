@@ -484,9 +484,9 @@ function startTime(results: readonly SourceResult[]): number | undefined {
  * its results the verdict's scope, and plays usually carry no quality; this
  * way the season's test still names the quality after the next episode
  * starts. A film has no season, so its scope is the title. Never another
- * season: a source can serve one season at 1080p and another at 480p, and
- * the label is about what plays here (the owner, 2026-10-09: "offered for
- * this episode, recently, on this kind of device").
+ * season, by the owner's definition of the label (2026-10-09): the best
+ * "offered for this episode, recently, on this kind of device". Another
+ * season is other encodes, and its readings would be a guess about these.
  *
  * Within the scope, the newest offer is the answer: what the source lists
  * is its best. A floor never displaces an offer, even a higher floor,
