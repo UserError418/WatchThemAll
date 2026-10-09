@@ -77,9 +77,11 @@ export interface ProbeSession {
    * `open` is false once the session has closed or its renderer died.
    * `playingAtMs` is when the page script first saw media playing in any
    * frame, or null — decode evidence the request log can miss, because a
-   * service worker's requests never reach it.
+   * service worker's requests never reach it. `quality` is the page script's
+   * latest readings of the source's engine, as it wrote them (newest last;
+   * read with `parseQualityLine`), the same every poll until one changes.
    */
-  poll(): Promise<{ requests: ProbeRequest[]; missed: number; open: boolean; playingAtMs: number | null }>
+  poll(): Promise<{ requests: ProbeRequest[]; missed: number; open: boolean; playingAtMs: number | null; quality: string[] }>
   /** A real touch in the probe view, at CSS pixels within it, or at its centre. */
   tap(point?: { x: number; y: number }): Promise<void>
   /** Destroy the WebView. Safe to call more than once. */
@@ -116,7 +118,7 @@ interface ProbeViewNative {
   requests(options: {
     sessionId: string
     after: number
-  }): Promise<{ requests: ProbeRequest[]; cursor: number; missed: number; open: boolean; playingAtMs: number }>
+  }): Promise<{ requests: ProbeRequest[]; cursor: number; missed: number; open: boolean; playingAtMs: number; quality?: string[] }>
   addListener(
     event: 'probeDocumentError',
     cb: (payload: ProbeDocumentError & { sessionId: string }) => void,
@@ -194,6 +196,7 @@ export async function openProbe(options: OpenProbeOptions): Promise<ProbeSession
         missed: answer.missed,
         open: answer.open,
         playingAtMs: answer.playingAtMs > 0 ? answer.playingAtMs : null,
+        quality: Array.isArray(answer.quality) ? answer.quality.filter((line) => typeof line === 'string') : [],
       }
     },
 

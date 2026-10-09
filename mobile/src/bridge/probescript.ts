@@ -8,7 +8,7 @@
  * here rather than in Java because it is JavaScript, and because the scan
  * that decides when play should be pressed lives on this side.
  *
- * It has two jobs.
+ * It has three jobs.
  *
  * ## Silence, unconditionally
  *
@@ -46,6 +46,16 @@
  *   probe is trying to observe.
  * - Media is muted before `play()`, for the reason above.
  *
+ * ## Reading the source's engine
+ *
+ * The same reading of the source's streaming engine that a play's film relay
+ * and the desktop's test make (`enginereader.ts`): every video in the frame
+ * with a length, and what its engine offers. Said once the frame's media has
+ * its metadata, again when it plays and once more a little after, as a
+ * console line `[wta-probe] quality {…}` that `ProbeSession` keeps for the
+ * scan (`parseQualityLine`). A line says only what changed since the frame's
+ * last one. Nothing here acts on the page: it only looks.
+ *
  * Diagnostics go to the console, tagged `[wta-probe]`, which `ProbeSession`
  * forwards to logcat and nothing else — `adb logcat -s ProbeView` shows which
  * frames the script reached, what it pressed, when something played and where
@@ -55,8 +65,20 @@
  * providers that vendor anti-devtools code replace both.
  */
 
+import { FRAME_READER, parseFrameReading, type FrameReading } from '@shared/enginereader'
+
 /** Milliseconds after a frame's document starts at which play is pressed. */
 export const PRESS_AT_MS = [1_500, 4_000, 7_000, 11_000]
+
+/**
+ * How long after a frame's media starts playing its engine is read again:
+ * long enough for an engine that lists its levels late, short enough to land
+ * inside the scan's wait for a quality (`QUALITY_WAIT_MS` in `scan.ts`).
+ */
+export const QUALITY_AGAIN_MS = 2_500
+
+/** What starts a quality line, as `ProbeSession.java` matches it. */
+export const QUALITY_LINE = '[wta-probe] quality '
 
 /**
  * The play controls to look for, in the order the desktop looks.
@@ -104,6 +126,26 @@ export function probePageScript(options: ProbeScriptOptions = {}): string {
   }, true)
   log(TAG, 'installed', location.host)
 
+  // What the source's engine offers, said whenever it changes.
+  ${FRAME_READER}
+  const FRAME = Math.random().toString(36).slice(2, 10)
+  let saidQuality = ''
+  const sayQuality = () => {
+    try {
+      const reading = readFrame()
+      if (reading.videos.length === 0) return
+      const line = JSON.stringify({ frame: FRAME, videos: reading.videos })
+      if (line === saidQuality) return
+      saidQuality = line
+      log(TAG, 'quality', line)
+    } catch (error) {}
+  }
+  document.addEventListener('loadedmetadata', sayQuality, true)
+  document.addEventListener('playing', () => {
+    sayQuality()
+    later(sayQuality, ${QUALITY_AGAIN_MS})
+  }, true)
+
   if (!${JSON.stringify(pressPlay)}) return
 
   const pick = () =>
@@ -121,4 +163,21 @@ export function probePageScript(options: ProbeScriptOptions = {}): string {
   }
   for (const at of ${JSON.stringify(PRESS_AT_MS)}) later(press, at)
 })()`
+}
+
+/**
+ * One quality line as `ProbeSession` kept it (the text after `QUALITY_LINE`):
+ * which frame said it, and what it read. Null for anything else; a provider's
+ * page shares the console, and could write a line that looks like one.
+ */
+export function parseQualityLine(text: string): { frame: string; reading: FrameReading } | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null || typeof (raw as { frame?: unknown }).frame !== 'string') return null
+  const reading = parseFrameReading(raw)
+  return reading === null ? null : { frame: (raw as { frame: string }).frame, reading }
 }

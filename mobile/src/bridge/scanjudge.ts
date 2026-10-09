@@ -17,6 +17,8 @@
 
 import type { ProbeVerdict, ScanReason } from '@shared/ipc'
 import { verdictForReason } from '@shared/scanreason'
+import type { CapturedRequest } from '@shared/streamfetch'
+import { isMediaRequest, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import type { ProbeDocumentError, ProbeRequest } from './probeview'
 
 /**
@@ -56,6 +58,27 @@ export function isScanCandidate(request: Pick<ProbeRequest, 'url' | 'method' | '
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
   return !NEVER_MEDIA.test(url.pathname)
+}
+
+/**
+ * What a source's page fetched, in the order the film's ladder is looked for
+ * in it (`findLadder`): newest first, each address once, playlists by name
+ * before everything else, and no segments or whole files. A page that plays
+ * fetches dozens of segments, and none of them is a playlist; its API calls
+ * stay, because some sources serve their playlists from opaque addresses.
+ * Shared by a download's capture and a test's ladder search.
+ */
+export function ladderCandidates(newestFirst: ReadonlyArray<{ url: string; headers: Record<string, string> }>): CapturedRequest[] {
+  const seen = new Set<string>()
+  const playlists: CapturedRequest[] = []
+  const others: CapturedRequest[] = []
+  for (const request of newestFirst) {
+    if (seen.has(request.url)) continue
+    seen.add(request.url)
+    if (PLAYLIST_URL.test(request.url)) playlists.push({ url: request.url, headers: request.headers })
+    else if (!isMediaRequest(request.url) && !WHOLE_FILE_URL.test(request.url)) others.push({ url: request.url, headers: request.headers })
+  }
+  return [...playlists, ...others]
 }
 
 /** What one probe saw, when it did not find a stream. */

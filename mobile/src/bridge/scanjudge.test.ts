@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isScanCandidate, judgeMissedStream, missedStreamReason, STILL_LOADING_WINDOW_MS } from './scanjudge'
+import { isScanCandidate, judgeMissedStream, ladderCandidates, missedStreamReason, STILL_LOADING_WINDOW_MS } from './scanjudge'
 
 const END = 1_000_000
 
@@ -111,5 +111,24 @@ describe('isScanCandidate', () => {
   it('drops what is not http(s), or not a URL at all', () => {
     expect(isScanCandidate(request('blob:https://p.test/236035e1'))).toBe(false)
     expect(isScanCandidate(request('not a url'))).toBe(false)
+  })
+})
+
+describe('ladderCandidates', () => {
+  const H = { Referer: 'https://a.example/' }
+  it('puts playlists first and leaves segments and whole files out, each address once', () => {
+    const newestFirst = [
+      { url: 'https://cdn.example/seg3.ts', headers: H },
+      { url: 'https://api.example/source?id=1', headers: H },
+      { url: 'https://cdn.example/720/index.m3u8', headers: H },
+      { url: 'https://cdn.example/film.mp4', headers: H },
+      { url: 'https://cdn.example/master.m3u8', headers: H },
+      { url: 'https://api.example/source?id=1', headers: H },
+    ]
+    expect(ladderCandidates(newestFirst).map((r) => r.url)).toEqual([
+      'https://cdn.example/720/index.m3u8',
+      'https://cdn.example/master.m3u8',
+      'https://api.example/source?id=1',
+    ])
   })
 })

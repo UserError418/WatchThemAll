@@ -24,8 +24,11 @@ import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -107,6 +110,15 @@ final class ProbeSession {
     private static final int LOG_CAPACITY = 1500;
 
     /**
+     * The page script's quality lines kept, newest last. Each frame says one
+     * when what its engine offers changes; a player page has a handful of
+     * frames, so the newest few hold every frame's latest.
+     */
+    private static final int QUALITY_LINES_KEPT = 12;
+
+    private static final String QUALITY_LINE = "[wta-probe] quality ";
+
+    /**
      * Requests that are never replayed, so their cookies are not looked up.
      *
      * Everything is recorded — segments included, and segments are often
@@ -163,6 +175,14 @@ final class ProbeSession {
      * plugin worker, hence volatile.
      */
     private volatile long playingAtMs;
+
+    /**
+     * What the page script read of the source's engine, as its console lines
+     * said it (the JSON after `QUALITY_LINE`; see `probescript.ts`). Parsed on
+     * the TypeScript side, which owns the format. Written on the UI thread by
+     * the console hook, read by `requests` on a plugin worker.
+     */
+    private final ArrayDeque<String> qualityLines = new ArrayDeque<>();
 
     /**
      * Build the view, put it behind the app, and start loading.
@@ -347,6 +367,13 @@ final class ProbeSession {
         return playingAtMs;
     }
 
+    /** See the field: the lines kept, oldest first. */
+    List<String> qualityLines() {
+        synchronized (qualityLines) {
+            return new ArrayList<>(qualityLines);
+        }
+    }
+
     /**
      * Tear everything down, in the order that frees the decoder soonest.
      *
@@ -474,6 +501,12 @@ final class ProbeSession {
             // plays. The first one, in any frame, is the one that counts.
             if (playingAtMs == 0 && text.startsWith("[wta-probe] playing")) {
                 playingAtMs = System.currentTimeMillis();
+            }
+            if (text.startsWith(QUALITY_LINE)) {
+                synchronized (qualityLines) {
+                    qualityLines.addLast(text.substring(QUALITY_LINE.length()));
+                    while (qualityLines.size() > QUALITY_LINES_KEPT) qualityLines.removeFirst();
+                }
             }
             return true;
         }

@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { PRESS_AT_MS, probePageScript } from './probescript'
+import { PRESS_AT_MS, QUALITY_AGAIN_MS, QUALITY_LINE, parseQualityLine, probePageScript } from './probescript'
 
 /** A media element that records whether it was muted each time `play()` ran. */
 function mediaClass() {
@@ -138,5 +138,59 @@ describe('pressing play', () => {
     loaded.dispatch('playing', new loaded.Media())
     await vi.runAllTimersAsync()
     expect(loaded.control!.click).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("the source's engine", () => {
+  /** A frame whose one video has a length and an hls.js in the page's globals. */
+  function frameWithEngine(): { dispatch: (type: string) => void; engine: { levels: Array<{ width: number; height: number }> } } {
+    const listeners: Record<string, Listener[]> = {}
+    const Media = mediaClass()
+    const video = Object.assign(new Media(), { tagName: 'VIDEO', duration: 8_340, videoWidth: 1280, videoHeight: 536, shadowRoot: null })
+    const engine = { levels: [{ width: 1280, height: 536 }], currentLevel: 0, autoLevelEnabled: true, media: video }
+    vi.stubGlobal('HTMLMediaElement', Media)
+    vi.stubGlobal('window', { hls: engine })
+    vi.stubGlobal('location', { host: 'player.example' })
+    vi.stubGlobal('document', {
+      addEventListener: (type: string, listener: Listener) => (listeners[type] ??= []).push(listener),
+      querySelector: () => null,
+      querySelectorAll: (selector: string) => (selector === '*' ? [video] : []),
+    })
+    new Function(probePageScript({ pressPlay: false }))()
+    return { dispatch: (type) => listeners[type]?.forEach((listener) => listener({ target: video })), engine }
+  }
+
+  /** What the script said as quality lines, in the text `ProbeSession` keeps. */
+  const said = (): string[] =>
+    vi
+      .mocked(console.info)
+      .mock.calls.map((args) => args.join(' '))
+      .filter((line) => line.startsWith(QUALITY_LINE))
+      .map((line) => line.slice(QUALITY_LINE.length))
+
+  it('says what the engine offers once the media has its metadata, and only what changed', async () => {
+    const frame = frameWithEngine()
+    frame.dispatch('loadedmetadata')
+    frame.dispatch('playing')
+    expect(said()).toHaveLength(1)
+    expect(parseQualityLine(said()[0]!)?.reading.videos[0]).toMatchObject({ duration: 8_340, levels: [{ width: 1280, height: 536 }] })
+
+    // An engine that lists its ladder late is read again a little after it plays.
+    frame.engine.levels.push({ width: 1920, height: 800 })
+    await vi.advanceTimersByTimeAsync(QUALITY_AGAIN_MS)
+    expect(said()).toHaveLength(2)
+    expect(parseQualityLine(said()[1]!)?.reading.videos[0]?.levels).toHaveLength(2)
+  })
+})
+
+describe('parseQualityLine', () => {
+  it('reads a line the script wrote, and nothing a page could have written instead', () => {
+    expect(parseQualityLine('{"frame":"ab12","videos":[{"duration":30,"levels":[],"audio":[]}]}')).toEqual({
+      frame: 'ab12',
+      reading: { videos: [{ duration: 30, width: 0, height: 0, levels: [], streams: false, audio: [] }] },
+    })
+    expect(parseQualityLine('not json')).toBeNull()
+    expect(parseQualityLine('{"videos":[]}')).toBeNull()
+    expect(parseQualityLine('{"frame":"x","videos":"no"}')).toBeNull()
   })
 })

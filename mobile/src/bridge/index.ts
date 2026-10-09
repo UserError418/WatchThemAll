@@ -147,6 +147,7 @@ import { createOverlayHost } from './overlayhost'
 import { createPhoneFullscreen } from './phonefullscreen'
 import { loadSubtitles, subtitleLanguages, type SubtitleQuery } from '@main/subtitlesearch'
 import { createScanRunner, type RunOptions as ScanRunOptions } from './scan'
+import { testRuntime } from '@main/testruntime'
 import { AUTO_TEST_TICK_MS, AutoTester } from '@main/autotest'
 import { resumeAnchor } from '@shared/watchlistrank'
 import { preferencesCatalogStore } from './catalogstore'
@@ -2115,13 +2116,18 @@ export async function createBridge(): Promise<WtaApi> {
     runOptions?: ScanRunOptions,
   ): Promise<ProviderScan> => {
     const key = titleKey(media)
+    // Never probe a TV title without an episode — see `scanEpisode`.
+    const wanted = scanEpisode(media.type, episode)
+    // Its season's listing beside the facts, not after them, as on the
+    // desktop: `testRuntime` below joins this request or finds it kept.
+    if (wanted) void tmdb.season(media.tmdbId, wanted.season).catch(() => null)
     // Only what has come out, as on the desktop — see `aired.ts` and the
     // scan handler in `src/main/ipc.ts`.
     const facts = await tmdb.detail(media.tmdbId, media.type).catch(() => null)
     if (facts && notOutYet(facts.releaseDate, Date.now())) return { titleKey: key, at: Date.now(), verdicts: {} }
-    // Never probe a TV title without an episode — see `scanEpisode`.
-    const wanted = scanEpisode(media.type, episode)
     const target = wanted && facts ? airedEpisode(wanted, facts.lastEpisode) : wanted
+    // Filed under the episode it tested: see `scanEpisode` and `airedEpisode`.
+    const filed = (row: ProviderScan): void => testResults.record(resultsFromScan(row, testResults.device(), target))
     const result = await scanRunner.run(
       key,
       {
@@ -2130,11 +2136,13 @@ export async function createBridge(): Promise<WtaApi> {
         type: media.type,
         season: target?.season ?? null,
         episode: target?.episode ?? null,
+        // What tells a clip or another programme from the title: `testruntime.ts`.
+        runtimeMinutes: await testRuntime(tmdb, media.tmdbId, facts?.runtime, target),
       },
-      runOptions,
+      // A source's offer found after the run, filed under its test's moment.
+      { ...runOptions, refile: filed },
     )
-    // Filed under the episode it tested: see `scanEpisode` and `airedEpisode`.
-    testResults.record(resultsFromScan(result, testResults.device(), target))
+    filed(result)
     cacheAfterTest(media, target, facts?.runtime ?? null)
     return result
   }

@@ -42,6 +42,18 @@
  * another can be starved into looking dead, and red is the verdict that costs
  * the user a working source. The better of the two results stands; when both
  * fail, the solo run's reason does, because it had the phone to itself.
+ *
+ * ## The source's engine, the film, and its ladder
+ *
+ * As on the desktop since 2026-10: the page script reads the source's
+ * streaming engine in every frame (`probescript.ts`), and its offer goes to
+ * the judge as the player's own list. Every length the test is sure of (whole
+ * playlists, the videos the engine reported) decides whether the source plays
+ * the film at all (`rightfilm.ts`); one that plays something else is amber
+ * with its reason. After a stream's verdict, if it read no offer, its ladder
+ * is looked for in what its page fetched (`ladderAfterVerdict`), off the
+ * queue: into the run's row while it is open, filed again under the test's
+ * moment once it is not (`RunOptions.refile`).
  */
 
 import type { Provider, QualityKind, StreamDelivery } from '@shared/types'
@@ -49,6 +61,7 @@ import { piecesDelivery, wholeFileDelivery } from '@shared/castability'
 import { isPlaylist as isPlaylistBody } from '@main/hlsrewrite'
 import type { PlayRequest, ProbeVerdict, ProviderScan, ProviderScanProgress, ScanInFlight, ScanReason } from '@shared/ipc'
 import { providerRank } from '@shared/scanrank'
+import { verdictForReason } from '@shared/scanreason'
 import { isDashManifest, isMediaRequest, isMediaResponse, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
 import { renderTemplate } from '@main/providers'
 import { capture, PEEK_LIMIT_BYTES, type Candidate } from './cast'
@@ -56,7 +69,14 @@ import { bestQuality, judgeQuality, readLadder, readMediaPlaylist, type Renditio
 import { readStreamHeader, streamHeaderOf } from '@shared/streamheader'
 import { lengthVerdict } from '@shared/runtimecheck'
 import { closeAllProbes, openProbe, type ProbeDocumentError, type ProbeRequest } from './probeview'
-import { isScanCandidate, judgeMissedStream } from './scanjudge'
+import { isScanCandidate, judgeMissedStream, ladderCandidates } from './scanjudge'
+import { parseQualityLine } from './probescript'
+import { fetchText } from './segmentfiles'
+import { engineAudio, engineLengths, engineOffer, type FrameReading } from '@shared/enginereader'
+import { judgeFilmLength, playlistLength, wrongVideoReason, type FilmLength } from '@shared/rightfilm'
+import { languageList, masterAudio } from '@shared/audiotracks'
+import { ladderAfterVerdict } from '@shared/filmladder'
+import type { StreamFetch } from '@shared/streamfetch'
 
 /**
  * How many providers are loaded at once. See the header for the measurement.
@@ -152,6 +172,8 @@ export interface ScanRunnerOptions {
   onProgress: (progress: ProviderScanProgress) => void
   /** A provider streamed: its session's playlist requests, for the preview cache to save from once the scan is filed. */
   onStream?: (titleKey: string, providerId: string, requests: Candidate[]) => void
+  /** How playlists are asked for again after a verdict, with the page's headers. The native fetch by default. */
+  fetch?: StreamFetch
 }
 
 /**
@@ -166,6 +188,12 @@ export interface RunOptions {
   hold?: () => boolean
   /** Leave what is playing alone instead of pausing it for the scan. */
   keepPlaying?: boolean
+  /**
+   * A source's row again, once the run is over, under its test's own
+   * moment: its ladder named more than its test read (see the header).
+   * Filed by the caller, exactly as it files the run.
+   */
+  refile?: (row: ProviderScan) => void
 }
 
 /** How often a held run looks again. */
@@ -174,7 +202,7 @@ const HOLD_POLL_MS = 1_000
 export interface ScanRunner {
   run(
     titleKey: string,
-    request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+    request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode' | 'runtimeMinutes'>,
     options?: RunOptions,
   ): Promise<ProviderScan>
   cancel(): void
@@ -211,7 +239,23 @@ function closeLeftoverProbes(): Promise<unknown> {
   return closeAllProbes().catch(() => 0)
 }
 
+/** A one-provider row, as a run files a source again (`RunOptions.refile`). */
+function rowFor(titleKey: string, providerId: string, at: number, measured: Measured): ProviderScan {
+  const row: ProviderScan = { titleKey, at, verdicts: { [providerId]: measured.verdict }, testedAt: { [providerId]: at } }
+  if (measured.ms !== null) row.timings = { [providerId]: measured.ms }
+  if (measured.quality !== null) {
+    row.qualities = { [providerId]: measured.quality }
+    row.qualityKinds = { [providerId]: measured.qualityKind ?? 'floor' }
+  }
+  if (measured.audio !== null && measured.audio.length > 0) row.audio = { [providerId]: measured.audio }
+  if (measured.delivery !== null) row.delivery = { [providerId]: measured.delivery }
+  return row
+}
+
 export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
+  /** How playlists are asked for again after a verdict. */
+  const io: StreamFetch = options.fetch ?? { fetchText }
+
   /** Identifies the run, so a cancelled scan's stragglers cannot write. */
   let token = 0
   let running = false
@@ -245,7 +289,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
 
   async function scan(
     titleKey: string,
-    request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode'>,
+    request: Pick<PlayRequest, 'imdbId' | 'tmdbId' | 'type' | 'season' | 'episode' | 'runtimeMinutes'>,
     mine: number,
     runOptions: RunOptions,
   ): Promise<ProviderScan> {
@@ -326,6 +370,34 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       else delete audio[provider.id]
     }
 
+    /** Set as the run's row is made: a ladder found after that is filed again (`RunOptions.refile`). */
+    let ended = false
+    const runtimeMinutes = request.runtimeMinutes ?? null
+    /**
+     * A stream's ladder, looked for once its verdict is in and never waited
+     * on: into this run's row while the run is open, filed again under the
+     * test's moment once it is not.
+     */
+    const afterVerdict = (provider: Provider, measured: Measured): void => {
+      const at = testedAt[provider.id]
+      if (at === undefined || !measured.requests) return
+      void ladderAfterVerdict(measured, ladderCandidates(measured.requests), io, runtimeMinutes).then((better) => {
+        if (better === null) return
+        if (ended) {
+          runOptions.refile?.(rowFor(titleKey, provider.id, at, better))
+          return
+        }
+        // Settled again since: a row must never mix two measurements.
+        if (testedAt[provider.id] !== at) return
+        if (better.quality !== null) {
+          qualities[provider.id] = better.quality
+          qualityKinds[provider.id] = better.qualityKind ?? 'floor'
+        }
+        if (better.audio !== null && better.audio.length > 0) audio[provider.id] = better.audio
+        publish(false)
+      })
+    }
+
     const measure = (provider: Provider, budgetMs: number): Promise<Measured> => {
       const url = renderTemplate(provider, request)
       // The provider cannot express this request at all — no template for
@@ -334,7 +406,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       if (url === null) {
         return Promise.resolve({ verdict: 'dead', ms: null, quality: null, qualityKind: null, audio: null, reason: { kind: 'unsupported' }, delivery: null })
       }
-      return probeOne(url, budgetMs, cancelled)
+      return probeOne(url, budgetMs, cancelled, { runtimeMinutes, title: request.type === 'tv' ? 'episode' : 'film' })
     }
 
     const keepPlaying = runOptions.keepPlaying === true
@@ -365,6 +437,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
           // Checked after the await: a cancelled run must not write.
           if (cancelled()) return
           settle(provider, measured)
+          afterVerdict(provider, measured)
           end(provider)
         }
       }
@@ -383,6 +456,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
         if (cancelled()) break
         if (providerRank(undefined, second.verdict) <= providerRank(undefined, verdicts[provider.id])) {
           settle(provider, second)
+          afterVerdict(provider, second)
         }
         end(provider)
       }
@@ -394,6 +468,7 @@ export function createScanRunner(options: ScanRunnerOptions): ScanRunner {
       if (token === mine) running = false
     }
 
+    ended = true
     const result: ProviderScan = { titleKey, at: Date.now(), verdicts, testedAt, timings, qualities, qualityKinds, audio, reasons, delivery }
     testing.clear()
     publish(true)
@@ -516,7 +591,13 @@ async function peekForMedia(
  * clear first and nothing to wait out after. The rules for what the log
  * means are in `scanjudge.ts`.
  */
-async function probeOne(url: string, budgetMs: number, cancelled: () => boolean): Promise<Measured> {
+/** What a probe holds what plays to: TMDB's runtime, and what the title is, for the reason's words. */
+interface ProbeTitle {
+  runtimeMinutes: number | null
+  title: 'film' | 'episode'
+}
+
+async function probeOne(url: string, budgetMs: number, cancelled: () => boolean, asked: ProbeTitle): Promise<Measured> {
   let documentError: ProbeDocumentError | null = null
   let gone = false
 
@@ -542,6 +623,8 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
   const peeked = new Set<string>()
   /** Bodies already fetched while deciding what a request was; reused for quality. */
   const bodies = new Map<string, string>()
+  /** What each frame's engine said last, by frame (the page script's quality lines). */
+  const engines = new Map<string, FrameReading>()
   let tapped = 0
   let lastRequestAtMs: number | null = null
 
@@ -550,6 +633,11 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
     requests.push(...answer.requests)
     const last = answer.requests.at(-1)
     if (last) lastRequestAtMs = last.atMs
+    // Oldest first, so each frame keeps its newest reading.
+    for (const line of answer.quality) {
+      const said = parseQualityLine(line)
+      if (said !== null) engines.set(said.frame, said.reading)
+    }
     return { open: answer.open, playingAtMs: answer.playingAtMs }
   }
   const candidates = (): Candidate[] => requests.filter(isScanCandidate)
@@ -604,13 +692,19 @@ async function probeOne(url: string, budgetMs: number, cancelled: () => boolean)
       const proven = await streamProven(playingAtMs)
       if (proven !== null) {
         const ms = Math.max(0, proven.at - session.openedAtMs)
-        const quality = await readQuality(bodies, latestCandidates)
+        const quality = await readQuality(bodies, latestCandidates, { engines: () => [...engines.values()], runtimeMinutes: asked.runtimeMinutes })
+        if (quality.film.kind === 'other') {
+          // Video arrived, and none of it is the film: amber with its reason
+          // (see `scanreason.ts`), and nothing kept for the preview.
+          const reason = wrongVideoReason(quality.film, asked.runtimeMinutes, asked.title)
+          return { verdict: verdictForReason(reason), ms: null, quality: null, qualityKind: null, audio: null, reason, delivery: null }
+        }
         return {
           verdict: 'stream',
           ms,
           quality: quality.best,
           qualityKind: quality.kind,
-          audio: null,
+          audio: quality.audio,
           reason: null,
           delivery: proven.delivery,
           requests: [...candidates()].reverse(),
@@ -654,10 +748,27 @@ function documentFailedForGood(error: ProbeDocumentError): boolean {
  * Keeps watching the session's requests for up to `QUALITY_WAIT_MS`, because
  * the playlist that proved the stream is not always the one that names sizes.
  */
+/** What a phone test read of a stream: its quality, its sound, and whether it is the film. */
+export interface PhoneQuality {
+  best: number | null
+  kind: QualityKind | null
+  /** The languages its sound is offered in: its masters' audio renditions and its engine's tracks. */
+  audio: string[]
+  /** Every length the test was sure of, judged (`rightfilm.ts`). */
+  film: FilmLength
+}
+
+/** What the page said beside its playlists: its engine's readings, and the title's runtime. */
+export interface PageReadings {
+  engines: () => FrameReading[]
+  runtimeMinutes: number | null
+}
+
 export async function readQuality(
   bodies: Map<string, string>,
   requests: () => Promise<Candidate[]>,
-): Promise<{ best: number | null; kind: QualityKind | null }> {
+  page: PageReadings = { engines: () => [], runtimeMinutes: null },
+): Promise<PhoneQuality> {
   const deadline = Date.now() + QUALITY_WAIT_MS
   /** Every playlist read so far, oldest first: its request and its body ('' if it would not answer). */
   const read: Array<{ candidate: Candidate; body: string }> = []
@@ -681,21 +792,43 @@ export async function readQuality(
     }
 
     const ladders = read.map((r) => readLadder(r.body))
-    // A ladder settles it; only without one is a header worth a fetch.
-    if (!ladders.some((ladder) => bestQuality(ladder) !== null)) await readDeclaredSizes(read, declared)
+    const engines = page.engines()
+    const player = engineOffer(engines, page.runtimeMinutes)
+    // A ladder or the engine's own list settles it; only without one is a header worth a fetch.
+    if (player === null && !ladders.some((ladder) => bestQuality(ladder) !== null)) {
+      await readDeclaredSizes(read, declared, page.runtimeMinutes)
+    }
     const judged = judgeQuality({
       streamed: true,
       playlists: ladders.map((ladder, i) => ({ status: read[i]?.body ? 200 : 0, ladder })),
       wholeFiles: 0,
       video: null,
+      player,
       declared: [...declared.values()].filter((size): size is Rendition => size !== null),
     })
-    const found = { best: judged.best, kind: judged.kind }
+    const found: PhoneQuality = {
+      best: judged.best,
+      kind: judged.kind,
+      audio: languageList([
+        ...read.flatMap((r, i) => (ladders[i]?.kind === 'hls-master' ? masterAudio(r.body) : [])),
+        ...engineAudio(engines, page.runtimeMinutes),
+      ]),
+      film: judgeFilmLength(
+        [...read.flatMap((r) => playlistLengths(r.body)), ...engineLengths(engines)],
+        page.runtimeMinutes,
+      ),
+    }
 
     if (found.best !== null || answered(read) >= QUALITY_PEEKS || read.length >= QUALITY_FETCHES) return found
     if (Date.now() >= deadline) return found
     await sleep(POLL_MS)
   }
+}
+
+/** A media playlist's whole length, as a list of none or one, for the right-film check. */
+function playlistLengths(body: string): number[] {
+  const length = readLadder(body).kind === 'hls-media' ? playlistLength(body) : null
+  return length === null ? [] : [length]
 }
 
 /** How many of the playlists read so far answered. */
@@ -733,27 +866,29 @@ async function readPlaylist(candidate: Candidate, bodies: Map<string, string>): 
  * The sizes the media playlists' own streams declare, from their headers,
  * recorded into `declared` by playlist URL.
  *
- * Only from playlists at least as long as a title: the scan has no runtime to
- * check against (see `lengthVerdict`), and an ad served as its own playlist
- * states its size just as plainly. The header is fetched with the playlist's
- * request headers — the same player asked the same host a moment earlier.
+ * Only from playlists whose length fits the title (`lengthVerdict`, against
+ * TMDB's runtime where the scan was given one, else "at least ten minutes"):
+ * an ad served as its own playlist states its size just as plainly. The
+ * header is fetched with the playlist's request headers — the same player
+ * asked the same host a moment earlier.
  */
 async function readDeclaredSizes(
   read: Array<{ candidate: Candidate; body: string }>,
   declared: Map<string, Rendition | null>,
+  runtimeMinutes: number | null,
 ): Promise<void> {
   const pending = read.filter((r) => !declared.has(r.candidate.url) && readLadder(r.body).kind === 'hls-media')
   await Promise.all(
     pending.map(async ({ candidate, body }) => {
-      declared.set(candidate.url, await declaredSize(candidate, body))
+      declared.set(candidate.url, await declaredSize(candidate, body, runtimeMinutes))
     }),
   )
 }
 
 /** One media playlist's declared size, or null when it has none this can read or trust. */
-async function declaredSize(candidate: Candidate, body: string): Promise<Rendition | null> {
+async function declaredSize(candidate: Candidate, body: string, runtimeMinutes: number | null): Promise<Rendition | null> {
   const media = readMediaPlaylist(body)
-  if (lengthVerdict(media.seconds, null) === 'implausible') return null
+  if (lengthVerdict(media.seconds, runtimeMinutes) === 'implausible') return null
   const header = streamHeaderOf(media, candidate.url)
   if (!header) return null
   const answer = await capture.peekBytes(header.url, candidate, header.range).catch(() => null)

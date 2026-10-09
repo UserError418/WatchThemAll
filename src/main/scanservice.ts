@@ -83,7 +83,7 @@ import type { StreamFetch } from '@shared/streamfetch'
 import type { ProbeSubject } from './streamprobe'
 import { probeQuality } from './qualityprobe'
 import { fetchText } from './segmentfiles'
-import { findLadder, ladderOffer } from '@shared/filmladder'
+import { ladderAfterVerdict } from '@shared/filmladder'
 import { wrongVideoReason } from '@shared/rightfilm'
 import { providerRank } from '@shared/scanrank'
 import { verdictForReason } from '@shared/scanreason'
@@ -214,24 +214,6 @@ function rowFor(titleKey: string, providerId: string, at: number, measured: Meas
   return scan
 }
 
-/**
- * A measurement with what the film's ladder adds to it, or null when it adds
- * nothing. The offer is taken over a floor at or below it, never over an
- * offer, as a play takes its source's list (`withQualityReading`); the audio
- * only where none was known.
- */
-function withLadder(measured: Measured, offer: { quality: number | null; audio: string[] }): Measured | null {
-  const quality = offer.quality
-  const takesQuality = quality !== null && measured.qualityKind !== 'offered' && quality >= (measured.quality ?? 0)
-  const takesAudio = offer.audio.length > 0 && (measured.audio ?? []).length === 0
-  if (!takesQuality && !takesAudio) return null
-  return {
-    ...measured,
-    ...(takesQuality ? { quality, qualityKind: 'offered' as const } : {}),
-    ...(takesAudio ? { audio: offer.audio } : {}),
-  }
-}
-
 export function createScanService(options: ScanServiceOptions): ScanService {
   /**
    * Twenty seconds for a first test, twenty-five for a second.
@@ -331,18 +313,8 @@ export function createScanService(options: ScanServiceOptions): ScanService {
     }
   }
 
+  /** How playlists are asked for again after a verdict; see "After a verdict" in the header. */
   const io: StreamFetch = options.fetch ?? { fetchText }
-
-  /**
-   * The film's ladder in what a stream's page fetched, for a stream whose
-   * test read no offer: the measurement with what it adds, or null. See
-   * "After a verdict" in the header. A failure here changes nothing.
-   */
-  const ladderAfterVerdict = async (measured: Measured, runtimeMinutes: number | null): Promise<Measured | null> => {
-    if (measured.verdict !== 'stream' || measured.qualityKind === 'offered' || measured.requests.length === 0) return null
-    const found = await findLadder(measured.requests, io, runtimeMinutes).catch(() => null)
-    return found?.ladder ? withLadder(measured, ladderOffer(found.ladder)) : null
-  }
 
   return {
     busy: () => running || loading > 0,
@@ -355,7 +327,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const at = Date.now()
       // Its ladder before it is filed, rather than filed twice: the
       // background tester files one row, and nobody is watching it arrive.
-      const better = await ladderAfterVerdict(measured, subject.runtimeMinutes ?? null)
+      const better = await ladderAfterVerdict(measured, measured.requests, io, subject.runtimeMinutes ?? null)
       return rowFor(titleKey, provider.id, at, better ?? measured)
     },
 
@@ -449,7 +421,7 @@ export function createScanService(options: ScanServiceOptions): ScanService {
       const afterVerdict = (provider: Provider, measured: Measured): void => {
         const at = testedAt[provider.id]
         if (at === undefined) return
-        void ladderAfterVerdict(measured, subject.runtimeMinutes ?? null).then((better) => {
+        void ladderAfterVerdict(measured, measured.requests, io, subject.runtimeMinutes ?? null).then((better) => {
           if (better === null) return
           if (ended) {
             runOptions.refile?.(rowFor(titleKey, provider.id, at, better))

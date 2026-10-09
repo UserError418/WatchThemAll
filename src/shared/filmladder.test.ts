@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fakeNetwork, mediaPlaylist } from './downloads/downloads.fixture'
-import { findLadder, ladderOffer } from './filmladder'
+import { findLadder, ladderAfterVerdict, ladderOffer, withLadderOffer } from './filmladder'
 
 const H = { Referer: 'https://source.example/' }
 
@@ -119,5 +119,35 @@ describe('ladderOffer', () => {
     })
     const found = await findLadder([{ url: 'https://cdn/master.m3u8', headers: H }], net, 139)
     expect(found.ladder && ladderOffer(found.ladder)).toEqual({ quality: null, audio: [] })
+  })
+})
+
+describe('what the ladder adds to a test', () => {
+  const stream = { verdict: 'stream', quality: 720, qualityKind: 'floor' as const, audio: null }
+
+  it("takes the ladder's offer over a floor at or below it, with its audio", () => {
+    expect(withLadderOffer(stream, { quality: 1080, audio: ['en'] })).toEqual({ ...stream, quality: 1080, qualityKind: 'offered', audio: ['en'] })
+    expect(withLadderOffer(stream, { quality: 720, audio: [] })).toMatchObject({ quality: 720, qualityKind: 'offered' })
+  })
+
+  it('never lowers what was seen, nor replaces an offer or a known audio list', () => {
+    // A floor above the ladder's top says the ladder read is not the whole story.
+    expect(withLadderOffer({ ...stream, quality: 1080 }, { quality: 720, audio: [] })).toBeNull()
+    expect(withLadderOffer({ ...stream, qualityKind: 'offered' as const }, { quality: 2160, audio: [] })).toBeNull()
+    expect(withLadderOffer({ ...stream, audio: ['de'] }, { quality: null, audio: ['en'] })).toBeNull()
+  })
+
+  it('is looked for only after a stream whose test read no offer', async () => {
+    const net = fakeNetwork({
+      'https://cdn/master.m3u8': { status: 200, body: filmMaster },
+      'https://cdn/720.m3u8': { status: 200, body: film },
+    })
+    const requests = [{ url: 'https://cdn/master.m3u8', headers: H }]
+    expect(await ladderAfterVerdict(stream, requests, net, 139)).toMatchObject({ quality: 1080, qualityKind: 'offered', audio: ['en', 'de'] })
+    const total = (): number => [...net.counts.values()].reduce((a, b) => a + b, 0)
+    const asked = total()
+    expect(await ladderAfterVerdict({ ...stream, qualityKind: 'offered' as const }, requests, net, 139)).toBeNull()
+    expect(await ladderAfterVerdict({ ...stream, verdict: 'unsure' }, requests, net, 139)).toBeNull()
+    expect(total()).toBe(asked)
   })
 })

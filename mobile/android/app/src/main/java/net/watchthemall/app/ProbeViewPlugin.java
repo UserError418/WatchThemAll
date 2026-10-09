@@ -181,8 +181,10 @@ public class ProbeViewPlugin extends Plugin {
 
     /**
      * The session's requests after `after` (a cursor from a previous call; 0
-     * or absent for the start), oldest first, and when media first played in
-     * it (`playingAtMs`, 0 until then; see `ProbeSession.playingAtMs`).
+     * or absent for the start), oldest first, when media first played in it
+     * (`playingAtMs`, 0 until then; see `ProbeSession.playingAtMs`), and the
+     * page script's latest readings of the source's engine (`quality`, as the
+     * script wrote them; see `ProbeSession.qualityLines`).
      *
      * A closed or vanished session answers `open: false` with nothing new,
      * rather than rejecting, so a poll loop that races a `probeGone` ends on
@@ -208,6 +210,7 @@ public class ProbeViewPlugin extends Plugin {
             result.put("missed", 0);
             result.put("open", false);
             result.put("playingAtMs", 0);
+            result.put("quality", new JSArray());
             call.resolve(result);
             return;
         }
@@ -233,6 +236,9 @@ public class ProbeViewPlugin extends Plugin {
         result.put("missed", slice.missed);
         result.put("open", true);
         result.put("playingAtMs", session.playingAtMs());
+        JSArray quality = new JSArray();
+        for (String line : session.qualityLines()) quality.put(line);
+        result.put("quality", quality);
         call.resolve(result);
     }
 

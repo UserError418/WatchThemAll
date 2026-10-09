@@ -33,7 +33,7 @@
 
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
-import { isMediaRequest, PLAYLIST_URL, WHOLE_FILE_URL } from '@main/mediarequest'
+import { isMediaRequest } from '@main/mediarequest'
 import type { Provider } from '@shared/types'
 import type { CapturedRequest } from '@shared/streamfetch'
 import { DownloadManager, type DownloadPlatform, type DownloadSource } from '@shared/downloads/manager'
@@ -42,7 +42,7 @@ import type { DownloadFiles } from '@shared/downloads/transfer'
 import type { DownloadsStatus, DownloadSubject, DownloadView } from '@shared/downloads/types'
 import { capture } from './cast'
 import { openProbe, type ProbeRequest } from './probeview'
-import { isScanCandidate } from './scanjudge'
+import { isScanCandidate, ladderCandidates } from './scanjudge'
 import { fetchText } from './segmentfiles'
 
 interface DownloadsNative {
@@ -181,16 +181,7 @@ async function captureSource(url: string): Promise<CapturedRequest[]> {
   } finally {
     await session.close().catch(() => {})
   }
-  const seen = new Set<string>()
-  const playlists: CapturedRequest[] = []
-  const others: CapturedRequest[] = []
-  for (const request of requests.reverse()) {
-    if (!isScanCandidate(request) || seen.has(request.url)) continue
-    seen.add(request.url)
-    if (PLAYLIST_URL.test(request.url)) playlists.push({ url: request.url, headers: request.headers })
-    else if (!isMediaRequest(request.url) && !WHOLE_FILE_URL.test(request.url)) others.push({ url: request.url, headers: request.headers })
-  }
-  return [...playlists, ...others]
+  return ladderCandidates(requests.reverse().filter(isScanCandidate))
 }
 
 /** The notification's words for the download under way, or null when nothing is queued. */

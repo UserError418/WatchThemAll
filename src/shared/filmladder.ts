@@ -33,6 +33,7 @@ import { lengthVerdict } from './runtimecheck'
 import { parseMediaPlaylist, type MediaPlaylist, type UnfitReason } from './segmentwindow'
 import type { CapturedRequest, StreamFetch } from './streamfetch'
 import { bestQuality, masterVariants, readLadder, readMediaPlaylist, type Variant } from './streamquality'
+import type { QualityKind } from './types'
 
 /** Enough of a response to see `#EXTM3U` and whether it is a master. */
 const SNIFF_BYTES = 16 * 1024
@@ -169,4 +170,47 @@ export async function findLadder(
  */
 export function ladderOffer(ladder: FilmLadder): { quality: number | null; audio: string[] } {
   return { quality: bestQuality(readLadder(ladder.body)), audio: masterAudio(ladder.body) }
+}
+
+/** What a test measured of a stream, as far as its ladder can add to it. */
+export interface LadderMeasured {
+  verdict: string
+  quality: number | null
+  qualityKind: QualityKind | null
+  audio: string[] | null
+}
+
+/**
+ * A test's measurement with what the film's ladder adds, or null when it
+ * adds nothing. The offer is taken over a floor at or below it, never over
+ * an offer, as a play takes its source's own list (`withQualityReading`);
+ * the audio only where none was known.
+ */
+export function withLadderOffer<T extends LadderMeasured>(measured: T, offer: { quality: number | null; audio: string[] }): T | null {
+  const quality = offer.quality
+  const takesQuality = quality !== null && measured.qualityKind !== 'offered' && quality >= (measured.quality ?? 0)
+  const takesAudio = offer.audio.length > 0 && (measured.audio ?? []).length === 0
+  if (!takesQuality && !takesAudio) return null
+  return {
+    ...measured,
+    ...(takesQuality ? { quality, qualityKind: 'offered' as const } : {}),
+    ...(takesAudio ? { audio: offer.audio } : {}),
+  }
+}
+
+/**
+ * After a test's verdict: the film's ladder in what the source's page
+ * fetched, for a stream whose test read no offer. The measurement with what
+ * it adds, or null. Both platforms' scans run it once a verdict is in, off
+ * the pool, and a failure here changes nothing.
+ */
+export async function ladderAfterVerdict<T extends LadderMeasured>(
+  measured: T,
+  requests: readonly CapturedRequest[],
+  io: StreamFetch,
+  runtimeMinutes: number | null,
+): Promise<T | null> {
+  if (measured.verdict !== 'stream' || measured.qualityKind === 'offered' || requests.length === 0) return null
+  const found = await findLadder(requests, io, runtimeMinutes).catch(() => null)
+  return found?.ladder ? withLadderOffer(measured, ladderOffer(found.ladder)) : null
 }

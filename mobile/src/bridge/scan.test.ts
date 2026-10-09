@@ -30,7 +30,7 @@ const { createScanRunner } = await import('./scan')
 
 /** No template for films, so it settles at once as unsupported, with no probe. */
 const provider = { id: 'a', name: 'A', rootUrl: 'https://a.example/', tv: { urlTemplate: '{imdb}' } } as unknown as Provider
-const film = { imdbId: 'tt1', tmdbId: 1, type: 'movie' as const, season: null, episode: null }
+const film = { imdbId: 'tt1', tmdbId: 1, type: 'movie' as const, season: null, episode: null, runtimeMinutes: null }
 
 beforeEach(() => {
   events.length = 0
